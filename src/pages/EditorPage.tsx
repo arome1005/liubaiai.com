@@ -189,6 +189,7 @@ export function EditorPage() {
         chapters={chapters}
         chapterContent={content}
         chapterBible={{ goalText: cbGoal, forbidText: cbForbid, povText: cbPov, sceneStance: cbScene }}
+        glossaryTerms={glossaryTerms}
         workStyle={{
           pov: stylePov,
           tone: styleTone,

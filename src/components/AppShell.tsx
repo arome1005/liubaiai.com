@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RightRailContext, type RightRailTab, type RightRailTabId } from "./RightRailContext";
 import { getWork, listChapters } from "../db/repo";
 import { wordCount } from "../util/wordCount";
@@ -156,30 +156,45 @@ export function AppShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  function setTabEnabled(id: RightRailTabId, enabled: boolean) {
-    setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, enabled } : t)));
-  }
+  const setTabEnabled = useCallback((id: RightRailTabId, enabled: boolean) => {
+    setTabs((prev) => {
+      const cur = prev.find((t) => t.id === id);
+      if (!cur || cur.enabled === enabled) return prev;
+      return prev.map((t) => (t.id === id ? { ...t, enabled } : t));
+    });
+  }, []);
 
-  function setTabContent(id: RightRailTabId, node: React.ReactNode | null) {
-    setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, content: node } : t)));
-  }
+  const setTabContent = useCallback((id: RightRailTabId, node: React.ReactNode | null) => {
+    setTabs((prev) => {
+      const cur = prev.find((t) => t.id === id);
+      if (!cur || cur.content === node) return prev;
+      return prev.map((t) => (t.id === id ? { ...t, content: node } : t));
+    });
+  }, []);
 
   const currentTab = tabs.find((t) => t.id === activeTab) ?? tabs[0]!;
   const currentContent = currentTab?.content ?? null;
 
+  const topbarApi = useMemo(
+    () => ({ setTitleNode: setTopbarTitleNode, setActionsNode: setTopbarActionsNode }),
+    [],
+  );
+  const rightRailApi = useMemo(
+    () => ({
+      tabs,
+      activeTab,
+      setActiveTab,
+      setTabEnabled,
+      setTabContent,
+      open: rightOpen,
+      setOpen: setRightOpen,
+    }),
+    [tabs, activeTab, rightOpen, setTabEnabled, setTabContent],
+  );
+
   return (
-    <TopbarContext.Provider value={{ setTitleNode: setTopbarTitleNode, setActionsNode: setTopbarActionsNode }}>
-      <RightRailContext.Provider
-        value={{
-          tabs,
-          activeTab,
-          setActiveTab,
-          setTabEnabled,
-          setTabContent,
-          open: rightOpen,
-          setOpen: setRightOpen,
-        }}
-      >
+    <TopbarContext.Provider value={topbarApi}>
+      <RightRailContext.Provider value={rightRailApi}>
         <div
           style={{ ["--shell-right-w" as any]: `${rightWidthPx}px` }}
           className={

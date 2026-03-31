@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState } from "react";
-import { exportBibleMarkdown } from "../db/repo";
-import type { ReferenceExcerpt, Work, Chapter } from "../db/types";
+import { exportBibleMarkdown, searchReferenceLibrary } from "../db/repo";
+import type { BibleGlossaryTerm, ReferenceExcerpt, ReferenceSearchHit, Work, Chapter } from "../db/types";
 import { generateWithProviderStream } from "../ai/providers";
 import { loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiChatMessage, AiProviderId, AiSettings } from "../ai/types";
+import { referenceReaderHref } from "../util/readUtf8TextFile";
 
 function clampText(s: string, maxChars: number): string {
   if (s.length <= maxChars) return s;
@@ -40,6 +41,7 @@ export function AiPanel(props: {
   chapters: Chapter[];
   chapterContent: string;
   chapterBible: { goalText: string; forbidText: string; povText: string; sceneStance: string };
+  glossaryTerms: BibleGlossaryTerm[];
   workStyle: { pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string };
   onUpdateWorkStyle: (patch: Partial<{ pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string }>) => void;
   linkedExcerptsForChapter: Array<ReferenceExcerpt & { refTitle: string; tagIds: string[] }>;
@@ -65,6 +67,11 @@ export function AiPanel(props: {
   const [draft, setDraft] = useState("");
   const [biblePreview, setBiblePreview] = useState<{ text: string; chars: number } | null>(null);
   const [bibleLoading, setBibleLoading] = useState(false);
+  const [ragEnabled, setRagEnabled] = useState(false);
+  const [ragQuery, setRagQuery] = useState("");
+  const [ragK, setRagK] = useState(6);
+  const [ragHits, setRagHits] = useState<ReferenceSearchHit[]>([]);
+  const [ragLoading, setRagLoading] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const lastReqRef = useRef<{
     provider: AiProviderId;
@@ -84,6 +91,23 @@ export function AiPanel(props: {
   }, [settings]);
 
   const selectedText = useMemo(() => props.getSelectedText(), [props]);
+
+  const glossaryHitsInDraft = useMemo(() => {
+    const text = draft;
+    if (!text.trim() || props.glossaryTerms.length === 0) return [];
+    const sorted = [...props.glossaryTerms].sort((a, b) => b.term.length - a.term.length);
+    const seen = new Set<string>();
+    const out: BibleGlossaryTerm[] = [];
+    for (const t of sorted) {
+      const term = (t.term ?? "").trim();
+      if (!term) continue;
+      if (text.includes(term) && !seen.has(t.id)) {
+        seen.add(t.id);
+        out.push(t);
+      }
+    }
+    return out.slice(0, 24);
+  }, [draft, props.glossaryTerms]);
 
   const recentSummaryText = useMemo(() => {
     if (!props.chapter) return "";
@@ -171,6 +195,23 @@ export function AiPanel(props: {
       });
     }
 
+    if (ragEnabled) {
+      const key = ragQuery.trim();
+      const picked = ragHits.slice(0, Math.max(0, Math.min(20, ragK)));
+      const s = key
+        ? picked.length > 0
+          ? [
+              `参考库检索（top-k=${picked.length}，query=${key}）：`,
+              ...picked.map((h, i) => {
+                const snippet = `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`.trim();
+                return `【命中${i + 1}｜${h.refTitle}｜段${h.ordinal + 1}】\n${snippet}`;
+              }),
+            ].join("\n\n")
+          : `参考库检索（query=${key}）：（暂无命中）`
+        : "参考库检索：（未设置 query）";
+      blocks.push({ id: "rag", title: "RAG：参考库检索注入", chars: s.length, content: s });
+    }
+
     const content = props.chapterContent ?? "";
     if (currentContextMode === "full" && content.trim()) {
       const s = "当前正文：\n" + clampText(content, Math.floor(settings.maxContextChars * 0.45));
@@ -221,6 +262,10 @@ export function AiPanel(props: {
     settings.includeBible,
     settings.maxContextChars,
     biblePreview?.text,
+    ragEnabled,
+    ragQuery,
+    ragK,
+    ragHits,
   ]);
 
   const approxInjectChars = useMemo(() => injectBlocks.reduce((s, b) => s + (b.chars ?? 0), 0), [injectBlocks]);
@@ -295,6 +340,19 @@ export function AiPanel(props: {
           ctxParts.push(`参考摘录（与本章关联）：\n${ex}`);
         }
 
+        if (ragEnabled) {
+          const q = ragQuery.trim();
+          if (q) {
+            try {
+              setRagLoading(true);
+              const hits = await searchReferenceLibrary(q, { limit: Math.max(1, Math.min(20, ragK)) });
+              setRagHits(hits);
+            } finally {
+              setRagLoading(false);
+            }
+          }
+        }
+
         let bible = "";
         if (settings.includeBible) {
           try {
@@ -318,6 +376,19 @@ export function AiPanel(props: {
           userParts.push(
             "创作圣经（如与正文冲突，以圣经为准）：\n" + clampText(bible, Math.floor(settings.maxContextChars * 0.45)),
           );
+        }
+        if (ragEnabled && ragQuery.trim()) {
+          const picked = (ragHits.length ? ragHits : []).slice(0, Math.max(0, Math.min(20, ragK)));
+          if (picked.length > 0) {
+            const s = [
+              `参考库检索（top-k=${picked.length}，query=${ragQuery.trim()}）：`,
+              ...picked.map((h, i) => {
+                const snippet = `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`.trim();
+                return `【命中${i + 1}｜${h.refTitle}｜段${h.ordinal + 1}】\n${snippet}`;
+              }),
+            ].join("\n\n");
+            userParts.push("参考库检索片段（仅供引用原文信息，不要编造）：\n" + clampText(s, Math.floor(settings.maxContextChars * 0.25)));
+          }
         }
         if (currentContextMode === "full" && content.trim()) {
           userParts.push("当前正文：\n" + clampText(content, Math.floor(settings.maxContextChars * 0.45)));
@@ -487,6 +558,79 @@ export function AiPanel(props: {
         </label>
       </details>
 
+      <details className="ai-panel-box">
+        <summary>检索增强（RAG v1：参考库）</summary>
+        <label className="ai-panel-check row row--check">
+          <input type="checkbox" checked={ragEnabled} onChange={(e) => setRagEnabled(e.target.checked)} />
+          <span>启用参考库检索注入</span>
+        </label>
+        <label className="ai-panel-field">
+          <span className="small muted">检索关键词（query）</span>
+          <input
+            className="input"
+            value={ragQuery}
+            onChange={(e) => setRagQuery(e.target.value)}
+            placeholder="例如：太初古矿、玉简、主角姓名…"
+          />
+        </label>
+        <div className="ai-panel-row">
+          <label className="small muted">top-k</label>
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={ragK}
+            onChange={(e) => setRagK(Number(e.target.value) || 6)}
+            style={{ width: 72 }}
+          />
+          <button
+            type="button"
+            className="btn small"
+            disabled={!ragEnabled || !ragQuery.trim() || ragLoading || busy}
+            onClick={() => {
+              const q = ragQuery.trim();
+              if (!q) return;
+              setRagLoading(true);
+              void searchReferenceLibrary(q, { limit: Math.max(1, Math.min(20, ragK)) })
+                .then((hits) => setRagHits(hits))
+                .catch((e) => setError(e instanceof Error ? e.message : "检索失败"))
+                .finally(() => setRagLoading(false));
+            }}
+          >
+            {ragLoading ? "检索中…" : "检索预览"}
+          </button>
+        </div>
+        {ragEnabled && ragQuery.trim() ? (
+          ragHits.length > 0 ? (
+            <ul className="rr-list">
+              {ragHits.slice(0, Math.max(0, Math.min(12, ragK))).map((h) => (
+                <li key={`${h.chunkId}-${h.highlightStart}-${h.highlightEnd}`} className="rr-list-item">
+                  <a
+                    className="rr-link"
+                    href={referenceReaderHref({
+                      refWorkId: h.refWorkId,
+                      ordinal: h.ordinal,
+                      startOffset: h.highlightStart,
+                      endOffset: h.highlightEnd,
+                    })}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="在参考库打开（新标签页）"
+                  >
+                    {h.refTitle} · 段 {h.ordinal + 1}
+                  </a>
+                  <div className="muted small">{h.snippetBefore}{h.snippetMatch}{h.snippetAfter}</div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">暂无命中。你可以换关键词，或先去「参考库」确认已导入原著。</p>
+          )
+        ) : (
+          <p className="muted small">提示：这是关键词检索注入（非向量）。用于把“参考原文片段”带进本次请求。</p>
+        )}
+      </details>
+
       <details className="ai-panel-box" open>
         <summary>上下文注入</summary>
         <label className="ai-panel-check row row--check">
@@ -625,6 +769,23 @@ export function AiPanel(props: {
         <span className="small muted">AI 草稿（不会自动写入正文）</span>
         <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} />
       </label>
+
+      {glossaryHitsInDraft.length > 0 ? (
+        <div className="rr-block">
+          <div className="rr-block-title">一致性提示（来自术语/人名表）</div>
+          <ul className="rr-list">
+            {glossaryHitsInDraft.map((t) => (
+              <li key={t.id} className="rr-list-item">
+                <span style={{ fontWeight: 700 }}>{t.term}</span>
+                <span className="muted small">
+                  {t.category === "dead" ? " · 已死（请确认没有复活/误用）" : t.category === "name" ? " · 人名" : " · 术语"}
+                  {t.note.trim() ? ` · ${t.note}` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       <div className="ai-panel-actions">
         <button
