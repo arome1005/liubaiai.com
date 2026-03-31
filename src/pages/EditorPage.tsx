@@ -247,7 +247,6 @@ export function EditorPage() {
   }, [
     workId,
     work,
-    aiOpen,
     activeChapter,
     chapters,
     content,
@@ -255,8 +254,13 @@ export function EditorPage() {
     cbForbid,
     cbPov,
     cbScene,
+    glossaryTerms,
+    stylePov,
+    styleTone,
+    styleBanned,
+    styleAnchor,
+    styleExtra,
     linkedExcerptsForChapter,
-    rightRail,
   ]);
 
   const glossaryHits = useMemo(() => {

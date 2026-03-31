@@ -214,6 +214,9 @@ export function SettingsPage() {
           />
           <span>诊断模式（开启后错误边界可在控制台输出更完整堆栈；默认关闭）</span>
         </label>
+        <p className="muted small" style={{ marginTop: 8 }}>
+          <Link to="/privacy">查看隐私政策</Link> · <Link to="/terms">查看用户协议</Link>
+        </p>
       </section>
 
       <section className="settings-section">
@@ -277,6 +280,7 @@ export function SettingsPage() {
         <p className="muted small">
           覆盖：清空当前库后写入备份。合并：追加备份中的作品（新 id），不删除当前数据。
         </p>
+        <p className="muted small">发布前自检可参考：`docs/release-checklist.md`</p>
       </section>
 
       <section className="settings-section">
@@ -354,6 +358,127 @@ export function SettingsPage() {
           当前为浏览器本机存储（localStorage）。直连第三方模型可能遇到 CORS（浏览器限制）；Ollama 默认本机
           `http://localhost:11434` 通常可用。
         </p>
+
+        <div className="settings-callout" role="alert" id="ai-privacy">
+          <strong>AI 隐私与上传范围（重要）</strong>
+          <p>
+            只要你点击「生成」，本次提示词会发送到你选择的提供方。若选择 OpenAI / Claude / Gemini，即代表会通过网络发送内容到第三方服务。
+            你可以在下方明确选择<strong>允许上传哪些内容</strong>；默认仅允许使用本机 Ollama，且不允许云端提供方。
+          </p>
+          <p className="muted small" style={{ marginTop: "-0.25rem" }}>
+            提示：本项目为纯前端直连，密钥保存在本机 localStorage；若你介意请优先使用本机 Ollama，或后续接入自建中转服务。
+          </p>
+        </div>
+
+        <label className="row row--check">
+          <input
+            name="aiPrivacyConsentAccepted"
+            type="checkbox"
+            checked={aiSettings.privacy.consentAccepted}
+            onChange={(e) =>
+              setAiSettings((s) => ({
+                ...s,
+                privacy: {
+                  ...s.privacy,
+                  consentAccepted: e.target.checked,
+                  consentAcceptedAt: e.target.checked ? Date.now() : undefined,
+                },
+              }))
+            }
+          />
+          <span>我已阅读并理解：使用云端模型会上传提示词内容</span>
+        </label>
+
+        <label className="row row--check">
+          <input
+            name="aiPrivacyAllowCloudProviders"
+            type="checkbox"
+            checked={aiSettings.privacy.allowCloudProviders}
+            onChange={(e) =>
+              setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowCloudProviders: e.target.checked } }))
+            }
+          />
+          <span>允许使用云端提供方（OpenAI / Claude / Gemini）</span>
+        </label>
+
+        <details className="settings-ai-provider">
+          <summary>上传范围（仅对云端提供方生效）</summary>
+          <label className="row row--check">
+            <input
+              name="aiPrivacyAllowMetadata"
+              type="checkbox"
+              checked={aiSettings.privacy.allowMetadata}
+              onChange={(e) => setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowMetadata: e.target.checked } }))}
+            />
+            <span>作品名 / 章节名等元数据</span>
+          </label>
+          <label className="row row--check">
+            <input
+              name="aiPrivacyAllowChapterContent"
+              type="checkbox"
+              checked={aiSettings.privacy.allowChapterContent}
+              onChange={(e) =>
+                setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowChapterContent: e.target.checked } }))
+              }
+            />
+            <span>当前章正文（全文或截断）</span>
+          </label>
+          <label className="row row--check">
+            <input
+              name="aiPrivacyAllowSelection"
+              type="checkbox"
+              checked={aiSettings.privacy.allowSelection}
+              onChange={(e) => setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowSelection: e.target.checked } }))}
+            />
+            <span>当前选区</span>
+          </label>
+          <label className="row row--check">
+            <input
+              name="aiPrivacyAllowRecentSummaries"
+              type="checkbox"
+              checked={aiSettings.privacy.allowRecentSummaries}
+              onChange={(e) =>
+                setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowRecentSummaries: e.target.checked } }))
+              }
+            />
+            <span>最近章节概要</span>
+          </label>
+          <label className="row row--check">
+            <input
+              name="aiPrivacyAllowBible"
+              type="checkbox"
+              checked={aiSettings.privacy.allowBible}
+              onChange={(e) => setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowBible: e.target.checked } }))}
+            />
+            <span>创作圣经（导出 Markdown）</span>
+          </label>
+          <label className="row row--check">
+            <input
+              name="aiPrivacyAllowLinkedExcerpts"
+              type="checkbox"
+              checked={aiSettings.privacy.allowLinkedExcerpts}
+              onChange={(e) =>
+                setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowLinkedExcerpts: e.target.checked } }))
+              }
+            />
+            <span>本章关联摘录（参考库）</span>
+          </label>
+          <label className="row row--check">
+            <input
+              name="aiPrivacyAllowRagSnippets"
+              type="checkbox"
+              checked={aiSettings.privacy.allowRagSnippets}
+              onChange={(e) =>
+                setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowRagSnippets: e.target.checked } }))
+              }
+            />
+            <span>参考库检索片段（RAG 注入）</span>
+          </label>
+          <p className="muted small">
+            说明：这些开关只控制“是否把对应内容拼进 prompt”。即使关闭，也不影响你在本地查看/编辑这些内容。
+          </p>
+        </details>
+
         <label className="row">
           <span>默认提供方</span>
           <select
@@ -361,10 +486,10 @@ export function SettingsPage() {
             value={aiSettings.provider}
             onChange={(e) => setAiSettings((s) => ({ ...s, provider: e.target.value as AiProviderId }))}
           >
-            <option value="openai">OpenAI</option>
-            <option value="anthropic">Claude</option>
-            <option value="gemini">Gemini</option>
-            <option value="ollama">Ollama</option>
+            <option value="openai">见山</option>
+            <option value="anthropic">听雨</option>
+            <option value="gemini">观云</option>
+            <option value="ollama">潜龙</option>
           </select>
         </label>
 

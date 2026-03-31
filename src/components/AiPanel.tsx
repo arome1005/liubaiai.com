@@ -50,6 +50,152 @@ export function AiPanel(props: {
   appendToEnd: (text: string) => void;
   replaceSelection: (text: string) => void;
 }) {
+  function ProviderLogo(props: { provider: AiProviderId }) {
+    const p = props.provider;
+    const imgSrc = p === "ollama" ? "/logos/ollama.png" : null;
+    const bg =
+      p === "openai"
+        ? "linear-gradient(135deg, #0ea5e9, #2563eb)"
+        : p === "anthropic"
+          ? "linear-gradient(135deg, #a855f7, #db2777)"
+          : p === "gemini"
+            ? "linear-gradient(135deg, #22c55e, #14b8a6)"
+            : "linear-gradient(135deg, #111827, #6b7280)";
+    const text = p === "openai" ? "" : p === "anthropic" ? "雨" : p === "gemini" ? "云" : "龙";
+    return (
+      <span
+        aria-hidden
+        style={{
+          width: 22,
+          height: 22,
+          borderRadius: 8,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: bg,
+          color: "#fff",
+          fontWeight: 800,
+          fontSize: 12,
+          letterSpacing: "-0.02em",
+          flexShrink: 0,
+          overflow: "hidden",
+        }}
+        title={p}
+      >
+        {imgSrc ? (
+          <img
+            src={imgSrc}
+            alt=""
+            width={22}
+            height={22}
+            style={{ display: "block", width: 22, height: 22, objectFit: "cover" }}
+            onError={(e) => {
+              // Fallback to text badge if image not present.
+              (e.currentTarget as HTMLImageElement).style.display = "none";
+            }}
+          />
+        ) : null}
+        {p === "openai" ? (
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 100 100"
+            fill="none"
+            width="16"
+            height="16"
+            aria-hidden
+            focusable="false"
+            style={{ display: "block" }}
+          >
+            <path
+              d="M79 50C79 33.9837 66.0163 21 50 21C33.9837 21 21 33.9837 21 50C21 66.0163 33.9837 79 50 79C66.0163 79 79 66.0163 79 50ZM50 72C37.8497 72 28 62.1503 28 50C28 37.8497 37.8497 28 50 28C62.1503 28 72 37.8497 72 50C72 62.1503 62.1503 72 50 72Z"
+              fill="white"
+            />
+          </svg>
+        ) : imgSrc ? (
+          // If image failed to load, it will be hidden by onError, and we show text.
+          <span aria-hidden>{text}</span>
+        ) : (
+          text
+        )}
+      </span>
+    );
+  }
+
+  function Meter(props: { value: number; max?: number }) {
+    const max = props.max ?? 5;
+    const v = Math.max(0, Math.min(max, Math.floor(props.value)));
+    return (
+      <span style={{ display: "inline-flex", gap: 6, verticalAlign: "middle" }} aria-label={`${v}/${max}`}>
+        {Array.from({ length: max }).map((_, i) => (
+          <span
+            key={i}
+            aria-hidden
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: 3,
+              background: i < v ? "rgba(250, 204, 21, 0.95)" : "rgba(148, 163, 184, 0.55)",
+            }}
+          />
+        ))}
+      </span>
+    );
+  }
+
+  const PROVIDER_UI: Record<
+    AiProviderId,
+    {
+      label: string;
+      subtitle: string;
+      tip: string;
+      quote: string;
+      core: string;
+      meters: { prose: number; follow: number; cost: number; costText?: string };
+      note: string;
+    }
+  > = {
+    openai: {
+      label: "见山",
+      subtitle: "逻辑之宗 · 纲举目张",
+      tip: "见山（OpenAI）",
+      quote: "“初看是山，看久了还是那座稳健的大山。”",
+      core:
+        "逻辑之宗，纲举目张。指令遵循极强，如利刃破竹，最擅长梳理宏大的世界观设定与严密的剧情逻辑。",
+      meters: { prose: 5, follow: 5, cost: 2 },
+      note: "适合“一览众山小”的逻辑架构，若追求极致的辞藻修饰，建议配合“听雨”使用。",
+    },
+    anthropic: {
+      label: "听雨",
+      subtitle: "辞藻丰盈 · 情感细腻",
+      tip: "听雨（Claude）",
+      quote: "“如檐下听雨，文字绵密入骨，最懂人心。”",
+      core:
+        "辞藻丰盈，情感细腻。像一位共情力极强的老友，成文质感极佳，自带一种天然的去“AI味”滤镜，是描写人物内心与凄美画面的首选。",
+      meters: { prose: 5, follow: 4, cost: 3 },
+      note: "如遇敏感剧情可能像雨天一样“多愁善感”而断更，建议微调措辞或跳过该段落。",
+    },
+    gemini: {
+      label: "观云",
+      subtitle: "创意如云 · 变幻万千",
+      tip: "观云（Gemini）",
+      quote: "“坐看云起，奇思妙想如漫天流云，不可捉摸。”",
+      core:
+        "创意如云，变幻万千。拥有惊人的上下文联想能力，最擅长在陷入瓶颈时为你提供打破常规的“神来之笔”，让剧情走向峰回路转。",
+      meters: { prose: 4, follow: 3, cost: 2 },
+      note: "云海辽阔，长文推理可能需要稍作等待，建议在开启“高思考预算”时保持耐心。",
+    },
+    ollama: {
+      label: "潜龙",
+      subtitle: "根植本地 · 私密纯粹",
+      tip: "潜龙（Ollama）",
+      quote: "“藏龙于渊，不假外求，深藏不露的底气。”",
+      core:
+        "根植本地，稳如泰山。不依赖云端，私密且纯粹。虽然平时深潜不出，但在处理基础创作任务时，有着龙跃于渊般的稳健爆发力。",
+      meters: { prose: 3, follow: 3, cost: 1, costText: "极低消耗" },
+      note: "本地运行受限于设备性能，适合快速草拟或在离线环境下作为创作基座。",
+    },
+  };
+
   const [settings, setSettings] = useState<AiSettings>(() => loadAiSettings());
   const [mode, setMode] = useState<"continue" | "rewrite" | "outline" | "summarize">("continue");
   const [userHint, setUserHint] = useState("");
@@ -89,6 +235,13 @@ export function AiPanel(props: {
           ? settings.gemini
           : settings.ollama;
   }, [settings]);
+
+  const isCloudProvider = settings.provider !== "ollama";
+  const cloudAllowed = !isCloudProvider
+    ? true
+    : settings.privacy.consentAccepted && settings.privacy.allowCloudProviders;
+  const [providerPickerOpen, setProviderPickerOpen] = useState(false);
+  const [pickerActive, setPickerActive] = useState<AiProviderId>("ollama");
 
   const selectedText = useMemo(() => props.getSelectedText(), [props]);
 
@@ -291,6 +444,11 @@ export function AiPanel(props: {
       setError("请先选择章节。");
       return;
     }
+    if (!input && isCloudProvider && !cloudAllowed) {
+      setError(null);
+      setProviderPickerOpen(true);
+      return;
+    }
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
@@ -318,8 +476,10 @@ export function AiPanel(props: {
         if (props.workStyle.extraRules.trim()) sysParts.push("额外硬约束：\n" + props.workStyle.extraRules.trim());
 
         const ctxParts: string[] = [];
-        ctxParts.push(`作品：${props.work.title}`);
-        ctxParts.push(`章节：${props.chapter.title}`);
+        if (!isCloudProvider || settings.privacy.allowMetadata) {
+          ctxParts.push(`作品：${props.work.title}`);
+          ctxParts.push(`章节：${props.chapter.title}`);
+        }
         if (props.workStyle.styleAnchor.trim()) {
           ctxParts.push("文风锚点（尽量贴近其用词/节奏/句法）：\n" + props.workStyle.styleAnchor.trim());
         }
@@ -332,7 +492,11 @@ export function AiPanel(props: {
         if (props.chapterBible.sceneStance.trim()) ctxParts.push(`场景状态：\n${props.chapterBible.sceneStance.trim()}`);
         if (skillPresetText) ctxParts.push(skillPresetText);
 
-        if (includeLinkedExcerpts && props.linkedExcerptsForChapter.length > 0) {
+        if (
+          includeLinkedExcerpts &&
+          props.linkedExcerptsForChapter.length > 0 &&
+          (!isCloudProvider || settings.privacy.allowLinkedExcerpts)
+        ) {
           const ex = props.linkedExcerptsForChapter
             .slice(0, 8)
             .map((e, i) => `【摘录${i + 1}｜${e.refTitle}】\n${e.text}`)
@@ -340,7 +504,7 @@ export function AiPanel(props: {
           ctxParts.push(`参考摘录（与本章关联）：\n${ex}`);
         }
 
-        if (ragEnabled) {
+        if (ragEnabled && (!isCloudProvider || settings.privacy.allowRagSnippets)) {
           const q = ragQuery.trim();
           if (q) {
             try {
@@ -354,7 +518,7 @@ export function AiPanel(props: {
         }
 
         let bible = "";
-        if (settings.includeBible) {
+        if (settings.includeBible && (!isCloudProvider || settings.privacy.allowBible)) {
           try {
             setBibleLoading(true);
             bible = await exportBibleMarkdown(props.workId);
@@ -367,7 +531,7 @@ export function AiPanel(props: {
         const content = props.chapterContent ?? "";
         const userParts: string[] = [];
         userParts.push("上下文：\n" + clampText(ctxParts.join("\n\n"), Math.floor(settings.maxContextChars * 0.25)));
-        if (recentSummaryText.trim()) {
+        if (recentSummaryText.trim() && (!isCloudProvider || settings.privacy.allowRecentSummaries)) {
           userParts.push(
             "最近章节概要（仅供回忆事实）：\n" + clampText(recentSummaryText, Math.floor(settings.maxContextChars * 0.2)),
           );
@@ -377,7 +541,7 @@ export function AiPanel(props: {
             "创作圣经（如与正文冲突，以圣经为准）：\n" + clampText(bible, Math.floor(settings.maxContextChars * 0.45)),
           );
         }
-        if (ragEnabled && ragQuery.trim()) {
+        if (ragEnabled && ragQuery.trim() && (!isCloudProvider || settings.privacy.allowRagSnippets)) {
           const picked = (ragHits.length ? ragHits : []).slice(0, Math.max(0, Math.min(20, ragK)));
           if (picked.length > 0) {
             const s = [
@@ -390,14 +554,18 @@ export function AiPanel(props: {
             userParts.push("参考库检索片段（仅供引用原文信息，不要编造）：\n" + clampText(s, Math.floor(settings.maxContextChars * 0.25)));
           }
         }
-        if (currentContextMode === "full" && content.trim()) {
+        if (currentContextMode === "full" && content.trim() && (!isCloudProvider || settings.privacy.allowChapterContent)) {
           userParts.push("当前正文：\n" + clampText(content, Math.floor(settings.maxContextChars * 0.45)));
-        } else if (currentContextMode === "summary" && (props.chapter.summary ?? "").trim()) {
+        } else if (
+          currentContextMode === "summary" &&
+          (props.chapter.summary ?? "").trim() &&
+          (!isCloudProvider || settings.privacy.allowRecentSummaries)
+        ) {
           userParts.push(
             "当前章节概要（仅供回忆事实）：\n" +
               clampText((props.chapter.summary ?? "").trim(), Math.floor(settings.maxContextChars * 0.2)),
           );
-        } else if (currentContextMode === "selection" && selectedText.trim()) {
+        } else if (currentContextMode === "selection" && selectedText.trim() && (!isCloudProvider || settings.privacy.allowSelection)) {
           userParts.push("当前选区：\n" + clampText(selectedText.trim(), Math.floor(settings.maxContextChars * 0.25)));
         }
 
@@ -460,13 +628,146 @@ export function AiPanel(props: {
 
       <div className="ai-panel-row">
         <label className="small muted">提供方</label>
-        <select name="aiProvider" value={settings.provider} onChange={(e) => updateProvider(e.target.value as AiProviderId)}>
-          <option value="openai">OpenAI</option>
-          <option value="anthropic">Claude</option>
-          <option value="gemini">Gemini</option>
-          <option value="ollama">Ollama</option>
-        </select>
+        <button
+          type="button"
+          className="btn"
+          title={PROVIDER_UI[settings.provider]?.tip ?? ""}
+          onClick={() => setProviderPickerOpen(true)}
+          style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
+        >
+          <ProviderLogo provider={settings.provider} />
+          <span>{PROVIDER_UI[settings.provider]?.label ?? settings.provider}</span>
+        </button>
       </div>
+
+      {providerPickerOpen ? (
+        <div
+          className="modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="选择模型提供方"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setProviderPickerOpen(false);
+          }}
+        >
+          <div className="modal-card modal-card--wide model-picker">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <h3 style={{ margin: 0 }}>选择模型</h3>
+              <button type="button" className="icon-btn" title="关闭" onClick={() => setProviderPickerOpen(false)}>
+                ×
+              </button>
+            </div>
+
+            <div className="model-picker-body">
+              <div className="model-picker-left" role="tablist" aria-label="模型列表">
+                {(["openai", "anthropic", "gemini", "ollama"] as AiProviderId[]).map((id) => {
+                  const ui = PROVIDER_UI[id];
+                  const isCloud = id !== "ollama";
+                  const disabled = isCloud && !(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);
+                  const active = pickerActive === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      role="tab"
+                      aria-selected={active}
+                      aria-disabled={disabled}
+                      className={
+                        "model-picker-item" +
+                        (active ? " is-active" : "") +
+                        (disabled ? " is-disabled" : "")
+                      }
+                      title={disabled ? "去设置开启" : ui.tip}
+                      onClick={() => {
+                        if (disabled) {
+                          setProviderPickerOpen(false);
+                          window.location.href = "/settings#ai-privacy";
+                          return;
+                        }
+                        setPickerActive(id);
+                      }}
+                    >
+                      <ProviderLogo provider={id} />
+                      <span className="model-picker-item-main">
+                        <span className="model-picker-item-title">{ui.label}</span>
+                        <span className="model-picker-item-sub muted small">{ui.subtitle}</span>
+                      </span>
+                      <span className="model-picker-item-tag muted small">{settings.provider === id ? "当前" : ""}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {(() => {
+                const ui = PROVIDER_UI[pickerActive];
+                const isCloud = pickerActive !== "ollama";
+                const disabled = isCloud && !(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);
+                return (
+                  <div className="model-picker-right" role="tabpanel" aria-label="模型介绍">
+                    <div className="model-picker-right-head">
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <ProviderLogo provider={pickerActive} />
+                        <div>
+                          <div style={{ fontWeight: 900, fontSize: 18 }}>
+                            {ui.label}{" "}
+                            <span className="muted small">
+                              ({pickerActive === "openai" ? "OpenAI" : pickerActive === "anthropic" ? "Claude" : pickerActive === "gemini" ? "Gemini" : "Ollama"})
+                            </span>
+                          </div>
+                          <div className="muted small">{ui.subtitle}</div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn primary"
+                        aria-disabled={disabled}
+                        title={disabled ? "去设置开启" : ""}
+                        onClick={() => {
+                          if (disabled) {
+                            setProviderPickerOpen(false);
+                            window.location.href = "/settings#ai-privacy";
+                            return;
+                          }
+                          updateProvider(pickerActive);
+                          setProviderPickerOpen(false);
+                        }}
+                      >
+                        使用
+                      </button>
+                    </div>
+
+                    <div className="model-picker-quote">{ui.quote}</div>
+                    <div className="model-picker-core">{ui.core}</div>
+
+                    <div className="model-picker-meters">
+                      <div className="model-meter">
+                        <div className="muted small">文采水平</div>
+                        <Meter value={ui.meters.prose} />
+                      </div>
+                      <div className="model-meter">
+                        <div className="muted small">指令遵从</div>
+                        <Meter value={ui.meters.follow} />
+                      </div>
+                      <div className="model-meter">
+                        <div className="muted small">字数消耗</div>
+                        <Meter value={ui.meters.cost} />
+                        {ui.meters.costText ? <span className="muted small" style={{ marginLeft: 8 }}>（{ui.meters.costText}）</span> : null}
+                      </div>
+                    </div>
+
+                    <div className="model-picker-note">
+                      <div style={{ fontWeight: 800, marginBottom: 6 }}>注意事项</div>
+                      <div className="muted small" style={{ lineHeight: 1.65 }}>
+                        {ui.note}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="ai-panel-row">
         <label className="small muted">模式</label>
         <select name="aiMode" value={mode} onChange={(e) => setMode(e.target.value as any)}>

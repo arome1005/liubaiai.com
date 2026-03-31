@@ -162,7 +162,13 @@ export function RefRightPanel(props: {
           <p className="muted small">暂无。本章可在“参考库”阅读器划选保存并关联。</p>
         ) : (
           <>
-            <input value={q} onChange={(e) => setQ(e.target.value)} className="rr-input" placeholder="搜索摘录（标题/正文/备注）" />
+            <input
+              name="refRightPanelSearch"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              className="rr-input"
+              placeholder="搜索摘录（标题/正文/备注）"
+            />
             <ul className="rr-list">
               {shown.map((ex) => (
               <li key={ex.id} className="rr-excerpt">

@@ -6,6 +6,8 @@ import { EditorPage } from "./pages/EditorPage";
 import { SummaryOverviewPage } from "./pages/SummaryOverviewPage";
 import { ReferenceLibraryPage } from "./pages/ReferenceLibraryPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { PrivacyPage } from "./pages/PrivacyPage";
+import { TermsPage } from "./pages/TermsPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppShell } from "./components/AppShell";
 
@@ -38,6 +40,8 @@ export default function App() {
           <Route path="/work/:workId" element={<EditorPage />} />
           <Route path="/reference" element={<ReferenceLibraryPage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

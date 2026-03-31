@@ -268,6 +268,14 @@ export function AppShell() {
           <button type="button" className="btn small" onClick={() => setNavCollapsed((v) => !v)}>
             {navCollapsed ? "展开导航" : "收起导航"}
           </button>
+          <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
+            <Link className="muted small" to="/privacy">
+              隐私
+            </Link>
+            <Link className="muted small" to="/terms">
+              协议
+            </Link>
+          </div>
         </div>
       </aside>
 

@@ -198,7 +198,7 @@ body {
 .app-nav-foot {
   margin-top: auto;
   padding-top: 0.6rem;
-  border-top: 1px solid #f0f0f0;
+  border-top: 1px solid var(--border);
 }
 
 .app-body {
@@ -457,7 +457,7 @@ body {
   line-height: 1.45;
   white-space: pre-wrap;
   word-break: break-word;
-  color: #333;
+  color: var(--fg);
 }
 
 .app-right-quick {
@@ -591,6 +591,19 @@ a:hover {
   text-decoration: underline;
 }
 
+/* Global form theming (avoid white inputs in dark mode) */
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+textarea,
+select {
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.modal-input {
+  background: var(--surface);
+  color: var(--fg);
+}
+
 .page {
   max-width: 1200px;
   margin: 0 auto;
@@ -668,6 +681,8 @@ a:hover {
   border: 1px solid var(--border);
   border-radius: 6px;
   resize: vertical;
+  background: var(--surface);
+  color: var(--fg);
 }
 
 .page-header h1 {
@@ -687,7 +702,7 @@ a:hover {
   appearance: none;
   border: 1px solid var(--border);
   background: var(--surface);
-  color: #333;
+  color: var(--fg);
   padding: 0.4rem 0.8rem;
   border-radius: var(--radius-sm);
   cursor: pointer;
@@ -697,7 +712,7 @@ a:hover {
 }
 .btn:hover {
   border-color: #c0c0c0;
-  background: #fafafa;
+  background: var(--surface-2);
 }
 .btn:active {
   transform: translateY(0.5px);
@@ -858,7 +873,7 @@ a:hover {
   gap: 0.75rem;
   padding: 0 10px 0 6px;
   border-bottom: 1px solid var(--typora-border);
-  background: linear-gradient(to bottom, #ffffff, #fafafa);
+  background: linear-gradient(to bottom, var(--surface), var(--surface-2));
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.03);
 }
 
@@ -874,7 +889,7 @@ a:hover {
   position: absolute;
   left: 6px;
   top: 6px;
-  background: rgba(255, 255, 255, 0.9);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
   border: 1px solid var(--typora-border);
 }
 
@@ -986,7 +1001,7 @@ a:hover {
   top: calc(100% + 4px);
   min-width: 13rem;
   padding: 4px 0;
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--typora-border);
   border-radius: 6px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
@@ -1012,13 +1027,13 @@ a:hover {
   background: none;
   font: inherit;
   font-size: 0.85rem;
-  color: #333;
+  color: var(--fg);
   cursor: pointer;
   text-decoration: none;
 }
 .toolbar-more-menu button:hover,
 .toolbar-more-menu a:hover {
-  background: #f5f5f5;
+  background: var(--surface-2);
   text-decoration: none;
 }
 
@@ -1081,7 +1096,7 @@ a:hover {
   border-radius: 8px;
   padding: 0.5rem 0.6rem;
   margin: 0.6rem 0;
-  background: #fcfcfc;
+  background: var(--surface-2);
 }
 
 .ai-panel-box > summary {
@@ -1115,6 +1130,8 @@ a:hover {
   border: 1px solid var(--border);
   border-radius: 4px;
   resize: vertical;
+  background: var(--surface);
+  color: var(--fg);
 }
 
 .ai-panel-actions {
@@ -1189,7 +1206,7 @@ a:hover {
 }
 .chapter-list li.active {
   border-color: #c5d4e8;
-  background: #fff;
+  background: var(--surface);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
 }
 
@@ -1226,10 +1243,10 @@ a:hover {
 .chapter-list li:hover .chapter-actions button,
 .chapter-list li.active .chapter-actions button,
 .chapter-list li:focus-within .chapter-actions button {
-  background: #fff;
+  background: var(--surface);
 }
 .chapter-actions button {
-  background: #fff;
+  background: var(--surface);
   border: 1px solid var(--typora-border);
   color: #777;
   border-radius: 3px;
@@ -1293,7 +1310,7 @@ a:hover {
   flex-wrap: wrap;
   padding: 6px 12px;
   border-bottom: 1px solid var(--typora-border);
-  background: #fff;
+  background: var(--surface);
 }
 .find-bar input[type="search"] {
   flex: 1;
@@ -1302,8 +1319,8 @@ a:hover {
   padding: 6px 10px;
   border-radius: 4px;
   border: 1px solid var(--typora-border);
-  background: #fafafa;
-  color: #333;
+  background: var(--surface-2);
+  color: var(--fg);
   font: inherit;
   font-size: 0.85rem;
 }
@@ -1335,8 +1352,8 @@ a:hover {
   padding: 6px 10px;
   border-radius: 4px;
   border: 1px solid var(--typora-border);
-  background: #fafafa;
-  color: #333;
+  background: var(--surface-2);
+  color: var(--fg);
   font: inherit;
   font-size: 0.85rem;
 }
@@ -1362,7 +1379,7 @@ a:hover {
 .modal-card {
   width: 100%;
   max-width: 28rem;
-  background: #fff;
+  background: var(--surface);
   border-radius: 8px;
   border: 1px solid var(--typora-border);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.12);
@@ -1371,6 +1388,131 @@ a:hover {
 
 .modal-card--wide {
   max-width: 36rem;
+}
+
+.model-picker {
+  max-width: min(880px, 96vw);
+}
+
+.model-picker-body {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 12px;
+  min-height: min(56vh, 520px);
+}
+
+.model-picker-left {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px;
+  background: var(--surface-2);
+  overflow: auto;
+}
+
+.model-picker-item {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+}
+.model-picker-item:hover {
+  background: var(--surface);
+  border-color: var(--border);
+}
+.model-picker-item.is-active {
+  background: var(--accent-soft);
+  border-color: var(--border);
+}
+.model-picker-item.is-disabled {
+  opacity: 0.45;
+  cursor: pointer;
+}
+
+.model-picker-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.model-picker-item-title {
+  font-weight: 900;
+  letter-spacing: -0.01em;
+}
+.model-picker-item-sub {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.model-picker-item-tag {
+  flex: 0 0 auto;
+}
+
+.model-picker-right {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 14px;
+  background: var(--surface);
+  overflow: auto;
+}
+
+.model-picker-right-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.model-picker-quote {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-style: italic;
+  line-height: 1.65;
+}
+
+.model-picker-core {
+  margin-top: 10px;
+  line-height: 1.8;
+}
+
+.model-picker-meters {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.model-meter {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-picker-note {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+@media (max-width: 820px) {
+  .model-picker-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .modal-card h3 {
@@ -1400,7 +1542,7 @@ a:hover {
   justify-content: flex-end;
   margin-top: 1rem;
   padding-top: 0.5rem;
-  border-top: 1px solid #eee;
+  border-top: 1px solid var(--border);
 }
 
 .modal-footer--start {
@@ -1428,12 +1570,12 @@ a:hover {
   margin-bottom: 4px;
   border: 1px solid var(--typora-border);
   border-radius: 6px;
-  background: #fafafa;
+  background: var(--surface-2);
   cursor: pointer;
   font: inherit;
 }
 .book-search-hit:hover {
-  background: #f0f4fa;
+  background: var(--accent-soft);
   border-color: #c5d4e8;
 }
 .book-search-hit-title {
@@ -1464,7 +1606,7 @@ a:hover {
   border-radius: 6px;
   padding: 0.5rem 0.65rem;
   margin-bottom: 8px;
-  background: #fafafa;
+  background: var(--surface-2);
 }
 
 .snapshot-item-head {
@@ -1556,7 +1698,7 @@ a:hover {
   height: 28px;
   border: 1px solid var(--typora-border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface);
   color: #666;
   cursor: col-resize;
   user-select: none;
@@ -1569,7 +1711,7 @@ a:hover {
 .editor-width-reset {
   border: 1px solid var(--typora-border);
   border-radius: 8px;
-  background: #fff;
+  background: var(--surface);
   color: #666;
   cursor: pointer;
   font: inherit;
@@ -2314,6 +2456,8 @@ a:hover {
   border-radius: 4px;
   resize: vertical;
   min-height: 2.5rem;
+  background: var(--surface);
+  color: var(--fg);
 }
 
 .bible-tabs {
@@ -2360,6 +2504,8 @@ a:hover {
   padding: 0.25rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 4px;
+  background: var(--surface);
+  color: var(--fg);
 }
 
 .bible-input-kind {
@@ -2368,6 +2514,8 @@ a:hover {
   padding: 0.25rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 4px;
+  background: var(--surface);
+  color: var(--fg);
 }
 
 .bible-field {
@@ -2384,6 +2532,8 @@ a:hover {
   border: 1px solid var(--border);
   border-radius: 4px;
   resize: vertical;
+  background: var(--surface);
+  color: var(--fg);
 }
 
 .bible-card-actions {

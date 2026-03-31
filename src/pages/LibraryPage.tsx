@@ -89,6 +89,7 @@ export function LibraryPage() {
           </button>
           <input
             ref={fileRef}
+            name="importWorkFile"
             type="file"
             accept=".txt,.md,.markdown,.docx,text/plain"
             className="visually-hidden"
