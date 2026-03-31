@@ -527,6 +527,15 @@ body {
     opacity: 1;
     pointer-events: auto;
   }
+
+  /* Ensure left nav stays clickable even when right drawer overlay is open */
+  .app-nav {
+    position: relative;
+    z-index: 46; /* above overlay(45), below right drawer(50) */
+  }
+  .app-topbar {
+    z-index: 46;
+  }
 }
 
 @media (max-width: 900px) {
