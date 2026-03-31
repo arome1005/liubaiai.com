@@ -1,0 +1,13 @@
+{
+  "routes": [
+    {
+      "src": "/(.*)",
+      "has": [{ "type": "host", "value": "liubaiai.com" }],
+      "status": 308,
+      "headers": { "Location": "https://www.liubaiai.com/$1" }
+    },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
+}
+
