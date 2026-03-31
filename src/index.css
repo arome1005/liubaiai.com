@@ -327,20 +327,20 @@ body {
   padding: 0.35rem 0.4rem;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: #fafafa;
-  color: #333;
+  background: var(--surface-2);
+  color: var(--fg);
   font: inherit;
   font-size: 0.82rem;
   cursor: pointer;
   user-select: none;
 }
 .app-right-tab:hover {
-  border-color: #cfcfcf;
-  background: #fff;
+  border-color: var(--border);
+  background: var(--surface);
 }
 .app-right-tab.active {
   background: var(--accent-soft);
-  border-color: #dbe6f6;
+  border-color: var(--border);
   color: var(--accent);
 }
 .app-right-tab:disabled {
@@ -391,7 +391,7 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 0.6rem;
-  background: #fcfcfc;
+  background: var(--surface-2);
 }
 
 .rr-block-title {
@@ -430,8 +430,8 @@ body {
 }
 
 .rr-excerpt {
-  border: 1px solid #ededed;
-  background: #fff;
+  border: 1px solid var(--border);
+  background: var(--surface);
   border-radius: var(--radius-md);
   padding: 0.5rem 0.6rem;
 }
