@@ -162,6 +162,7 @@ export function SettingsPage() {
         <label className="row">
           <span>主题</span>
           <select
+            name="theme"
             value={theme}
             onChange={(e) => setTheme(e.target.value === "dark" ? "dark" : "light")}
           >
@@ -176,6 +177,7 @@ export function SettingsPage() {
         <label className="row">
           <span>{fontSize}px</span>
           <input
+            name="fontSize"
             type="range"
             min={12}
             max={28}
@@ -191,6 +193,7 @@ export function SettingsPage() {
         <label className="row">
           <span>换行符</span>
           <select
+            name="exportLineEnding"
             value={lineEnding}
             onChange={(e) => setLineEnding(e.target.value === "crlf" ? "crlf" : "lf")}
           >
@@ -204,6 +207,7 @@ export function SettingsPage() {
         <h2>隐私与诊断</h2>
         <label className="row row--check">
           <input
+            name="diagnosticMode"
             type="checkbox"
             checked={diagnostic}
             onChange={(e) => setDiagnostic(e.target.checked)}
@@ -353,6 +357,7 @@ export function SettingsPage() {
         <label className="row">
           <span>默认提供方</span>
           <select
+            name="aiProvider"
             value={aiSettings.provider}
             onChange={(e) => setAiSettings((s) => ({ ...s, provider: e.target.value as AiProviderId }))}
           >
@@ -365,6 +370,7 @@ export function SettingsPage() {
 
         <label className="row row--check">
           <input
+            name="aiIncludeBibleDefault"
             type="checkbox"
             checked={aiSettings.includeBible}
             onChange={(e) => setAiSettings((s) => ({ ...s, includeBible: e.target.checked }))}
@@ -375,6 +381,7 @@ export function SettingsPage() {
         <label className="row">
           <span>上下文上限</span>
           <input
+            name="aiMaxContextChars"
             type="number"
             min={4000}
             max={200000}
@@ -389,6 +396,7 @@ export function SettingsPage() {
           <label className="row">
             <span>Base URL</span>
             <input
+              name="openaiBaseUrl"
               value={aiSettings.openai.baseUrl ?? ""}
               onChange={(e) => setAiSettings((s) => ({ ...s, openai: { ...s.openai, baseUrl: e.target.value } }))}
               placeholder="https://api.openai.com/v1"
@@ -397,6 +405,7 @@ export function SettingsPage() {
           <label className="row">
             <span>Model</span>
             <input
+              name="openaiModel"
               value={aiSettings.openai.model}
               onChange={(e) => setAiSettings((s) => ({ ...s, openai: { ...s.openai, model: e.target.value } }))}
             />
@@ -404,6 +413,7 @@ export function SettingsPage() {
           <label className="row">
             <span>API Key</span>
             <input
+              name="openaiApiKey"
               type="password"
               value={aiSettings.openai.apiKey ?? ""}
               onChange={(e) => setAiSettings((s) => ({ ...s, openai: { ...s.openai, apiKey: e.target.value } }))}
@@ -416,6 +426,7 @@ export function SettingsPage() {
           <label className="row">
             <span>Base URL</span>
             <input
+              name="anthropicBaseUrl"
               value={aiSettings.anthropic.baseUrl ?? ""}
               onChange={(e) => setAiSettings((s) => ({ ...s, anthropic: { ...s.anthropic, baseUrl: e.target.value } }))}
               placeholder="https://api.anthropic.com"
@@ -424,6 +435,7 @@ export function SettingsPage() {
           <label className="row">
             <span>Model</span>
             <input
+              name="anthropicModel"
               value={aiSettings.anthropic.model}
               onChange={(e) => setAiSettings((s) => ({ ...s, anthropic: { ...s.anthropic, model: e.target.value } }))}
             />
@@ -431,6 +443,7 @@ export function SettingsPage() {
           <label className="row">
             <span>API Key</span>
             <input
+              name="anthropicApiKey"
               type="password"
               value={aiSettings.anthropic.apiKey ?? ""}
               onChange={(e) => setAiSettings((s) => ({ ...s, anthropic: { ...s.anthropic, apiKey: e.target.value } }))}
@@ -443,6 +456,7 @@ export function SettingsPage() {
           <label className="row">
             <span>Base URL</span>
             <input
+              name="geminiBaseUrl"
               value={aiSettings.gemini.baseUrl ?? ""}
               onChange={(e) => setAiSettings((s) => ({ ...s, gemini: { ...s.gemini, baseUrl: e.target.value } }))}
               placeholder="https://generativelanguage.googleapis.com"
@@ -451,6 +465,7 @@ export function SettingsPage() {
           <label className="row">
             <span>Model</span>
             <input
+              name="geminiModel"
               value={aiSettings.gemini.model}
               onChange={(e) => setAiSettings((s) => ({ ...s, gemini: { ...s.gemini, model: e.target.value } }))}
             />
@@ -458,6 +473,7 @@ export function SettingsPage() {
           <label className="row">
             <span>API Key</span>
             <input
+              name="geminiApiKey"
               type="password"
               value={aiSettings.gemini.apiKey ?? ""}
               onChange={(e) => setAiSettings((s) => ({ ...s, gemini: { ...s.gemini, apiKey: e.target.value } }))}
@@ -470,6 +486,7 @@ export function SettingsPage() {
           <label className="row">
             <span>Base URL</span>
             <input
+              name="ollamaBaseUrl"
               value={aiSettings.ollama.baseUrl ?? ""}
               onChange={(e) => setAiSettings((s) => ({ ...s, ollama: { ...s.ollama, baseUrl: e.target.value } }))}
               placeholder="http://localhost:11434"
@@ -478,6 +495,7 @@ export function SettingsPage() {
           <label className="row">
             <span>Model</span>
             <input
+              name="ollamaModel"
               value={aiSettings.ollama.model}
               onChange={(e) => setAiSettings((s) => ({ ...s, ollama: { ...s.ollama, model: e.target.value } }))}
             />

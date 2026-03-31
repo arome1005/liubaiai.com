@@ -460,7 +460,7 @@ export function AiPanel(props: {
 
       <div className="ai-panel-row">
         <label className="small muted">提供方</label>
-        <select value={settings.provider} onChange={(e) => updateProvider(e.target.value as AiProviderId)}>
+        <select name="aiProvider" value={settings.provider} onChange={(e) => updateProvider(e.target.value as AiProviderId)}>
           <option value="openai">OpenAI</option>
           <option value="anthropic">Claude</option>
           <option value="gemini">Gemini</option>
@@ -469,7 +469,7 @@ export function AiPanel(props: {
       </div>
       <div className="ai-panel-row">
         <label className="small muted">模式</label>
-        <select value={mode} onChange={(e) => setMode(e.target.value as any)}>
+        <select name="aiMode" value={mode} onChange={(e) => setMode(e.target.value as any)}>
           <option value="continue">续写</option>
           <option value="rewrite">改写</option>
           <option value="outline">大纲</option>
@@ -481,19 +481,19 @@ export function AiPanel(props: {
         <summary>写作变量（显式控制）</summary>
         <label className="ai-panel-field">
           <span className="small muted">故事背景（可空）</span>
-          <textarea value={storyBackground} onChange={(e) => setStoryBackground(e.target.value)} rows={3} />
+          <textarea name="storyBackground" value={storyBackground} onChange={(e) => setStoryBackground(e.target.value)} rows={3} />
         </label>
         <label className="ai-panel-field">
           <span className="small muted">角色（可空）</span>
-          <textarea value={characters} onChange={(e) => setCharacters(e.target.value)} rows={3} />
+          <textarea name="characters" value={characters} onChange={(e) => setCharacters(e.target.value)} rows={3} />
         </label>
         <label className="ai-panel-field">
           <span className="small muted">角色关系（可空）</span>
-          <textarea value={relations} onChange={(e) => setRelations(e.target.value)} rows={3} />
+          <textarea name="relations" value={relations} onChange={(e) => setRelations(e.target.value)} rows={3} />
         </label>
         <div className="ai-panel-row">
           <label className="small muted">技巧预设</label>
-          <select value={skillPreset} onChange={(e) => setSkillPreset(e.target.value as any)}>
+          <select name="skillPreset" value={skillPreset} onChange={(e) => setSkillPreset(e.target.value as any)}>
             <option value="none">无</option>
             <option value="tight">紧凑</option>
             <option value="dialogue">对话推进</option>
@@ -504,7 +504,7 @@ export function AiPanel(props: {
         {skillPreset === "custom" ? (
           <label className="ai-panel-field">
             <span className="small muted">自定义技巧</span>
-            <textarea value={skillText} onChange={(e) => setSkillText(e.target.value)} rows={3} />
+            <textarea name="skillText" value={skillText} onChange={(e) => setSkillText(e.target.value)} rows={3} />
           </label>
         ) : null}
       </details>
@@ -514,6 +514,7 @@ export function AiPanel(props: {
         <label className="ai-panel-field">
           <span className="small muted">叙述视角 / 人称（可空）</span>
           <textarea
+            name="stylePov"
             value={props.workStyle.pov}
             onChange={(e) => props.onUpdateWorkStyle({ pov: e.target.value })}
             rows={2}
@@ -523,6 +524,7 @@ export function AiPanel(props: {
         <label className="ai-panel-field">
           <span className="small muted">整体调性（可空）</span>
           <textarea
+            name="styleTone"
             value={props.workStyle.tone}
             onChange={(e) => props.onUpdateWorkStyle({ tone: e.target.value })}
             rows={2}
@@ -532,6 +534,7 @@ export function AiPanel(props: {
         <label className="ai-panel-field">
           <span className="small muted">禁用词 / 禁用套话（换行分隔，可空）</span>
           <textarea
+            name="styleBannedPhrases"
             value={props.workStyle.bannedPhrases}
             onChange={(e) => props.onUpdateWorkStyle({ bannedPhrases: e.target.value })}
             rows={3}
@@ -541,6 +544,7 @@ export function AiPanel(props: {
         <label className="ai-panel-field">
           <span className="small muted">文风锚点（短样例，可空）</span>
           <textarea
+            name="styleAnchor"
             value={props.workStyle.styleAnchor}
             onChange={(e) => props.onUpdateWorkStyle({ styleAnchor: e.target.value })}
             rows={4}
@@ -550,6 +554,7 @@ export function AiPanel(props: {
         <label className="ai-panel-field">
           <span className="small muted">额外硬约束（可空）</span>
           <textarea
+            name="styleExtraRules"
             value={props.workStyle.extraRules}
             onChange={(e) => props.onUpdateWorkStyle({ extraRules: e.target.value })}
             rows={3}
@@ -561,13 +566,14 @@ export function AiPanel(props: {
       <details className="ai-panel-box">
         <summary>检索增强（RAG v1：参考库）</summary>
         <label className="ai-panel-check row row--check">
-          <input type="checkbox" checked={ragEnabled} onChange={(e) => setRagEnabled(e.target.checked)} />
+          <input name="ragEnabled" type="checkbox" checked={ragEnabled} onChange={(e) => setRagEnabled(e.target.checked)} />
           <span>启用参考库检索注入</span>
         </label>
         <label className="ai-panel-field">
           <span className="small muted">检索关键词（query）</span>
           <input
             className="input"
+            name="ragQuery"
             value={ragQuery}
             onChange={(e) => setRagQuery(e.target.value)}
             placeholder="例如：太初古矿、玉简、主角姓名…"
@@ -577,6 +583,7 @@ export function AiPanel(props: {
           <label className="small muted">top-k</label>
           <input
             type="number"
+            name="ragTopK"
             min={1}
             max={20}
             value={ragK}
@@ -635,6 +642,7 @@ export function AiPanel(props: {
         <summary>上下文注入</summary>
         <label className="ai-panel-check row row--check">
           <input
+            name="includeBible"
             type="checkbox"
             checked={settings.includeBible}
             onChange={(e) => updateSettings({ includeBible: e.target.checked })}
@@ -643,6 +651,7 @@ export function AiPanel(props: {
         </label>
         <label className="ai-panel-check row row--check">
           <input
+            name="includeLinkedExcerpts"
             type="checkbox"
             checked={includeLinkedExcerpts}
             onChange={(e) => setIncludeLinkedExcerpts(e.target.checked)}
@@ -652,6 +661,7 @@ export function AiPanel(props: {
         <div className="ai-panel-row">
           <label className="ai-panel-check row row--check" style={{ margin: 0 }}>
             <input
+              name="includeRecentSummaries"
               type="checkbox"
               checked={includeRecentSummaries}
               onChange={(e) => setIncludeRecentSummaries(e.target.checked)}
@@ -660,6 +670,7 @@ export function AiPanel(props: {
           </label>
           <input
             type="number"
+            name="recentN"
             min={0}
             max={12}
             value={recentN}
@@ -670,7 +681,7 @@ export function AiPanel(props: {
         </div>
         <div className="ai-panel-row">
           <label className="small muted">当前章注入</label>
-          <select value={currentContextMode} onChange={(e) => setCurrentContextMode(e.target.value as any)}>
+          <select name="currentContextMode" value={currentContextMode} onChange={(e) => setCurrentContextMode(e.target.value as any)}>
             <option value="full">全文</option>
             <option value="summary">概要</option>
             <option value="selection">选区</option>
@@ -733,7 +744,7 @@ export function AiPanel(props: {
 
       <label className="ai-panel-field">
         <span className="small muted">额外要求（可空）</span>
-        <textarea value={userHint} onChange={(e) => setUserHint(e.target.value)} rows={3} />
+        <textarea name="userHint" value={userHint} onChange={(e) => setUserHint(e.target.value)} rows={3} />
       </label>
 
       <div className="ai-panel-actions" style={{ justifyContent: "flex-start" }}>
@@ -767,7 +778,7 @@ export function AiPanel(props: {
 
       <label className="ai-panel-field">
         <span className="small muted">AI 草稿（不会自动写入正文）</span>
-        <textarea value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} />
+        <textarea name="aiDraft" value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} />
       </label>
 
       {glossaryHitsInDraft.length > 0 ? (
