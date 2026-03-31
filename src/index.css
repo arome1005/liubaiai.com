@@ -9,9 +9,15 @@
   --editor-font-size: 16px;
   --accent: #2c5aa0;
   --accent-soft: #e8eef6;
+  --bg: #f3f3f3;
+  --fg: #333333;
+  --muted: #888888;
   --surface: #ffffff;
+  --surface-2: #fafafa;
+  --surface-3: #fcfcfc;
   --border: #e0e0e0;
-  --text-muted: #888888;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
 
   /* AppShell tokens */
   --shell-nav-w: 14.5rem;
@@ -22,8 +28,6 @@
   /* Component tokens */
   --radius-sm: 8px;
   --radius-md: 12px;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
   --focus: 0 0 0 3px rgba(44, 90, 160, 0.18);
 }
 
@@ -74,7 +78,7 @@ body {
   display: grid;
   grid-template-columns: var(--shell-nav-w) minmax(0, 1fr) var(--shell-right-w);
   grid-template-rows: 1fr;
-  background: #f3f3f3;
+  background: var(--bg);
 }
 
 .app-shell--right-closed {
@@ -141,12 +145,12 @@ body {
   text-decoration: none;
 }
 .app-nav-item:hover {
-  background: #fafafa;
+  background: var(--surface-2);
   text-decoration: none;
 }
 .app-nav-item.active {
   background: var(--accent-soft);
-  border: 1px solid #dbe6f6;
+  border: 1px solid var(--border);
 }
 
 .app-nav-ico {
@@ -158,7 +162,7 @@ body {
 .app-nav-group {
   margin-top: 0.4rem;
   padding-top: 0.4rem;
-  border-top: 1px dashed #e8e8e8;
+  border-top: 1px dashed var(--border);
 }
 
 .app-nav-group-title {
@@ -172,9 +176,9 @@ body {
 .app-nav-workmeta {
   margin: 0 0.35rem 0.35rem;
   padding: 0.5rem 0.55rem;
-  border: 1px solid #ececec;
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: #fafafa;
+  background: var(--surface-2);
 }
 .app-nav-worktitle {
   font-weight: 700;
@@ -215,7 +219,7 @@ body {
   gap: 1rem;
   padding: 0 1rem;
   border-bottom: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.9);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
   backdrop-filter: blur(10px);
 }
 
@@ -723,7 +727,7 @@ a:hover {
 }
 
 .muted {
-  color: var(--text-muted);
+  color: var(--muted);
 }
 .small {
   font-size: 0.85rem;
@@ -1644,28 +1648,38 @@ a:hover {
 .editor-empty {
   margin: 3rem 0;
   text-align: center;
-  color: var(--text-muted);
+  color: var(--muted);
   font-size: 0.9rem;
 }
 
 /* 深色主题（设置中切换） */
 :root[data-theme="dark"] {
-  color: #e4e4e4;
-  background-color: #1a1a1a;
-  --surface: #2a2a2a;
-  --border: #3f3f46;
-  --text-muted: #a1a1aa;
-  --accent: #6b9bd1;
-  --accent-soft: #1e2a38;
+  color: #e7e7e8;
+  background-color: #0f1115;
+  --bg: #0f1115;
+  --fg: #e7e7e8;
+  --muted: #a6a7ab;
+
+  /* Surfaces: slightly lifted layers */
+  --surface: #141821;
+  --surface-2: #181d28;
+  --surface-3: #1d2330;
+
+  --border: rgba(255, 255, 255, 0.10);
+  --accent: #79a7ff;
+  --accent-soft: rgba(121, 167, 255, 0.12);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --focus: 0 0 0 3px rgba(121, 167, 255, 0.22);
 }
 
 :root[data-theme="dark"] body {
-  background-color: #1a1a1a;
+  background-color: var(--bg);
 }
 
 :root[data-theme="dark"] .page {
-  background: #1a1a1a;
-  color: #e4e4e4;
+  background: var(--bg);
+  color: var(--fg);
   min-height: 100vh;
 }
 
