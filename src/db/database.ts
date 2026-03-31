@@ -1,0 +1,337 @@
+/**
+ * Dexie / IndexedDB 定义：仅由 {@link ../storage/writing-store-indexeddb} 使用。
+ * 业务代码请走 `repo` → `getWritingStore()`，勿直接依赖本模块。
+ */
+import Dexie, { type Table } from "dexie";
+import type {
+  BibleCharacter,
+  BibleChapterTemplate,
+  BibleForeshadow,
+  BibleGlossaryTerm,
+  BibleTimelineEvent,
+  BibleWorldEntry,
+  Chapter,
+  ChapterBible,
+  ChapterSnapshot,
+  ReferenceChunk,
+  ReferenceChapterHead,
+  ReferenceExcerpt,
+  ReferenceExcerptTag,
+  ReferenceLibraryEntry,
+  ReferenceTag,
+  ReferenceTokenPosting,
+  Volume,
+  Work,
+  WorkStyleCard,
+} from "./types";
+import {
+  DB_NAME,
+  SCHEMA_VERSION,
+  SNAPSHOT_CAP_PER_CHAPTER,
+  SNAPSHOT_MAX_AGE_MS,
+} from "./types";
+
+export class LiubaiDB extends Dexie {
+  works!: Table<Work, string>;
+  chapters!: Table<Chapter, string>;
+  volumes!: Table<Volume, string>;
+  meta!: Table<{ key: string; value: unknown }, string>;
+  chapterSnapshots!: Table<ChapterSnapshot, string>;
+  /** 第 3 组参考库：原著元数据（Dexie 表名 camelCase，与路线图「reference_library」对应） */
+  referenceLibrary!: Table<ReferenceLibraryEntry, string>;
+  referenceChunks!: Table<ReferenceChunk, string>;
+  referenceTokenPostings!: Table<ReferenceTokenPosting, string>;
+  referenceExcerpts!: Table<ReferenceExcerpt, string>;
+  /** 3.5 摘录标签（全局） */
+  referenceTags!: Table<ReferenceTag, string>;
+  referenceExcerptTags!: Table<ReferenceExcerptTag, string>;
+  /** 参考库章节标题行索引（与 ReferenceChunk 章节检测一致） */
+  referenceChapterHeads!: Table<ReferenceChapterHead, string>;
+  /** 第 4 组 一致性护栏 / 圣经 */
+  bibleCharacters!: Table<BibleCharacter, string>;
+  bibleWorldEntries!: Table<BibleWorldEntry, string>;
+  bibleForeshadowing!: Table<BibleForeshadow, string>;
+  bibleTimelineEvents!: Table<BibleTimelineEvent, string>;
+  bibleChapterTemplates!: Table<BibleChapterTemplate, string>;
+  chapterBible!: Table<ChapterBible, string>;
+  bibleGlossaryTerms!: Table<BibleGlossaryTerm, string>;
+  /** 第 5 组：全书级风格卡 / 调性锁（每作品一份） */
+  workStyleCards!: Table<WorkStyleCard, string>;
+
+  constructor() {
+    super(DB_NAME);
+    this.version(1).stores({
+      works: "id, updatedAt",
+      chapters: "id, workId, order",
+      meta: "key",
+    });
+    this.version(2)
+      .stores({
+        works: "id, updatedAt",
+        chapters: "id, workId, order",
+        meta: "key",
+      })
+      .upgrade(async (trans) => {
+        await trans.table("works").toCollection().modify((w: Record<string, unknown>) => {
+          const legacy = w.progressChapterId as string | null | undefined;
+          w.progressCursor = (w.progressCursor ?? legacy ?? null) as string | null;
+          delete w.progressChapterId;
+        });
+      });
+    this.version(3).stores({
+      works: "id, updatedAt",
+      chapters: "id, workId, order",
+      meta: "key",
+      chapterSnapshots: "id, chapterId, createdAt",
+    });
+    this.version(4)
+      .stores({
+        works: "id, updatedAt",
+        chapters: "id, workId, order, volumeId",
+        volumes: "id, workId, order",
+        meta: "key",
+        chapterSnapshots: "id, chapterId, createdAt",
+      })
+      .upgrade(async (trans) => {
+        const chaptersTable = trans.table("chapters");
+        const volumesTable = trans.table("volumes");
+        const allChapters = (await chaptersTable.toArray()) as Chapter[];
+        const workIds = [...new Set(allChapters.map((c) => c.workId))];
+        const t = Date.now();
+        const workToDefaultVol = new Map<string, string>();
+        for (const wid of workIds) {
+          const vid = crypto.randomUUID();
+          workToDefaultVol.set(wid, vid);
+          await volumesTable.add({
+            id: vid,
+            workId: wid,
+            title: "正文",
+            order: 0,
+            createdAt: t,
+          });
+        }
+        const worksTable = trans.table("works");
+        const allWorks = (await worksTable.toArray()) as Work[];
+        for (const w of allWorks) {
+          if (!workToDefaultVol.has(w.id)) {
+            const vid = crypto.randomUUID();
+            workToDefaultVol.set(w.id, vid);
+            await volumesTable.add({
+              id: vid,
+              workId: w.id,
+              title: "正文",
+              order: 0,
+              createdAt: t,
+            });
+          }
+        }
+        await chaptersTable.toCollection().modify((ch: Record<string, unknown>) => {
+          const wid = ch.workId as string;
+          const vid = workToDefaultVol.get(wid);
+          const content = (ch.content as string) ?? "";
+          ch.volumeId = vid;
+          ch.wordCountCache = content.replace(/\s/g, "").length;
+        });
+      });
+    this.version(5)
+      .stores({
+        works: "id, updatedAt",
+        chapters: "id, workId, order, volumeId",
+        volumes: "id, workId, order",
+        meta: "key",
+        chapterSnapshots: "id, chapterId, createdAt",
+        referenceLibrary: "id, updatedAt",
+        referenceChunks: "id, refWorkId, ordinal",
+      })
+      .upgrade(async (trans) => {
+        const snapTable = trans.table("chapterSnapshots");
+        const snaps = (await snapTable.toArray()) as ChapterSnapshot[];
+        const cutoff = Date.now() - SNAPSHOT_MAX_AGE_MS;
+        for (const s of snaps) {
+          if (s.createdAt < cutoff) await snapTable.delete(s.id);
+        }
+        const remaining = (await snapTable.toArray()) as ChapterSnapshot[];
+        const byChapter = new Map<string, ChapterSnapshot[]>();
+        for (const s of remaining) {
+          const list = byChapter.get(s.chapterId) ?? [];
+          list.push(s);
+          byChapter.set(s.chapterId, list);
+        }
+        for (const [, list] of byChapter) {
+          list.sort((a, b) => a.createdAt - b.createdAt);
+          while (list.length > SNAPSHOT_CAP_PER_CHAPTER) {
+            const rm = list.shift()!;
+            await snapTable.delete(rm.id);
+          }
+        }
+      });
+    this.version(6).stores({
+      works: "id, updatedAt",
+      chapters: "id, workId, order, volumeId",
+      volumes: "id, workId, order",
+      meta: "key",
+      chapterSnapshots: "id, chapterId, createdAt",
+      referenceLibrary: "id, updatedAt",
+      referenceChunks: "id, refWorkId, ordinal",
+      referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+      referenceExcerpts: "id, refWorkId, chunkId, createdAt",
+    });
+    this.version(7)
+      .stores({
+        works: "id, updatedAt",
+        chapters: "id, workId, order, volumeId",
+        volumes: "id, workId, order",
+        meta: "key",
+        chapterSnapshots: "id, chapterId, createdAt",
+        referenceLibrary: "id, updatedAt, category",
+        referenceChunks: "id, refWorkId, ordinal",
+        referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+        referenceExcerpts: "id, refWorkId, chunkId, createdAt",
+      })
+      .upgrade(async (trans) => {
+        const t = trans.table("referenceLibrary");
+        await t.toCollection().modify((r: Record<string, unknown>) => {
+          if (r.category === undefined) r.category = "";
+        });
+      });
+    this.version(8)
+      .stores({
+        works: "id, updatedAt",
+        chapters: "id, workId, order, volumeId",
+        volumes: "id, workId, order",
+        meta: "key",
+        chapterSnapshots: "id, chapterId, createdAt",
+        referenceLibrary: "id, updatedAt, category",
+        referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+        referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+        referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+        referenceTags: "id, name, createdAt",
+        referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+      })
+      .upgrade(async (trans) => {
+        const ex = trans.table("referenceExcerpts");
+        await ex.toCollection().modify((row: Record<string, unknown>) => {
+          if (row.linkedWorkId === undefined) row.linkedWorkId = null;
+          if (row.linkedChapterId === undefined) row.linkedChapterId = null;
+        });
+      });
+    this.version(9).stores({
+      works: "id, updatedAt",
+      chapters: "id, workId, order, volumeId",
+      volumes: "id, workId, order",
+      meta: "key",
+      chapterSnapshots: "id, chapterId, createdAt",
+      referenceLibrary: "id, updatedAt, category",
+      referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+      referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+      referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+      referenceTags: "id, name, createdAt",
+      referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+      bibleCharacters: "id, workId, sortOrder, name, [workId+sortOrder]",
+      bibleWorldEntries: "id, workId, entryKind, sortOrder, [workId+sortOrder]",
+      bibleForeshadowing: "id, workId, status, chapterId, sortOrder, [workId+status]",
+      bibleTimelineEvents: "id, workId, chapterId, sortOrder, [workId+sortOrder]",
+      bibleChapterTemplates: "id, workId, name, [workId+name]",
+      chapterBible: "id, chapterId, workId, [chapterId+workId]",
+      bibleGlossaryTerms: "id, workId, term, category, [workId+term]",
+    });
+    this.version(10)
+      .stores({
+        works: "id, updatedAt",
+        chapters: "id, workId, order, volumeId",
+        volumes: "id, workId, order",
+        meta: "key",
+        chapterSnapshots: "id, chapterId, createdAt",
+        referenceLibrary: "id, updatedAt, category",
+        referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+        referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+        referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+        referenceTags: "id, name, createdAt",
+        referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+        referenceChapterHeads: "id, refWorkId, chunkId, ordinal, startOffset, [refWorkId+ordinal]",
+        bibleCharacters: "id, workId, sortOrder, name, [workId+sortOrder]",
+        bibleWorldEntries: "id, workId, entryKind, sortOrder, [workId+sortOrder]",
+        bibleForeshadowing: "id, workId, status, chapterId, sortOrder, [workId+status]",
+        bibleTimelineEvents: "id, workId, chapterId, sortOrder, [workId+sortOrder]",
+        bibleChapterTemplates: "id, workId, name, [workId+name]",
+        chapterBible: "id, chapterId, workId, [chapterId+workId]",
+        bibleGlossaryTerms: "id, workId, term, category, [workId+term]",
+      })
+      .upgrade(async (trans) => {
+        const chunkTable = trans.table("referenceChunks");
+        const libTable = trans.table("referenceLibrary");
+        await chunkTable.toCollection().modify((c: Record<string, unknown>) => {
+          if (c.isChapterHead === undefined) c.isChapterHead = false;
+        });
+        await libTable.toCollection().modify((e: Record<string, unknown>) => {
+          if (e.chapterHeadCount === undefined) e.chapterHeadCount = 0;
+        });
+      });
+    this.version(11)
+      .stores({
+        works: "id, updatedAt",
+        chapters: "id, workId, order, volumeId",
+        volumes: "id, workId, order",
+        meta: "key",
+        chapterSnapshots: "id, chapterId, createdAt",
+        referenceLibrary: "id, updatedAt, category",
+        referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+        referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+        referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+        referenceTags: "id, name, createdAt",
+        referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+        referenceChapterHeads: "id, refWorkId, chunkId, ordinal, startOffset, [refWorkId+ordinal]",
+        bibleCharacters: "id, workId, sortOrder, name, [workId+sortOrder]",
+        bibleWorldEntries: "id, workId, entryKind, sortOrder, [workId+sortOrder]",
+        bibleForeshadowing: "id, workId, status, chapterId, sortOrder, [workId+status]",
+        bibleTimelineEvents: "id, workId, chapterId, sortOrder, [workId+sortOrder]",
+        bibleChapterTemplates: "id, workId, name, [workId+name]",
+        chapterBible: "id, chapterId, workId, [chapterId+workId]",
+        bibleGlossaryTerms: "id, workId, term, category, [workId+term]",
+      })
+      .upgrade(async (trans) => {
+        const ch = trans.table("chapters");
+        await ch.toCollection().modify((row: Record<string, unknown>) => {
+          if (row.summary === undefined) row.summary = "";
+        });
+      });
+
+    this.version(12).stores({
+      works: "id, updatedAt",
+      chapters: "id, workId, order, volumeId",
+      volumes: "id, workId, order",
+      meta: "key",
+      chapterSnapshots: "id, chapterId, createdAt",
+      referenceLibrary: "id, updatedAt, category",
+      referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+      referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+      referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+      referenceTags: "id, name, createdAt",
+      referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+      referenceChapterHeads: "id, refWorkId, chunkId, ordinal, startOffset, [refWorkId+ordinal]",
+      bibleCharacters: "id, workId, sortOrder, name, [workId+sortOrder]",
+      bibleWorldEntries: "id, workId, entryKind, sortOrder, [workId+sortOrder]",
+      bibleForeshadowing: "id, workId, status, chapterId, sortOrder, [workId+status]",
+      bibleTimelineEvents: "id, workId, chapterId, sortOrder, [workId+sortOrder]",
+      bibleChapterTemplates: "id, workId, name, [workId+name]",
+      chapterBible: "id, chapterId, workId, [chapterId+workId]",
+      bibleGlossaryTerms: "id, workId, term, category, [workId+term]",
+      workStyleCards: "id, workId, updatedAt",
+    });
+  }
+}
+
+let dbInstance: LiubaiDB | null = null;
+
+export function getDB(): LiubaiDB {
+  if (!dbInstance) {
+    dbInstance = new LiubaiDB();
+  }
+  return dbInstance;
+}
+
+export async function initDB(): Promise<void> {
+  const db = getDB();
+  await db.open();
+  await db.meta.put({ key: "schemaVersion", value: SCHEMA_VERSION });
+}
