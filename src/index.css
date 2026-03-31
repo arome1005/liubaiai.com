@@ -1654,23 +1654,22 @@ a:hover {
 
 /* 深色主题（设置中切换） */
 :root[data-theme="dark"] {
-  color: #e7e7e8;
-  background-color: #0f1115;
-  --bg: #0f1115;
-  --fg: #e7e7e8;
-  --muted: #a6a7ab;
+  color: #ffffff;
+  background-color: #000000;
+  --bg: #000000;
+  --fg: #ffffff;
+  --muted: rgba(255, 255, 255, 0.72);
 
-  /* Surfaces: slightly lifted layers */
-  --surface: #141821;
-  --surface-2: #181d28;
-  --surface-3: #1d2330;
-
-  --border: rgba(255, 255, 255, 0.10);
-  --accent: #79a7ff;
-  --accent-soft: rgba(121, 167, 255, 0.12);
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
-  --shadow-md: 0 16px 40px rgba(0, 0, 0, 0.55);
-  --focus: 0 0 0 3px rgba(121, 167, 255, 0.22);
+  /* Ultra clean "black & white" */
+  --surface: #000000;
+  --surface-2: #000000;
+  --surface-3: #000000;
+  --border: #111111;
+  --accent: #9fc0ff;
+  --accent-soft: rgba(159, 192, 255, 0.14);
+  --shadow-sm: none;
+  --shadow-md: none;
+  --focus: 0 0 0 3px rgba(255, 255, 255, 0.18);
 }
 
 :root[data-theme="dark"] body {
@@ -1684,20 +1683,20 @@ a:hover {
 }
 
 :root[data-theme="dark"] .theme-typora {
-  --typora-bg: #1e1e1e;
-  --typora-paper: #252526;
-  --typora-text: #d4d4d4;
-  --typora-border: #3c3c3c;
-  --typora-sidebar: #2a2a2b;
+  --typora-bg: #000000;
+  --typora-paper: #000000;
+  --typora-text: #ffffff;
+  --typora-border: #111111;
+  --typora-sidebar: #000000;
 }
 
 :root[data-theme="dark"] .editor-toolbar {
-  background: linear-gradient(to bottom, #2d2d2d, #252525);
+  background: #000000;
   border-bottom-color: var(--typora-border);
 }
 
 :root[data-theme="dark"] .work-name {
-  color: #ddd;
+  color: #ffffff;
 }
 
 .sidebar-head-btns {
