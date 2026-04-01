@@ -35,7 +35,7 @@ export function SummaryOverviewPage() {
     return (
       <div className="page">
         <p className="muted">无效地址。</p>
-        <Link to="/">返回</Link>
+        <Link to="/library">返回</Link>
       </div>
     );
   }
@@ -52,7 +52,7 @@ export function SummaryOverviewPage() {
     return (
       <div className="page">
         <p>作品不存在。</p>
-        <Link to="/">返回</Link>
+        <Link to="/library">返回</Link>
       </div>
     );
   }

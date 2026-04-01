@@ -121,7 +121,7 @@ export function BiblePage() {
     return (
       <div className="page bible-page">
         <p>无效地址。</p>
-        <Link to="/">返回</Link>
+        <Link to="/library">返回</Link>
       </div>
     );
   }
@@ -130,7 +130,7 @@ export function BiblePage() {
     return (
       <div className="page bible-page">
         <p className="muted">{loading ? "加载中…" : "作品不存在。"}</p>
-        <Link to="/">返回作品库</Link>
+        <Link to="/library">返回作品库</Link>
       </div>
     );
   }

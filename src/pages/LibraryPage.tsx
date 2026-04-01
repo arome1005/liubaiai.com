@@ -71,11 +71,8 @@ export function LibraryPage() {
   return (
     <div className="page library-page">
       <header className="page-header">
-        <h1>留白写作</h1>
+        <h1>作品库</h1>
         <div className="header-actions">
-          <Link to="/reference" className="btn ghost">
-            参考库
-          </Link>
           <button type="button" className="btn primary" onClick={() => void handleNew()}>
             新建作品
           </button>
@@ -96,9 +93,6 @@ export function LibraryPage() {
             aria-hidden
             onChange={(ev) => void handleImportFile(ev)}
           />
-          <Link to="/settings" className="btn ghost">
-            设置
-          </Link>
         </div>
       </header>
       <p className="import-hint muted small">

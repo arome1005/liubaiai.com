@@ -1151,7 +1151,7 @@ export function EditorPage() {
     return (
       <div className="page editor-page">
         <p>作品不存在。</p>
-        <Link to="/">返回</Link>
+        <Link to="/library">返回</Link>
       </div>
     );
   }

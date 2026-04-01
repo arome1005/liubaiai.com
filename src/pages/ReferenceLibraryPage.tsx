@@ -657,7 +657,7 @@ export function ReferenceLibraryPage() {
   return (
     <div className="page reference-page reference-page--split">
       <header className="page-header">
-        <Link to="/" className="back-link">
+        <Link to="/library" className="back-link">
           ← 作品库
         </Link>
         <h1>参考库</h1>

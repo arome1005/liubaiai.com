@@ -1,6 +1,10 @@
 import { useEffect } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { HomePage } from "./pages/HomePage";
 import { LibraryPage } from "./pages/LibraryPage";
+import { LogicPage } from "./pages/LogicPage";
+import { InspirationPage } from "./pages/InspirationPage";
+import { ChatPage } from "./pages/ChatPage";
 import { BiblePage } from "./pages/BiblePage";
 import { EditorPage } from "./pages/EditorPage";
 import { SummaryOverviewPage } from "./pages/SummaryOverviewPage";
@@ -39,7 +43,11 @@ export default function App() {
     <ErrorBoundary>
       <Routes>
         <Route element={<AppShell />}>
-          <Route path="/" element={<LibraryPage />} />
+          <Route path="/" element={<HomePage />} />
+          <Route path="/library" element={<LibraryPage />} />
+          <Route path="/logic" element={<LogicPage />} />
+          <Route path="/inspiration" element={<InspirationPage />} />
+          <Route path="/chat" element={<ChatPage />} />
           <Route path="/work/:workId/bible" element={<BiblePage />} />
           <Route path="/work/:workId/summary" element={<SummaryOverviewPage />} />
           <Route path="/work/:workId" element={<EditorPage />} />

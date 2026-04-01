@@ -12,12 +12,41 @@ function joinUrl(base: string, path: string) {
   return `${b}/${p}`;
 }
 
+/** 开发环境下：官方 MiMo 域名走 Vite 同源代理，避免 CORS 导致 Failed to fetch */
+function xiaomiBaseUrlForRequest(stored: string): string {
+  const t = stored.trim();
+  const looksOfficial =
+    t === "" ||
+    /^https:\/\/api\.mimo-v2\.com\/v1\/?$/i.test(t) ||
+    /^https:\/\/api\.xiaomimimo\.com\/v1\/?$/i.test(t);
+  if (import.meta.env.DEV && looksOfficial && typeof window !== "undefined") {
+    return `${window.location.origin}/__proxy/mimo-v2/v1`;
+  }
+  if (t) return t;
+  return "https://api.mimo-v2.com/v1";
+}
+
+async function fetchOrThrowCorsHint(label: string, url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    if (e instanceof TypeError) {
+      throw new Error(
+        `${label} 网络请求失败（${e.message}）。纯前端跨域常被浏览器拦截；请本地使用 npm run dev（已对小米启用同源代理），线上部署需后端转发 API。`,
+      );
+    }
+    throw e;
+  }
+}
+
 /** OpenAI 兼容：仅 OpenAI 默认域名；其它提供方必须显式填写 Base URL，避免误打到 api.openai.com。 */
 export function resolveOpenAiCompatibleBaseUrl(cfg: AiProviderConfig): string {
   const t = (cfg.baseUrl ?? "").trim();
+  if (cfg.id === "xiaomi") {
+    return xiaomiBaseUrlForRequest(t);
+  }
   if (t) return t;
   if (cfg.id === "openai") return "https://api.openai.com/v1";
-  if (cfg.id === "xiaomi") return "https://api.mimo-v2.com/v1";
   throw new Error(`${cfg.label}：请先在「高级后端配置」填写 Base URL`);
 }
 
@@ -89,7 +118,7 @@ async function generateOpenAI(
     cfg.id === "xiaomi"
       ? openAiChatBody(cfg, messages, temperature, false)
       : { model: cfg.model, messages, temperature };
-  const resp = await fetch(url, {
+  const resp = await fetchOrThrowCorsHint(cfg.label, url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -117,7 +146,7 @@ async function generateOpenAIStream(
     cfg.id === "xiaomi"
       ? openAiChatBody(cfg, messages, temperature, true)
       : { model: cfg.model, messages, temperature, stream: true };
-  const resp = await fetch(url, {
+  const resp = await fetchOrThrowCorsHint(cfg.label, url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
