@@ -10,9 +10,9 @@ import { PrivacyPage } from "./pages/PrivacyPage";
 import { TermsPage } from "./pages/TermsPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppShell } from "./components/AppShell";
+import { applyThemePreference, readThemePreference, THEME_KEY } from "./theme";
 
 const FONT_KEY = "liubai:fontSizePx";
-const THEME_KEY = "liubai:theme";
 
 export default function App() {
   useEffect(() => {
@@ -20,14 +20,19 @@ export default function App() {
     if (!Number.isNaN(n) && n >= 12 && n <= 28) {
       document.documentElement.style.setProperty("--editor-font-size", `${n}px`);
     }
-    try {
-      const t = localStorage.getItem(THEME_KEY);
-      if (t === "dark" || t === "light") {
-        document.documentElement.dataset.theme = t;
+    applyThemePreference(readThemePreference());
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const onSystemSchemeChange = () => {
+      try {
+        if (localStorage.getItem(THEME_KEY) === "system") {
+          applyThemePreference("system");
+        }
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
-    }
+    };
+    mq.addEventListener("change", onSystemSchemeChange);
+    return () => mq.removeEventListener("change", onSystemSchemeChange);
   }, []);
 
   return (

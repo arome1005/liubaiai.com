@@ -10,9 +10,9 @@ import type { LineEndingMode } from "../util/lineEnding";
 import { loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiSettings } from "../ai/types";
 import { BackendModelConfigModal } from "../components/BackendModelConfigModal";
+import { persistThemePreference, readThemePreference, type ThemePreference } from "../theme";
 
 const FONT_KEY = "liubai:fontSizePx";
-const THEME_KEY = "liubai:theme";
 const LINE_ENDING_KEY = "liubai:exportLineEnding";
 const DIAGNOSTIC_KEY = "liubai:diagnostic";
 // AI 配置由 src/ai/storage.ts 管理（localStorage）
@@ -21,14 +21,6 @@ function readFontSize(): number {
   const n = Number(localStorage.getItem(FONT_KEY));
   if (!Number.isNaN(n) && n >= 12 && n <= 28) return n;
   return 16;
-}
-
-function readTheme(): "light" | "dark" {
-  try {
-    return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
-  } catch {
-    return "light";
-  }
 }
 
 function readLineEnding(): LineEndingMode {
@@ -49,7 +41,7 @@ function readDiagnostic(): boolean {
 
 export function SettingsPage() {
   const [fontSize, setFontSize] = useState(readFontSize);
-  const [theme, setTheme] = useState(readTheme);
+  const [theme, setTheme] = useState<ThemePreference>(() => readThemePreference());
   const [lineEnding, setLineEnding] = useState(readLineEnding);
   const [diagnostic, setDiagnostic] = useState(readDiagnostic);
   const [storageEstimate, setStorageEstimate] = useState<string | null>(null);
@@ -82,8 +74,7 @@ export function SettingsPage() {
   }, [fontSize]);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    localStorage.setItem(THEME_KEY, theme);
+    persistThemePreference(theme);
   }, [theme]);
 
   useEffect(() => {
@@ -165,12 +156,19 @@ export function SettingsPage() {
           <select
             name="theme"
             value={theme}
-            onChange={(e) => setTheme(e.target.value === "dark" ? "dark" : "light")}
+            onChange={(e) => {
+              const v = e.target.value;
+              setTheme(v === "dark" ? "dark" : v === "system" ? "system" : "light");
+            }}
           >
             <option value="light">浅色</option>
             <option value="dark">深色</option>
+            <option value="system">设备</option>
           </select>
         </label>
+        <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>
+          「设备」跟随系统外观（含日出/日落或定时自动深色等）；系统切换后本页会随之更新。
+        </p>
       </section>
 
       <section className="settings-section">
