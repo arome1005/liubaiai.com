@@ -52,6 +52,8 @@ export type AiSettings = {
   includeBible: boolean;
   /** 最多注入多少字符（用于圣经/摘录合并截断） */
   maxContextChars: number;
+  /** Gemini 写作灵敏度（温度） */
+  geminiTemperature: number;
 };
 
 export type AiChatMessage = {

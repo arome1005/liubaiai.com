@@ -20,11 +20,11 @@ export async function generateWithProvider(args: {
   signal?: AbortSignal;
 }): Promise<AiGenerateResult> {
   const { provider, config, messages } = args;
-  if (provider === "ollama") return generateOllama(config, messages, args.signal);
-  if (provider === "openai") return generateOpenAI(config, messages, args.signal);
-  if (provider === "doubao") return generateOpenAI(config, messages, args.signal);
-  if (provider === "anthropic") return generateAnthropic(config, messages, args.signal);
-  return generateGemini(config, messages, args.signal);
+  if (provider === "ollama") return generateOllama(config, messages, args.temperature, args.signal);
+  if (provider === "openai") return generateOpenAI(config, messages, args.temperature, args.signal);
+  if (provider === "doubao") return generateOpenAI(config, messages, args.temperature, args.signal);
+  if (provider === "anthropic") return generateAnthropic(config, messages, args.temperature, args.signal);
+  return generateGemini(config, messages, args.temperature, args.signal);
 }
 
 export async function generateWithProviderStream(args: {
@@ -36,39 +36,17 @@ export async function generateWithProviderStream(args: {
   signal?: AbortSignal;
 }): Promise<AiGenerateResult> {
   const { provider, config, messages, onDelta } = args;
-  if (provider === "ollama") return generateOllamaStream(config, messages, onDelta, args.signal);
-  if (provider === "openai") return generateOpenAIStream(config, messages, onDelta, args.signal);
-  if (provider === "doubao") return generateOpenAIStream(config, messages, onDelta, args.signal);
+  if (provider === "ollama") return generateOllamaStream(config, messages, onDelta, args.temperature, args.signal);
+  if (provider === "openai") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
+  if (provider === "doubao") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
   // Claude/Gemini：先用可取消的非流式（后续再补真流式）
   return generateWithProvider({ provider, config, messages, temperature: args.temperature, signal: args.signal });
 }
 
-async function generateOpenAI(cfg: AiProviderConfig, messages: AiChatMessage[], signal?: AbortSignal): Promise<AiGenerateResult> {
-  const key = requireKey(cfg);
-  const url = joinUrl(cfg.baseUrl ?? "https://api.openai.com/v1", "/chat/completions");
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages,
-      temperature: 0.7,
-    }),
-    signal,
-  });
-  const raw = await resp.json();
-  if (!resp.ok) throw new Error(`${cfg.label} 请求失败：${raw?.error?.message ?? resp.status}`);
-  const text = raw?.choices?.[0]?.message?.content ?? "";
-  return { text, raw };
-}
-
-async function generateOpenAIStream(
+async function generateOpenAI(
   cfg: AiProviderConfig,
   messages: AiChatMessage[],
-  onDelta: (textDelta: string) => void,
+  temperature = 0.7,
   signal?: AbortSignal,
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
@@ -82,7 +60,35 @@ async function generateOpenAIStream(
     body: JSON.stringify({
       model: cfg.model,
       messages,
-      temperature: 0.7,
+      temperature,
+    }),
+    signal,
+  });
+  const raw = await resp.json();
+  if (!resp.ok) throw new Error(`${cfg.label} 请求失败：${raw?.error?.message ?? resp.status}`);
+  const text = raw?.choices?.[0]?.message?.content ?? "";
+  return { text, raw };
+}
+
+async function generateOpenAIStream(
+  cfg: AiProviderConfig,
+  messages: AiChatMessage[],
+  onDelta: (textDelta: string) => void,
+  temperature = 0.7,
+  signal?: AbortSignal,
+): Promise<AiGenerateResult> {
+  const key = requireKey(cfg);
+  const url = joinUrl(cfg.baseUrl ?? "https://api.openai.com/v1", "/chat/completions");
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+    },
+    body: JSON.stringify({
+      model: cfg.model,
+      messages,
+      temperature,
       stream: true,
     }),
     signal,
@@ -135,7 +141,12 @@ async function generateOpenAIStream(
   return { text: full };
 }
 
-async function generateAnthropic(cfg: AiProviderConfig, messages: AiChatMessage[], signal?: AbortSignal): Promise<AiGenerateResult> {
+async function generateAnthropic(
+  cfg: AiProviderConfig,
+  messages: AiChatMessage[],
+  temperature = 0.7,
+  signal?: AbortSignal,
+): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
   const url = joinUrl(cfg.baseUrl ?? "https://api.anthropic.com", "/v1/messages");
   const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
@@ -153,6 +164,7 @@ async function generateAnthropic(cfg: AiProviderConfig, messages: AiChatMessage[
     body: JSON.stringify({
       model: cfg.model,
       max_tokens: 2048,
+      temperature,
       system,
       messages: [{ role: "user", content: user }],
     }),
@@ -164,7 +176,12 @@ async function generateAnthropic(cfg: AiProviderConfig, messages: AiChatMessage[
   return { text, raw };
 }
 
-async function generateGemini(cfg: AiProviderConfig, messages: AiChatMessage[], signal?: AbortSignal): Promise<AiGenerateResult> {
+async function generateGemini(
+  cfg: AiProviderConfig,
+  messages: AiChatMessage[],
+  temperature = 0.7,
+  signal?: AbortSignal,
+): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
   const base = cfg.baseUrl ?? "https://generativelanguage.googleapis.com";
   const url = joinUrl(base, `/v1beta/models/${encodeURIComponent(cfg.model)}:generateContent?key=${encodeURIComponent(key)}`);
@@ -178,7 +195,7 @@ async function generateGemini(cfg: AiProviderConfig, messages: AiChatMessage[], 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: system ? `${system}\n\n${user}` : user }] }],
-      generationConfig: { temperature: 0.7 },
+      generationConfig: { temperature },
     }),
     signal,
   });
@@ -188,7 +205,12 @@ async function generateGemini(cfg: AiProviderConfig, messages: AiChatMessage[], 
   return { text, raw };
 }
 
-async function generateOllama(cfg: AiProviderConfig, messages: AiChatMessage[], signal?: AbortSignal): Promise<AiGenerateResult> {
+async function generateOllama(
+  cfg: AiProviderConfig,
+  messages: AiChatMessage[],
+  temperature = 0.7,
+  signal?: AbortSignal,
+): Promise<AiGenerateResult> {
   const base = cfg.baseUrl ?? "http://localhost:11434";
   const url = joinUrl(base, "/api/chat");
   const resp = await fetch(url, {
@@ -198,7 +220,7 @@ async function generateOllama(cfg: AiProviderConfig, messages: AiChatMessage[], 
       model: cfg.model,
       stream: false,
       messages,
-      options: { temperature: 0.7 },
+      options: { temperature },
     }),
     signal,
   });
@@ -212,6 +234,7 @@ async function generateOllamaStream(
   cfg: AiProviderConfig,
   messages: AiChatMessage[],
   onDelta: (textDelta: string) => void,
+  temperature = 0.7,
   signal?: AbortSignal,
 ): Promise<AiGenerateResult> {
   const base = cfg.baseUrl ?? "http://localhost:11434";
@@ -223,7 +246,7 @@ async function generateOllamaStream(
       model: cfg.model,
       stream: true,
       messages,
-      options: { temperature: 0.7 },
+      options: { temperature },
     }),
     signal,
   });

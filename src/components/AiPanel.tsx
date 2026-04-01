@@ -50,6 +50,18 @@ export function AiPanel(props: {
   appendToEnd: (text: string) => void;
   replaceSelection: (text: string) => void;
 }) {
+  const GEMINI_MIND = {
+    初见: "gemini-3.1-flash-lite-preview",
+    入微: "gemini-3-flash-preview",
+    化境: "gemini-3.1-pro-preview",
+  } as const;
+
+  function tempLabel(t: number): string {
+    if (t <= 0.7) return `逻辑严密（0.1-0.7）`;
+    if (t <= 1.2) return `意兴渐起（0.8-1.2）`;
+    return `灵感喷发（1.3-2.0）`;
+  }
+
   function ProviderLogo(props: { provider: AiProviderId }) {
     const p = props.provider;
     const imgSrc =
@@ -625,6 +637,7 @@ export function AiPanel(props: {
         messages,
         signal: ac.signal,
         onDelta: (d) => setDraft((prev) => prev + d),
+        temperature: usedProvider === "gemini" ? settings.geminiTemperature : undefined,
       });
       if (!draft.trim() && (r.text ?? "").trim()) {
         setDraft((r.text ?? "").trim());
@@ -779,6 +792,78 @@ export function AiPanel(props: {
                         {ui.note}
                       </div>
                     </div>
+
+                    {pickerActive === "gemini" ? (
+                      <div className="model-picker-tune">
+                        <div className="model-tune-grid">
+                          <div className="model-tune-card">
+                            <div className="muted small">神思</div>
+                            <div className="mind-buttons" role="group" aria-label="神思">
+                              {(["初见", "入微", "化境"] as const).map((k) => {
+                                const active = settings.gemini.model === GEMINI_MIND[k];
+                                return (
+                                  <button
+                                    key={k}
+                                    type="button"
+                                    className={"mind-btn" + (active ? " is-active" : "")}
+                                    onClick={() => {
+                                      const model = GEMINI_MIND[k];
+                                      updateSettings({ gemini: { ...settings.gemini, model } });
+                                    }}
+                                  >
+                                    {k}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <div className="muted small" style={{ marginTop: 8 }}>
+                              切换会同步 Gemini 版本：Lite / Flash / Pro
+                            </div>
+                          </div>
+
+                          <div className="model-tune-card">
+                            <div className="muted small">神思程度（Temperature）</div>
+                            <div className="temp-wrap">
+                              <div
+                                className="temp-float muted small"
+                                style={{
+                                  left: `${Math.round(((settings.geminiTemperature - 0.1) / 1.9) * 100)}%`,
+                                }}
+                              >
+                                {tempLabel(settings.geminiTemperature)}（{settings.geminiTemperature.toFixed(1)}）
+                              </div>
+                              <input
+                                className="temp-slider"
+                                type="range"
+                                min={0.1}
+                                max={2.0}
+                                step={0.1}
+                                value={settings.geminiTemperature}
+                                onChange={(e) => {
+                                  const v = Math.max(0.1, Math.min(2.0, Number(e.target.value) || 1.2));
+                                  updateSettings({ geminiTemperature: v });
+                                }}
+                              />
+                              <div className="temp-scale muted small">
+                                <span>沉稳（0.7）</span>
+                                <span>通达（1.2）</span>
+                                <span>天马（2.0）</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="model-tune-card">
+                            <div className="muted small">字数消耗</div>
+                            <div style={{ marginTop: 8 }}>
+                              <Meter value={settings.gemini.model === GEMINI_MIND["化境"] ? 5 : 2} max={5} />
+                              <span className="muted small" style={{ marginLeft: 8 }}>
+                                {settings.gemini.model === GEMINI_MIND["化境"] ? "（化境自动拉满）" : ""}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })()}

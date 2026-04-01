@@ -26,6 +26,7 @@ export function defaultAiSettings(): AiSettings {
     },
     includeBible: true,
     maxContextChars: 24000,
+    geminiTemperature: 1.2,
   };
 }
 
@@ -44,6 +45,10 @@ export function loadAiSettings(): AiSettings {
       ollama: { ...d.ollama, ...(parsed.ollama ?? {}) },
       doubao: { ...d.doubao, ...(parsed.doubao ?? {}) },
       privacy: { ...d.privacy, ...(parsed.privacy ?? {}) },
+      geminiTemperature:
+        typeof (parsed as any).geminiTemperature === "number" && Number.isFinite((parsed as any).geminiTemperature)
+          ? Math.max(0.1, Math.min(2.0, (parsed as any).geminiTemperature))
+          : d.geminiTemperature,
     };
   } catch {
     return defaultAiSettings();
