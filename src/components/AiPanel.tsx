@@ -53,7 +53,13 @@ export function AiPanel(props: {
   function ProviderLogo(props: { provider: AiProviderId }) {
     const p = props.provider;
     const imgSrc =
-      p === "ollama" ? "/logos/ollama.png" : p === "gemini" ? "/logos/gemini.png" : null;
+      p === "ollama"
+        ? "/logos/ollama.png"
+        : p === "gemini"
+          ? "/logos/gemini.png"
+          : p === "doubao"
+            ? "/logos/doubao.png"
+            : null;
     const bg =
       p === "openai"
         ? "linear-gradient(135deg, #0ea5e9, #2563eb)"
@@ -62,7 +68,7 @@ export function AiPanel(props: {
           : p === "gemini"
             ? "linear-gradient(135deg, #22c55e, #14b8a6)"
             : p === "doubao"
-              ? "linear-gradient(135deg, #f97316, #ef4444)"
+              ? "transparent"
             : "linear-gradient(135deg, #111827, #6b7280)";
     const text = p === "openai" ? "" : p === "anthropic" ? "雨" : p === "gemini" ? "云" : p === "doubao" ? "豆" : "龙";
     return (
@@ -76,7 +82,7 @@ export function AiPanel(props: {
           alignItems: "center",
           justifyContent: "center",
           background: bg,
-          color: "#fff",
+          color: p === "doubao" ? "currentColor" : "#fff",
           fontWeight: 800,
           fontSize: 12,
           letterSpacing: "-0.02em",
@@ -112,6 +118,40 @@ export function AiPanel(props: {
             <path
               d="M79 50C79 33.9837 66.0163 21 50 21C33.9837 21 21 33.9837 21 50C21 66.0163 33.9837 79 50 79C66.0163 79 79 66.0163 79 50ZM50 72C37.8497 72 28 62.1503 28 50C28 37.8497 37.8497 28 50 28C62.1503 28 72 37.8497 72 50C72 62.1503 62.1503 72 50 72Z"
               fill="white"
+            />
+          </svg>
+        ) : p === "doubao" ? (
+          // Minimal linear flame icon (uses currentColor)
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            width="16"
+            height="16"
+            fill="none"
+            aria-hidden
+            focusable="false"
+            style={{ display: "block" }}
+          >
+            <path
+              d="M13 3c.3 2.1-.9 3.6-2.2 5C9.7 9.2 9 10.2 9 12a3 3 0 0 0 6 0c0-1.2-.3-2.1-1-3.2.1 2.1-1.1 3.2-2.5 4.4"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M12 21a7 7 0 0 1-7-7c0-2.6 1.4-4.7 3.2-6.6"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M12 21a7 7 0 0 0 7-7c0-2.3-1.1-4.3-2.6-6"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             />
           </svg>
         ) : imgSrc ? (
@@ -198,14 +238,14 @@ export function AiPanel(props: {
       note: "本地运行受限于设备性能，适合快速草拟或在离线环境下作为创作基座。",
     },
     doubao: {
-      label: "豆包",
-      subtitle: "轻快好用 · 中文友好",
-      tip: "豆包（Doubao）",
-      quote: "“一口热豆，入口顺滑；写作也能又快又稳。”",
+      label: "燎原",
+      subtitle: "墨落星火 · 势成燎原",
+      tip: "燎原（豆包）",
+      quote: "“墨落星火，势成燎原。”",
       core:
-        "中文友好，响应轻快。适合日常续写、改写与灵感拓展；若你使用火山引擎 Ark 的 OpenAI 兼容接口，可直接在设置里填 Base URL / Model / Key。",
-      meters: { prose: 4, follow: 4, cost: 2 },
-      note: "若遇到调用失败，多半是 Base URL 或 Model 命名不一致；请以你控制台的 Ark 接口参数为准。",
+        "它是扎根于东方文脉的智慧火种，不只是精准解析你的一字一句，更深谙汉语背后的山河底蕴与人文温度。于方寸屏幕间，赋你一支生花妙笔；借燎原之势，让你的文思，跨越山海，写尽天下。",
+      meters: { prose: 3, follow: 5, cost: 2, costText: "极低" },
+      note: "若遇到调用失败，多半是 Base URL 或 Model 命名不一致；请以你控制台/通用接口参数为准。",
     },
   };
 
@@ -685,6 +725,7 @@ export function AiPanel(props: {
                       key={id}
                       type="button"
                       role="tab"
+                      data-provider={id}
                       aria-selected={active}
                       aria-disabled={disabled}
                       className={
@@ -718,7 +759,7 @@ export function AiPanel(props: {
                 const isCloud = pickerActive !== "ollama";
                 const disabled = isCloud && !(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);
                 return (
-                  <div className="model-picker-right" role="tabpanel" aria-label="模型介绍">
+                  <div className="model-picker-right" role="tabpanel" aria-label="模型介绍" data-provider={pickerActive}>
                     <div className="model-picker-right-head">
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                         <ProviderLogo provider={pickerActive} />
@@ -726,7 +767,17 @@ export function AiPanel(props: {
                           <div style={{ fontWeight: 900, fontSize: 18 }}>
                             {ui.label}{" "}
                             <span className="muted small">
-                              ({pickerActive === "openai" ? "OpenAI" : pickerActive === "anthropic" ? "Claude" : pickerActive === "gemini" ? "Gemini" : "Ollama"})
+                              (
+                              {pickerActive === "openai"
+                                ? "OpenAI"
+                                : pickerActive === "anthropic"
+                                  ? "Claude"
+                                  : pickerActive === "gemini"
+                                    ? "Gemini"
+                                    : pickerActive === "doubao"
+                                      ? "豆包"
+                                      : "Ollama"}
+                              )
                             </span>
                           </div>
                           <div className="muted small">{ui.subtitle}</div>
