@@ -56,10 +56,18 @@ export function AiPanel(props: {
     化境: "gemini-3.1-pro-preview",
   } as const;
 
-  function tempLabel(t: number): string {
-    if (t <= 0.7) return `逻辑严密（0.1-0.7）`;
-    if (t <= 1.2) return `意兴渐起（0.8-1.2）`;
-    return `灵感喷发（1.3-2.0）`;
+  function tempBand(t: number): "沉稳" | "意兴渐起" | "灵感喷发" {
+    if (t <= 0.7) return "沉稳";
+    if (t <= 1.2) return "意兴渐起";
+    return "灵感喷发";
+  }
+
+  function tempSides(t: number): { left: string; right: string; center: string } {
+    const band = tempBand(t);
+    const center = `${band}（${t.toFixed(1)}）`;
+    if (band === "沉稳") return { left: "沉稳", right: "意兴渐起", center };
+    if (band === "意兴渐起") return { left: "沉稳", right: "灵感喷发", center };
+    return { left: "意兴渐起", right: "灵感喷发", center };
   }
 
   function ProviderLogo(props: { provider: AiProviderId }) {
@@ -816,9 +824,6 @@ export function AiPanel(props: {
                                 );
                               })}
                             </div>
-                            <div className="muted small" style={{ marginTop: 8 }}>
-                              切换会同步 Gemini 版本：Lite / Flash / Pro
-                            </div>
                           </div>
 
                           <div className="model-tune-card">
@@ -827,27 +832,28 @@ export function AiPanel(props: {
                               <div
                                 className="temp-float muted small"
                                 style={{
-                                  left: `${Math.round(((settings.geminiTemperature - 0.1) / 1.9) * 100)}%`,
+                                  top: `${Math.round(((2.0 - settings.geminiTemperature) / 1.9) * 100)}%`,
                                 }}
                               >
-                                {tempLabel(settings.geminiTemperature)}（{settings.geminiTemperature.toFixed(1)}）
+                                {tempSides(settings.geminiTemperature).center}
                               </div>
-                              <input
-                                className="temp-slider"
-                                type="range"
-                                min={0.1}
-                                max={2.0}
-                                step={0.1}
-                                value={settings.geminiTemperature}
-                                onChange={(e) => {
-                                  const v = Math.max(0.1, Math.min(2.0, Number(e.target.value) || 1.2));
-                                  updateSettings({ geminiTemperature: v });
-                                }}
-                              />
-                              <div className="temp-scale muted small">
-                                <span>沉稳（0.7）</span>
-                                <span>通达（1.2）</span>
-                                <span>天马（2.0）</span>
+                              <div className="temp-vert">
+                                <input
+                                  className="temp-slider temp-slider--vert"
+                                  type="range"
+                                  min={0.1}
+                                  max={2.0}
+                                  step={0.1}
+                                  value={settings.geminiTemperature}
+                                  onChange={(e) => {
+                                    const v = Math.max(0.1, Math.min(2.0, Number(e.target.value) || 1.2));
+                                    updateSettings({ geminiTemperature: v });
+                                  }}
+                                />
+                              </div>
+                              <div className="temp-sides muted small">
+                                <span>{tempSides(settings.geminiTemperature).left}</span>
+                                <span>{tempSides(settings.geminiTemperature).right}</span>
                               </div>
                             </div>
                           </div>

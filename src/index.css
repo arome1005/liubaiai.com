@@ -1846,12 +1846,12 @@ select {
 .temp-wrap {
   margin-top: 8px;
   position: relative;
-  padding-top: 18px;
+  padding-top: 10px;
 }
 .temp-float {
   position: absolute;
-  top: 0;
-  transform: translateX(-50%);
+  left: 50%;
+  transform: translate(-50%, -50%);
   background: rgba(0, 0, 0, 0.06);
   border: 1px solid rgba(0, 0, 0, 0.08);
   padding: 2px 8px;
@@ -1863,13 +1863,26 @@ select {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.12);
 }
+
+.temp-vert {
+  height: 92px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 10px;
+}
 .temp-slider {
   width: 100%;
   appearance: none;
-  height: 2px;
-  background: linear-gradient(90deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.8));
-  border-radius: 999px;
   outline: none;
+}
+.temp-slider--vert {
+  width: 92px; /* becomes height after rotate */
+  height: 2px;
+  transform: rotate(-90deg);
+  transform-origin: center;
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.85));
+  border-radius: 999px;
 }
 :root[data-theme="dark"] .temp-slider {
   background: linear-gradient(90deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.9));
@@ -1886,8 +1899,8 @@ select {
   background: #fff;
   border-color: #000;
 }
-.temp-scale {
-  margin-top: 8px;
+.temp-sides {
+  margin-top: 10px;
   display: flex;
   justify-content: space-between;
   font-weight: 300;
