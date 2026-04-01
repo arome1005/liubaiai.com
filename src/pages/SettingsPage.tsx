@@ -8,7 +8,7 @@ import {
 import { buildBackupZip, parseBackupZip } from "../storage/backup";
 import type { LineEndingMode } from "../util/lineEnding";
 import { loadAiSettings, saveAiSettings } from "../ai/storage";
-import type { AiProviderId, AiSettings } from "../ai/types";
+import type { AiSettings } from "../ai/types";
 import { BackendModelConfigModal } from "../components/BackendModelConfigModal";
 
 const FONT_KEY = "liubai:fontSizePx";
@@ -58,7 +58,6 @@ export function SettingsPage() {
   const [refMaintainPct, setRefMaintainPct] = useState<number | null>(null);
   const [refMaintainLabel, setRefMaintainLabel] = useState<string | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings());
-  const [aiMsg, setAiMsg] = useState<string | null>(null);
   const [backendOpen, setBackendOpen] = useState(false);
 
   function refreshStorageQuota() {
@@ -366,253 +365,6 @@ export function SettingsPage() {
             后端模型配置
           </button>
         </div>
-
-        <div className="settings-callout" role="alert" id="ai-privacy">
-          <strong>AI 隐私与上传范围（重要）</strong>
-          <p>
-            只要你点击「生成」，本次提示词会发送到你选择的提供方。若选择 OpenAI / Claude / Gemini / 豆包，即代表会通过网络发送内容到第三方服务。
-            你可以在下方明确选择<strong>允许上传哪些内容</strong>；默认仅允许使用本机 Ollama，且不允许云端提供方。
-          </p>
-          <p className="muted small" style={{ marginTop: "-0.25rem" }}>
-            提示：本项目为纯前端直连，密钥保存在本机 localStorage；若你介意请优先使用本机 Ollama，或后续接入自建中转服务。
-          </p>
-        </div>
-
-        <label className="row row--check">
-          <input
-            name="aiPrivacyConsentAccepted"
-            type="checkbox"
-            checked={aiSettings.privacy.consentAccepted}
-            onChange={(e) =>
-              setAiSettings((s) => ({
-                ...s,
-                privacy: {
-                  ...s.privacy,
-                  consentAccepted: e.target.checked,
-                  consentAcceptedAt: e.target.checked ? Date.now() : undefined,
-                },
-              }))
-            }
-          />
-          <span>我已阅读并理解：使用云端模型会上传提示词内容</span>
-        </label>
-
-        <label className="row row--check">
-          <input
-            name="aiPrivacyAllowCloudProviders"
-            type="checkbox"
-            checked={aiSettings.privacy.allowCloudProviders}
-            onChange={(e) =>
-              setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowCloudProviders: e.target.checked } }))
-            }
-          />
-          <span>允许使用云端提供方（OpenAI / Claude / Gemini / 豆包）</span>
-        </label>
-
-        <details className="settings-ai-provider">
-          <summary>上传范围（仅对云端提供方生效）</summary>
-          <label className="row row--check">
-            <input
-              name="aiPrivacyAllowMetadata"
-              type="checkbox"
-              checked={aiSettings.privacy.allowMetadata}
-              onChange={(e) => setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowMetadata: e.target.checked } }))}
-            />
-            <span>作品名 / 章节名等元数据</span>
-          </label>
-          <label className="row row--check">
-            <input
-              name="aiPrivacyAllowChapterContent"
-              type="checkbox"
-              checked={aiSettings.privacy.allowChapterContent}
-              onChange={(e) =>
-                setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowChapterContent: e.target.checked } }))
-              }
-            />
-            <span>当前章正文（全文或截断）</span>
-          </label>
-          <label className="row row--check">
-            <input
-              name="aiPrivacyAllowSelection"
-              type="checkbox"
-              checked={aiSettings.privacy.allowSelection}
-              onChange={(e) => setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowSelection: e.target.checked } }))}
-            />
-            <span>当前选区</span>
-          </label>
-          <label className="row row--check">
-            <input
-              name="aiPrivacyAllowRecentSummaries"
-              type="checkbox"
-              checked={aiSettings.privacy.allowRecentSummaries}
-              onChange={(e) =>
-                setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowRecentSummaries: e.target.checked } }))
-              }
-            />
-            <span>最近章节概要</span>
-          </label>
-          <label className="row row--check">
-            <input
-              name="aiPrivacyAllowBible"
-              type="checkbox"
-              checked={aiSettings.privacy.allowBible}
-              onChange={(e) => setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowBible: e.target.checked } }))}
-            />
-            <span>创作圣经（导出 Markdown）</span>
-          </label>
-          <label className="row row--check">
-            <input
-              name="aiPrivacyAllowLinkedExcerpts"
-              type="checkbox"
-              checked={aiSettings.privacy.allowLinkedExcerpts}
-              onChange={(e) =>
-                setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowLinkedExcerpts: e.target.checked } }))
-              }
-            />
-            <span>本章关联摘录（参考库）</span>
-          </label>
-          <label className="row row--check">
-            <input
-              name="aiPrivacyAllowRagSnippets"
-              type="checkbox"
-              checked={aiSettings.privacy.allowRagSnippets}
-              onChange={(e) =>
-                setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowRagSnippets: e.target.checked } }))
-              }
-            />
-            <span>参考库检索片段（RAG 注入）</span>
-          </label>
-          <p className="muted small">
-            说明：这些开关只控制“是否把对应内容拼进 prompt”。即使关闭，也不影响你在本地查看/编辑这些内容。
-          </p>
-        </details>
-
-        <label className="row">
-          <span>默认提供方</span>
-          <select
-            name="aiProvider"
-            value={aiSettings.provider}
-            onChange={(e) => setAiSettings((s) => ({ ...s, provider: e.target.value as AiProviderId }))}
-          >
-            <option value="openai">见山</option>
-            <option value="anthropic">听雨</option>
-            <option value="gemini">观云</option>
-            <option value="doubao">豆包</option>
-            <option value="ollama">潜龙</option>
-          </select>
-        </label>
-
-        <label className="row row--check">
-          <input
-            name="aiIncludeBibleDefault"
-            type="checkbox"
-            checked={aiSettings.includeBible}
-            onChange={(e) => setAiSettings((s) => ({ ...s, includeBible: e.target.checked }))}
-          />
-          <span>默认注入创作圣经</span>
-        </label>
-
-        <label className="row">
-          <span>上下文上限</span>
-          <input
-            name="aiMaxContextChars"
-            type="number"
-            min={4000}
-            max={200000}
-            value={aiSettings.maxContextChars}
-            onChange={(e) => setAiSettings((s) => ({ ...s, maxContextChars: Number(e.target.value) || 24000 }))}
-          />
-          <span className="muted small">字符</span>
-        </label>
-
-        <details className="settings-ai-provider">
-          <summary>OpenAI Model</summary>
-          <label className="row">
-            <span>Model</span>
-            <input
-              name="openaiModel"
-              value={aiSettings.openai.model}
-              onChange={(e) => setAiSettings((s) => ({ ...s, openai: { ...s.openai, model: e.target.value } }))}
-            />
-          </label>
-        </details>
-
-        <details className="settings-ai-provider">
-          <summary>Claude Model</summary>
-          <label className="row">
-            <span>Model</span>
-            <input
-              name="anthropicModel"
-              value={aiSettings.anthropic.model}
-              onChange={(e) => setAiSettings((s) => ({ ...s, anthropic: { ...s.anthropic, model: e.target.value } }))}
-            />
-          </label>
-        </details>
-
-        <details className="settings-ai-provider">
-          <summary>Gemini Model</summary>
-          <label className="row">
-            <span>Model</span>
-            <input
-              name="geminiModel"
-              value={aiSettings.gemini.model}
-              onChange={(e) => setAiSettings((s) => ({ ...s, gemini: { ...s.gemini, model: e.target.value } }))}
-            />
-          </label>
-        </details>
-
-        <details className="settings-ai-provider">
-          <summary>豆包 Model</summary>
-          <label className="row">
-            <span>Model</span>
-            <input
-              name="doubaoModel"
-              value={aiSettings.doubao.model}
-              onChange={(e) => setAiSettings((s) => ({ ...s, doubao: { ...s.doubao, model: e.target.value } }))}
-            />
-          </label>
-        </details>
-
-        <details className="settings-ai-provider">
-          <summary>Ollama Model</summary>
-          <label className="row">
-            <span>Model</span>
-            <input
-              name="ollamaModel"
-              value={aiSettings.ollama.model}
-              onChange={(e) => setAiSettings((s) => ({ ...s, ollama: { ...s.ollama, model: e.target.value } }))}
-            />
-          </label>
-        </details>
-
-        <div className="row gap">
-          <button
-            type="button"
-            className="btn"
-            onClick={() => {
-              setAiMsg(null);
-              try {
-                saveAiSettings(aiSettings);
-                setAiMsg("已保存 AI 设置。");
-              } catch {
-                setAiMsg("保存失败。");
-              }
-            }}
-          >
-            保存 AI 设置
-          </button>
-          <button
-            type="button"
-            className="btn ghost"
-            onClick={() => {
-              setAiSettings(loadAiSettings());
-              setAiMsg("已从本机重新载入。");
-            }}
-          >
-            重新载入
-          </button>
-        </div>
-        {aiMsg ? <p className="muted small">{aiMsg}</p> : null}
       </section>
 
       <BackendModelConfigModal
@@ -621,12 +373,11 @@ export function SettingsPage() {
         onChange={setAiSettings}
         onClose={() => setBackendOpen(false)}
         onSave={() => {
-          setAiMsg(null);
           try {
             saveAiSettings(aiSettings);
-            setAiMsg("已保存 AI 设置。");
+            setMsg("已保存 AI 设置。");
           } catch {
-            setAiMsg("保存失败。");
+            setMsg("保存失败。");
           }
         }}
       />
