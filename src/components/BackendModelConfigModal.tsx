@@ -110,11 +110,11 @@ async function testProviderConnection(args: { provider: AiProviderId; cfg: AiPro
   return n ? `连接成功（可用模型 ${n} 个）` : "连接成功";
 }
 
-async function testGeminiModel(args: { cfg: AiProviderConfig }): Promise<string> {
+async function testGeminiModel(args: { cfg: AiProviderConfig; modelOverride?: string }): Promise<string> {
   const baseUrl = (args.cfg.baseUrl ?? "").trim() || "https://generativelanguage.googleapis.com";
   const key = (args.cfg.apiKey ?? "").trim();
   if (!key) throw new Error("请先填写 API Key");
-  const model = (args.cfg.model ?? "").trim();
+  const model = (args.modelOverride ?? args.cfg.model ?? "").trim();
   if (!model) throw new Error("请先选择/填写 Model");
   const url = joinUrl(
     baseUrl,
@@ -154,6 +154,11 @@ export function BackendModelConfigModal(props: {
   const [nav, setNav] = useState<NavId>("privacy");
   const [geminiHealth, setGeminiHealth] = useState<GeminiModelHealth>(() => loadGeminiModelHealth());
   const [geminiHealthDirty, setGeminiHealthDirty] = useState(false);
+  const [geminiBatch, setGeminiBatch] = useState<{ running: boolean; idx: number; total: number }>({
+    running: false,
+    idx: 0,
+    total: 0,
+  });
   const [showKey, setShowKey] = useState<Record<AiProviderId, boolean>>({
     openai: false,
     anthropic: false,
@@ -376,6 +381,7 @@ export function BackendModelConfigModal(props: {
                 const cfg = getCfg(settings, id);
                 const s = testState[id];
                 const keyShown = showKey[id];
+                const isGemini = id === "gemini";
                 return (
                   <section className="backend-panel">
                     <div className="backend-panel-head">
@@ -389,25 +395,54 @@ export function BackendModelConfigModal(props: {
                         <button
                           type="button"
                           className="btn small"
-                          disabled={s.status === "testing"}
+                          disabled={s.status === "testing" || (isGemini && geminiBatch.running)}
                           onClick={() => {
-                            setTestState((prev) => ({ ...prev, [id]: { status: "testing" } }));
+                            if (!isGemini) {
+                              setTestState((prev) => ({ ...prev, [id]: { status: "testing" } }));
+                              void (async () => {
+                                try {
+                                  const msg = await testProviderConnection({ provider: id, cfg });
+                                  setTestState((prev) => ({ ...prev, [id]: { status: "ok", message: msg } }));
+                                } catch (e) {
+                                  const msg = e instanceof Error ? e.message : "连接失败";
+                                  setTestState((prev) => ({ ...prev, [id]: { status: "err", message: msg } }));
+                                }
+                              })();
+                              return;
+                            }
+
+                            // Gemini：一键测试预置版本
+                            setGeminiBatch({ running: true, idx: 0, total: geminiPresetModels.length });
+                            setTestState((prev) => ({ ...prev, gemini: { status: "testing" } }));
                             void (async () => {
-                              try {
-                                const msg = await testProviderConnection({ provider: id, cfg });
-                                setTestState((prev) => ({ ...prev, [id]: { status: "ok", message: msg } }));
-                              } catch (e) {
-                                const msg = e instanceof Error ? e.message : "连接失败";
-                                setTestState((prev) => ({ ...prev, [id]: { status: "err", message: msg } }));
+                              const baseCfg = getCfg(settings, "gemini");
+                              for (let i = 0; i < geminiPresetModels.length; i++) {
+                                const m = geminiPresetModels[i]!;
+                                setGeminiBatch({ running: true, idx: i + 1, total: geminiPresetModels.length });
+                                try {
+                                  await testGeminiModel({ cfg: baseCfg, modelOverride: m });
+                                  setGeminiHealth((h) => ({ ...h, [m]: { verdict: "ok", testedAt: Date.now() } }));
+                                } catch {
+                                  setGeminiHealth((h) => ({ ...h, [m]: { verdict: "err", testedAt: Date.now() } }));
+                                } finally {
+                                  setGeminiHealthDirty(true);
+                                }
                               }
+                              setGeminiBatch({ running: false, idx: 0, total: 0 });
+                              setTestState((prev) => ({ ...prev, gemini: { status: "ok", message: "批量测试完成" } }));
                             })();
                           }}
                         >
-                          测试连接
+                          {isGemini ? "一键测试全部版本" : "测试连接"}
                         </button>
-                        {s.status === "ok" ? <span className="backend-test backend-test--ok">连接成功</span> : null}
+                        {isGemini && geminiBatch.running ? (
+                          <span className="backend-test muted small">
+                            测试中… {geminiBatch.idx}/{geminiBatch.total}
+                          </span>
+                        ) : null}
+                        {s.status === "ok" && !isGemini ? <span className="backend-test backend-test--ok">连接成功</span> : null}
                         {s.status === "err" ? <span className="backend-test backend-test--err">{s.message}</span> : null}
-                        {s.status === "testing" ? <span className="backend-test muted small">测试中…</span> : null}
+                        {s.status === "testing" && !isGemini ? <span className="backend-test muted small">测试中…</span> : null}
                       </div>
                     </div>
 
@@ -470,6 +505,7 @@ export function BackendModelConfigModal(props: {
                               <button
                                 type="button"
                                 className="btn small"
+                                disabled={geminiBatch.running}
                                 onClick={() => {
                                   setTestState((prev) => ({ ...prev, gemini: { status: "testing" } }));
                                   void (async () => {
