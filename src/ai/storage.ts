@@ -1,4 +1,5 @@
 import type { AiSettings } from "./types";
+import type { AiProviderConfig, AiProviderId } from "./types";
 
 const KEY = "liubai:aiSettings";
 
@@ -55,5 +56,22 @@ export function saveAiSettings(next: AiSettings) {
   } catch {
     /* ignore */
   }
+}
+
+export type BackendModelConfig = Record<AiProviderId, Pick<AiProviderConfig, "baseUrl" | "apiKey">>;
+
+/**
+ * 供其它页面/组件读取“后端模型配置”（Base URL / API Key）。
+ * 注意：本项目目前为纯前端直连，密钥存放在 localStorage。
+ */
+export function getBackendConfig(): BackendModelConfig {
+  const s = loadAiSettings();
+  return {
+    openai: { baseUrl: s.openai.baseUrl, apiKey: s.openai.apiKey },
+    anthropic: { baseUrl: s.anthropic.baseUrl, apiKey: s.anthropic.apiKey },
+    gemini: { baseUrl: s.gemini.baseUrl, apiKey: s.gemini.apiKey },
+    doubao: { baseUrl: s.doubao.baseUrl, apiKey: s.doubao.apiKey },
+    ollama: { baseUrl: s.ollama.baseUrl, apiKey: s.ollama.apiKey },
+  };
 }
 

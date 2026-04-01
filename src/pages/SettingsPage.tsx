@@ -9,6 +9,7 @@ import { buildBackupZip, parseBackupZip } from "../storage/backup";
 import type { LineEndingMode } from "../util/lineEnding";
 import { loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiProviderId, AiSettings } from "../ai/types";
+import { BackendModelConfigModal } from "../components/BackendModelConfigModal";
 
 const FONT_KEY = "liubai:fontSizePx";
 const THEME_KEY = "liubai:theme";
@@ -58,6 +59,7 @@ export function SettingsPage() {
   const [refMaintainLabel, setRefMaintainLabel] = useState<string | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings());
   const [aiMsg, setAiMsg] = useState<string | null>(null);
+  const [backendOpen, setBackendOpen] = useState(false);
 
   function refreshStorageQuota() {
     if (!navigator.storage?.estimate) {
@@ -359,6 +361,12 @@ export function SettingsPage() {
           `http://localhost:11434` 通常可用。
         </p>
 
+        <div className="row gap" style={{ marginTop: 8 }}>
+          <button type="button" className="btn" onClick={() => setBackendOpen(true)}>
+            后端模型配置
+          </button>
+        </div>
+
         <div className="settings-callout" role="alert" id="ai-privacy">
           <strong>AI 隐私与上传范围（重要）</strong>
           <p>
@@ -518,16 +526,7 @@ export function SettingsPage() {
         </label>
 
         <details className="settings-ai-provider">
-          <summary>OpenAI 配置</summary>
-          <label className="row">
-            <span>Base URL</span>
-            <input
-              name="openaiBaseUrl"
-              value={aiSettings.openai.baseUrl ?? ""}
-              onChange={(e) => setAiSettings((s) => ({ ...s, openai: { ...s.openai, baseUrl: e.target.value } }))}
-              placeholder="https://api.openai.com/v1"
-            />
-          </label>
+          <summary>OpenAI Model</summary>
           <label className="row">
             <span>Model</span>
             <input
@@ -536,28 +535,10 @@ export function SettingsPage() {
               onChange={(e) => setAiSettings((s) => ({ ...s, openai: { ...s.openai, model: e.target.value } }))}
             />
           </label>
-          <label className="row">
-            <span>API Key</span>
-            <input
-              name="openaiApiKey"
-              type="password"
-              value={aiSettings.openai.apiKey ?? ""}
-              onChange={(e) => setAiSettings((s) => ({ ...s, openai: { ...s.openai, apiKey: e.target.value } }))}
-            />
-          </label>
         </details>
 
         <details className="settings-ai-provider">
-          <summary>Claude 配置</summary>
-          <label className="row">
-            <span>Base URL</span>
-            <input
-              name="anthropicBaseUrl"
-              value={aiSettings.anthropic.baseUrl ?? ""}
-              onChange={(e) => setAiSettings((s) => ({ ...s, anthropic: { ...s.anthropic, baseUrl: e.target.value } }))}
-              placeholder="https://api.anthropic.com"
-            />
-          </label>
+          <summary>Claude Model</summary>
           <label className="row">
             <span>Model</span>
             <input
@@ -566,28 +547,10 @@ export function SettingsPage() {
               onChange={(e) => setAiSettings((s) => ({ ...s, anthropic: { ...s.anthropic, model: e.target.value } }))}
             />
           </label>
-          <label className="row">
-            <span>API Key</span>
-            <input
-              name="anthropicApiKey"
-              type="password"
-              value={aiSettings.anthropic.apiKey ?? ""}
-              onChange={(e) => setAiSettings((s) => ({ ...s, anthropic: { ...s.anthropic, apiKey: e.target.value } }))}
-            />
-          </label>
         </details>
 
         <details className="settings-ai-provider">
-          <summary>Gemini 配置</summary>
-          <label className="row">
-            <span>Base URL</span>
-            <input
-              name="geminiBaseUrl"
-              value={aiSettings.gemini.baseUrl ?? ""}
-              onChange={(e) => setAiSettings((s) => ({ ...s, gemini: { ...s.gemini, baseUrl: e.target.value } }))}
-              placeholder="https://generativelanguage.googleapis.com"
-            />
-          </label>
+          <summary>Gemini Model</summary>
           <label className="row">
             <span>Model</span>
             <input
@@ -596,31 +559,10 @@ export function SettingsPage() {
               onChange={(e) => setAiSettings((s) => ({ ...s, gemini: { ...s.gemini, model: e.target.value } }))}
             />
           </label>
-          <label className="row">
-            <span>API Key</span>
-            <input
-              name="geminiApiKey"
-              type="password"
-              value={aiSettings.gemini.apiKey ?? ""}
-              onChange={(e) => setAiSettings((s) => ({ ...s, gemini: { ...s.gemini, apiKey: e.target.value } }))}
-            />
-          </label>
         </details>
 
         <details className="settings-ai-provider">
-          <summary>豆包 配置</summary>
-          <p className="muted small">
-            豆包通常通过火山引擎 Ark 的 OpenAI 兼容接口调用。不同账号/区域的 Base URL 与 Model 命名可能不同，请以你控制台为准。
-          </p>
-          <label className="row">
-            <span>Base URL</span>
-            <input
-              name="doubaoBaseUrl"
-              value={aiSettings.doubao.baseUrl ?? ""}
-              onChange={(e) => setAiSettings((s) => ({ ...s, doubao: { ...s.doubao, baseUrl: e.target.value } }))}
-              placeholder="https://ark.cn-beijing.volces.com/api/v3"
-            />
-          </label>
+          <summary>豆包 Model</summary>
           <label className="row">
             <span>Model</span>
             <input
@@ -629,28 +571,10 @@ export function SettingsPage() {
               onChange={(e) => setAiSettings((s) => ({ ...s, doubao: { ...s.doubao, model: e.target.value } }))}
             />
           </label>
-          <label className="row">
-            <span>API Key</span>
-            <input
-              name="doubaoApiKey"
-              type="password"
-              value={aiSettings.doubao.apiKey ?? ""}
-              onChange={(e) => setAiSettings((s) => ({ ...s, doubao: { ...s.doubao, apiKey: e.target.value } }))}
-            />
-          </label>
         </details>
 
         <details className="settings-ai-provider">
-          <summary>Ollama 配置</summary>
-          <label className="row">
-            <span>Base URL</span>
-            <input
-              name="ollamaBaseUrl"
-              value={aiSettings.ollama.baseUrl ?? ""}
-              onChange={(e) => setAiSettings((s) => ({ ...s, ollama: { ...s.ollama, baseUrl: e.target.value } }))}
-              placeholder="http://localhost:11434"
-            />
-          </label>
+          <summary>Ollama Model</summary>
           <label className="row">
             <span>Model</span>
             <input
@@ -659,7 +583,6 @@ export function SettingsPage() {
               onChange={(e) => setAiSettings((s) => ({ ...s, ollama: { ...s.ollama, model: e.target.value } }))}
             />
           </label>
-          <p className="muted small">Ollama 通常不需要 API Key。</p>
         </details>
 
         <div className="row gap">
@@ -691,6 +614,22 @@ export function SettingsPage() {
         </div>
         {aiMsg ? <p className="muted small">{aiMsg}</p> : null}
       </section>
+
+      <BackendModelConfigModal
+        open={backendOpen}
+        settings={aiSettings}
+        onChange={setAiSettings}
+        onClose={() => setBackendOpen(false)}
+        onSave={() => {
+          setAiMsg(null);
+          try {
+            saveAiSettings(aiSettings);
+            setAiMsg("已保存 AI 设置。");
+          } catch {
+            setAiMsg("保存失败。");
+          }
+        }}
+      />
 
       {msg && <p className="settings-msg">{msg}</p>}
     </div>

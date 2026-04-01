@@ -1493,6 +1493,101 @@ select {
 :root[data-theme="dark"] .model-picker-right[data-provider="doubao"] .model-picker-right-head .muted {
   color: rgba(139, 0, 0, 0.78);
 }
+
+/* Backend config modal */
+.backend-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  z-index: 1000;
+}
+.backend-modal {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(180, 180, 180, 0.45);
+  color: var(--fg);
+  display: flex;
+  flex-direction: column;
+}
+.backend-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 12px;
+  border-bottom: 1px solid rgba(180, 180, 180, 0.35);
+}
+.backend-modal-title {
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  font-size: 18px;
+}
+.backend-modal-body {
+  padding: 14px 18px;
+  overflow: auto;
+  display: grid;
+  gap: 12px;
+}
+.backend-provider {
+  border: 1px solid rgba(180, 180, 180, 0.35);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 12px 12px;
+}
+.backend-provider-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.backend-provider-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.backend-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+.backend-key-row input {
+  flex: 1;
+}
+.backend-test--ok {
+  color: #0a7a2f;
+  font-weight: 700;
+}
+.backend-test--err {
+  color: #b91c1c;
+  font-weight: 700;
+}
+.backend-modal-foot {
+  padding: 12px 18px 18px;
+  border-top: 1px solid rgba(180, 180, 180, 0.35);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+:root[data-theme="dark"] .backend-modal {
+  background: rgba(0, 0, 0, 0.86);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+:root[data-theme="dark"] .backend-modal-head,
+:root[data-theme="dark"] .backend-modal-foot {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+:root[data-theme="dark"] .backend-provider {
+  background: rgba(0, 0, 0, 0.55);
+  border-color: rgba(255, 255, 255, 0.12);
+}
 .model-picker-item.is-disabled {
   opacity: 0.45;
   cursor: pointer;
