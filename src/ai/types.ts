@@ -66,7 +66,7 @@ export type AiSettings = {
   includeBible: boolean;
   /** 最多注入多少字符（用于圣经/摘录合并截断） */
   maxContextChars: number;
-  /** Gemini 写作灵敏度（温度） */
+  /** 云端写作温度 0.1–2.0（各云端 API 的 temperature；观云弹窗内称「神思」） */
   geminiTemperature: number;
 };
 

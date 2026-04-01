@@ -152,6 +152,18 @@ async function testOllamaModel(args: { cfg: AiProviderConfig; model: string }): 
   if (!resp.ok) throw new Error((raw as any)?.error ?? `HTTP ${resp.status}`);
 }
 
+/** GET /api/tags — 需本机 Ollama 已启动；浏览器可能受 CORS 限制 */
+async function fetchOllamaModelNames(baseUrl: string): Promise<string[]> {
+  const b = (baseUrl ?? "").trim() || "http://localhost:11434";
+  const url = joinUrl(b, "/api/tags");
+  const resp = await fetch(url, { method: "GET" });
+  if (!resp.ok) throw new Error(`无法拉取模型列表（HTTP ${resp.status}）`);
+  const raw = (await resp.json().catch(() => ({}))) as { models?: { name?: string }[] };
+  const models = raw?.models ?? [];
+  const names = models.map((m) => (m?.name ?? "").trim()).filter(Boolean);
+  return [...new Set(names)].sort((a, b) => a.localeCompare(b));
+}
+
 function EyeToggle(props: { shown: boolean; onToggle: () => void; label?: string }) {
   return (
     <button type="button" className="icon-btn" onClick={props.onToggle} title={props.shown ? "隐藏" : "显示"}>
@@ -237,6 +249,11 @@ export function BackendModelConfigModal(props: {
     ollama: { status: "idle" },
   });
 
+  /** 潜龙：/api/tags 拉取到的本机模型名（需 Ollama 已启动） */
+  const [ollamaDetected, setOllamaDetected] = useState<string[]>([]);
+  const [ollamaFetchStatus, setOllamaFetchStatus] = useState<"idle" | "loading" | "ok" | "err">("idle");
+  const [ollamaFetchErr, setOllamaFetchErr] = useState<string | null>(null);
+
   const providers = useMemo(() => {
     return [
       { id: "openai" as const, label: "见山", title: "OpenAI（见山）" },
@@ -252,6 +269,21 @@ export function BackendModelConfigModal(props: {
 
   const geminiPresetModels = useMemo(
     () => ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"],
+    [],
+  );
+
+  /** 小米 MiMo 写作常用（文档另有 omni/tts 等可手动填写） */
+  const xiaomiWritingModels = useMemo(() => ["mimo-v2-pro", "mimo-v2-flash"] as const, []);
+
+  /** 智谱文本模型（ID 以 docs.bigmodel.cn 对话补全示例为准） */
+  const zhipuPresetModels = useMemo(
+    () =>
+      [
+        { id: "glm-5", label: "glm-5（最新旗舰）" },
+        { id: "glm-4.7", label: "glm-4.7（高智能）" },
+        { id: "glm-4.7-flashx", label: "glm-4.7-flashx（轻量高速·写作）" },
+        { id: "glm-4.7-flash", label: "glm-4.7-flash（免费普惠）" },
+      ] as const,
     [],
   );
 
@@ -474,7 +506,12 @@ export function BackendModelConfigModal(props: {
                 const keyShown = showKey[id];
                 const isGemini = id === "gemini";
                 const batch = modelBatch[id];
-                const list = modelLists[id].length ? modelLists[id] : [cfg.model].filter(Boolean);
+                const list =
+                  id === "ollama" && ollamaDetected.length > 0
+                    ? ollamaDetected
+                    : modelLists[id].length
+                      ? modelLists[id]
+                      : [cfg.model].filter(Boolean);
                 return (
                   <section className="backend-panel">
                     <div className="backend-panel-head">
@@ -586,7 +623,7 @@ export function BackendModelConfigModal(props: {
                                       : id === "kimi"
                                         ? "https://api.moonshot.cn/v1"
                                         : id === "xiaomi"
-                                          ? "（见小米开放平台文档中的 OpenAI 兼容根路径）"
+                                          ? "https://api.xiaomimimo.com/v1"
                                           : "http://localhost:11434"
                           }
                         />
@@ -693,6 +730,296 @@ export function BackendModelConfigModal(props: {
                               </div>
                               <p className="muted small" style={{ marginTop: 8 }}>
                                 说明：结果来源于你点击“测试该模型版本”的实时请求；点击右上角“保存”后会被记住。
+                              </p>
+                            </div>
+                          </div>
+                        ) : id === "xiaomi" ? (
+                          <div style={{ display: "grid", gap: 8 }}>
+                            <select
+                              value={cfg.model}
+                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                            >
+                              {xiaomiWritingModels.map((m) => (
+                                <option key={m} value={m}>
+                                  {m === "mimo-v2-pro" ? "mimo-v2-pro（写作·偏强）" : "mimo-v2-flash（写作·偏快）"}
+                                </option>
+                              ))}
+                              {cfg.model !== "mimo-v2-pro" && cfg.model !== "mimo-v2-flash" && cfg.model ? (
+                                <option value={cfg.model}>{cfg.model}（当前）</option>
+                              ) : null}
+                            </select>
+                            <p className="muted small" style={{ margin: 0 }}>
+                              写作常用上述二者；其它如 mimo-v2-omni、mimo-v2-tts 请在下框手动填写。
+                            </p>
+                            <input
+                              value={cfg.model}
+                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                              placeholder="模型 ID，如 mimo-v2-pro / mimo-v2-flash"
+                            />
+                            <div className="backend-provider-actions">
+                              <button
+                                type="button"
+                                className="btn small"
+                                disabled={testState.xiaomi.status === "testing"}
+                                onClick={() => {
+                                  setTestState((prev) => ({ ...prev, xiaomi: { status: "testing" } }));
+                                  void (async () => {
+                                    try {
+                                      await testOpenAICompatibleModel({
+                                        cfg: getProviderConfig(settings, "xiaomi"),
+                                        model: cfg.model.trim() || "mimo-v2-flash",
+                                      });
+                                      setTestState((prev) => ({ ...prev, xiaomi: { status: "ok", message: "连接成功" } }));
+                                    } catch (e) {
+                                      const msg = e instanceof Error ? e.message : "连接失败";
+                                      setTestState((prev) => ({ ...prev, xiaomi: { status: "err", message: msg } }));
+                                    }
+                                  })();
+                                }}
+                              >
+                                测试当前模型
+                              </button>
+                              {testState.xiaomi.status === "ok" ? (
+                                <span className="backend-test backend-test--ok">可用</span>
+                              ) : null}
+                              {testState.xiaomi.status === "err" ? (
+                                <span className="backend-test backend-test--err">{testState.xiaomi.message}</span>
+                              ) : null}
+                            </div>
+                          </div>
+                        ) : id === "zhipu" ? (
+                          <div style={{ display: "grid", gap: 10 }}>
+                            <div style={{ display: "grid", gap: 8 }}>
+                              <select
+                                value={cfg.model}
+                                onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                              >
+                                {zhipuPresetModels.map((x) => (
+                                  <option key={x.id} value={x.id}>
+                                    {x.label}
+                                  </option>
+                                ))}
+                                {cfg.model && !zhipuPresetModels.some((x) => x.id === cfg.model) ? (
+                                  <option value={cfg.model}>{cfg.model}（当前）</option>
+                                ) : null}
+                              </select>
+                              <p className="muted small" style={{ margin: 0 }}>
+                                写作常用 glm-4.7 / glm-4.7-flash；更强推理与 Agent 场景可试 glm-5。其它名称请在下框粘贴控制台中的 model 字符串。
+                              </p>
+                              <input
+                                value={cfg.model}
+                                onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                                placeholder="例如：glm-5 / glm-4.7 / glm-4.7-flash"
+                              />
+                              <div className="backend-provider-actions">
+                                <button
+                                  type="button"
+                                  className="btn small"
+                                  disabled={testState.zhipu.status === "testing"}
+                                  onClick={() => {
+                                    setTestState((prev) => ({ ...prev, zhipu: { status: "testing" } }));
+                                    void (async () => {
+                                      try {
+                                        await testOpenAICompatibleModel({
+                                          cfg: getProviderConfig(settings, "zhipu"),
+                                          model: cfg.model.trim() || "glm-4.7-flash",
+                                        });
+                                        setTestState((prev) => ({ ...prev, zhipu: { status: "ok", message: "连接成功" } }));
+                                      } catch (e) {
+                                        const msg = e instanceof Error ? e.message : "连接失败";
+                                        setTestState((prev) => ({ ...prev, zhipu: { status: "err", message: msg } }));
+                                      }
+                                    })();
+                                  }}
+                                >
+                                  测试当前模型
+                                </button>
+                                {testState.zhipu.status === "ok" ? (
+                                  <span className="backend-test backend-test--ok">可用</span>
+                                ) : null}
+                                {testState.zhipu.status === "err" ? (
+                                  <span className="backend-test backend-test--err">{testState.zhipu.message}</span>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <details className="backend-details">
+                              <summary>版本清单（逐一测试）</summary>
+                              <p className="muted small" style={{ marginTop: 8 }}>
+                                每行一个版本；点击右上角「一键测试全部版本」会按此清单依次测试，并在下方显示 ✅/❌。
+                              </p>
+                              <textarea
+                                value={list.join("\n")}
+                                onChange={(e) =>
+                                  setModelLists((m) => ({
+                                    ...m,
+                                    [id]: e.target.value
+                                      .split("\n")
+                                      .map((s) => s.trim())
+                                      .filter(Boolean),
+                                  }))
+                                }
+                                rows={6}
+                                style={{ width: "100%", fontFamily: "ui-monospace, Menlo, Monaco, Consolas, monospace" }}
+                                placeholder={"例如：\nglm-5\nglm-4.7\nglm-4.7-flashx\nglm-4.7-flash"}
+                              />
+                            </details>
+
+                            <div className="backend-health">
+                              <div className="backend-health-head">
+                                <div style={{ fontWeight: 800 }}>本 App 可用版本（测试结果）</div>
+                                <div className="muted small">{modelHealthDirty[id] ? "（未保存）" : "（已保存）"}</div>
+                              </div>
+                              <div className="backend-health-list">
+                                {list.map((m) => {
+                                  const r = modelHealth[id]?.[m];
+                                  const mark = r?.verdict === "ok" ? "✅" : r?.verdict === "err" ? "❌" : "—";
+                                  return (
+                                    <div key={m} className="backend-health-row">
+                                      <span className="backend-health-model">{m}</span>
+                                      <span className="backend-health-mark" aria-label={mark}>
+                                        {mark}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <p className="muted small" style={{ marginTop: 8 }}>
+                                说明：结果来自右上角「一键测试全部版本」的实时请求；点击右上角「保存」后会被记住。
+                              </p>
+                            </div>
+                          </div>
+                        ) : id === "ollama" ? (
+                          <div style={{ display: "grid", gap: 14 }}>
+                            <div>
+                              <div className="muted small" style={{ fontWeight: 800, marginBottom: 6 }}>
+                                手动适配
+                              </div>
+                              <p className="muted small" style={{ margin: "0 0 8px", lineHeight: 1.6 }}>
+                                直接填写模型名，需与终端 <code style={{ fontSize: "0.9em" }}>ollama list</code>{" "}
+                                中名称一致。
+                              </p>
+                              <input
+                                value={cfg.model}
+                                onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                                placeholder="例如：llama3.1:8b"
+                                style={{ width: "100%" }}
+                              />
+                              <div className="backend-provider-actions" style={{ marginTop: 8 }}>
+                                <button
+                                  type="button"
+                                  className="btn small"
+                                  disabled={testState.ollama.status === "testing"}
+                                  onClick={() => {
+                                    setTestState((prev) => ({ ...prev, ollama: { status: "testing" } }));
+                                    void (async () => {
+                                      try {
+                                        await testOllamaModel({
+                                          cfg: getProviderConfig(settings, "ollama"),
+                                          model: cfg.model.trim() || "llama3.1:8b",
+                                        });
+                                        setTestState((prev) => ({ ...prev, ollama: { status: "ok", message: "连接成功" } }));
+                                      } catch (e) {
+                                        const msg = e instanceof Error ? e.message : "连接失败";
+                                        setTestState((prev) => ({ ...prev, ollama: { status: "err", message: msg } }));
+                                      }
+                                    })();
+                                  }}
+                                >
+                                  测试当前模型
+                                </button>
+                                {testState.ollama.status === "ok" ? (
+                                  <span className="backend-test backend-test--ok">可用</span>
+                                ) : null}
+                                {testState.ollama.status === "err" ? (
+                                  <span className="backend-test backend-test--err">{testState.ollama.message}</span>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div className="muted small" style={{ fontWeight: 800, marginBottom: 6 }}>
+                                自动适配
+                              </div>
+                              <p className="muted small" style={{ margin: "0 0 8px", lineHeight: 1.6 }}>
+                                需本机已启动 Ollama。将请求 Base URL 下的 <code style={{ fontSize: "0.9em" }}>/api/tags</code>{" "}
+                                列出已下载模型；若浏览器报 CORS，请改用同源代理或桌面端。
+                              </p>
+                              <div className="backend-provider-actions" style={{ flexWrap: "wrap", gap: 8 }}>
+                                <button
+                                  type="button"
+                                  className="btn small"
+                                  disabled={ollamaFetchStatus === "loading"}
+                                  onClick={() => {
+                                    setOllamaFetchErr(null);
+                                    setOllamaFetchStatus("loading");
+                                    void (async () => {
+                                      try {
+                                        const names = await fetchOllamaModelNames(cfg.baseUrl ?? "");
+                                        setOllamaDetected(names);
+                                        setOllamaFetchStatus("ok");
+                                      } catch (e) {
+                                        const msg = e instanceof Error ? e.message : "检测失败";
+                                        setOllamaFetchErr(msg);
+                                        setOllamaDetected([]);
+                                        setOllamaFetchStatus("err");
+                                      }
+                                    })();
+                                  }}
+                                >
+                                  {ollamaFetchStatus === "loading" ? "检测中…" : "检测本地模型"}
+                                </button>
+                                {ollamaFetchStatus === "ok" && ollamaDetected.length === 0 ? (
+                                  <span className="muted small">未返回模型（可先 ollama pull 再试）</span>
+                                ) : null}
+                                {ollamaFetchErr ? (
+                                  <span className="backend-test backend-test--err" style={{ flex: "1 1 100%" }}>
+                                    {ollamaFetchErr}
+                                  </span>
+                                ) : null}
+                              </div>
+                              {ollamaDetected.length > 0 ? (
+                                <div style={{ marginTop: 10 }}>
+                                  <div className="muted small" style={{ marginBottom: 6 }}>
+                                    已检测到本地模型（点击填入 Model）
+                                  </div>
+                                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                                    {ollamaDetected.map((name) => (
+                                      <button
+                                        key={name}
+                                        type="button"
+                                        className={"btn small" + (cfg.model === name ? " primary" : "")}
+                                        onClick={() => onChange(patchProviderConfig(settings, "ollama", { model: name }))}
+                                      >
+                                        {name}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
+
+                            <div className="backend-health">
+                              <div className="backend-health-head">
+                                <div style={{ fontWeight: 800 }}>本 App 可用版本（测试结果）</div>
+                                <div className="muted small">{modelHealthDirty[id] ? "（未保存）" : "（已保存）"}</div>
+                              </div>
+                              <div className="backend-health-list">
+                                {list.map((m) => {
+                                  const r = modelHealth[id]?.[m];
+                                  const mark = r?.verdict === "ok" ? "✅" : r?.verdict === "err" ? "❌" : "—";
+                                  return (
+                                    <div key={m} className="backend-health-row">
+                                      <span className="backend-health-model">{m}</span>
+                                      <span className="backend-health-mark" aria-label={mark}>
+                                        {mark}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <p className="muted small" style={{ marginTop: 8 }}>
+                                说明：未自动检测时按当前 Model 测试；检测成功后「一键测试全部版本」会依次测试下列出的模型；点击右上角「保存」后记住结果。
                               </p>
                             </div>
                           </div>

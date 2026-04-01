@@ -13,12 +13,12 @@ export function defaultAiSettings(): AiSettings {
     // 豆包（火山引擎 Ark）通常提供 OpenAI 兼容接口（/chat/completions）。
     // 注意：不同账号/区域的 baseUrl 与 model 命名可能不同，可在设置中覆盖。
     doubao: { id: "doubao", label: "豆包", model: "doubao-seed-1.6", baseUrl: "https://ark.cn-beijing.volces.com/api/v3" },
-    // 智谱：OpenAI 兼容（/chat/completions），以 open.bigmodel.cn 文档为准。
-    zhipu: { id: "zhipu", label: "智谱", model: "glm-4-flash", baseUrl: "https://open.bigmodel.cn/api/paas/v4" },
+    // 智谱：OpenAI 兼容（/chat/completions）；模型 ID 以 docs.bigmodel.cn 为准（如 glm-5、glm-4.7、glm-4.7-flash）。
+    zhipu: { id: "zhipu", label: "智谱", model: "glm-4.7-flash", baseUrl: "https://open.bigmodel.cn/api/paas/v4" },
     // Kimi（月之暗面）：OpenAI 兼容。
     kimi: { id: "kimi", label: "Kimi", model: "moonshot-v1-8k", baseUrl: "https://api.moonshot.cn/v1" },
-    // 小米：若官方提供 OpenAI 兼容入口，请将 Base URL 填为文档中的根路径（通常含 /v1）。
-    xiaomi: { id: "xiaomi", label: "小米", model: "mimo-v2-flash", baseUrl: "" },
+    // 小米 MiMo：OpenAI 兼容，根路径见 https://api.xiaomimimo.com/v1
+    xiaomi: { id: "xiaomi", label: "小米", model: "mimo-v2-flash", baseUrl: "https://api.xiaomimimo.com/v1" },
     privacy: {
       consentAccepted: false,
       allowCloudProviders: false,
@@ -32,7 +32,8 @@ export function defaultAiSettings(): AiSettings {
     },
     includeBible: true,
     maxContextChars: 24000,
-    geminiTemperature: 1.2,
+    // 各云端模型共用；与弹窗「神思」及字数消耗星级联动；默认落在 0.1–0.7 档（三颗星）
+    geminiTemperature: 0.7,
   };
 }
 
@@ -50,9 +51,22 @@ export function loadAiSettings(): AiSettings {
       gemini: { ...d.gemini, ...(parsed.gemini ?? {}) },
       ollama: { ...d.ollama, ...(parsed.ollama ?? {}) },
       doubao: { ...d.doubao, ...(parsed.doubao ?? {}) },
-      zhipu: { ...d.zhipu, ...(parsed.zhipu ?? {}) },
+      zhipu: (() => {
+        const zp = { ...d.zhipu, ...(parsed.zhipu ?? {}) };
+        if (!(zp.baseUrl ?? "").trim()) zp.baseUrl = d.zhipu.baseUrl;
+        if (!(zp.model ?? "").trim()) zp.model = d.zhipu.model;
+        const m = (zp.model ?? "").trim();
+        // 旧版 GLM-4 Flash 系列默认迁到文档中的 GLM-4.7-Flash（免费普惠）
+        if (m === "glm-4-flash" || m === "glm-4-flash-250414") zp.model = "glm-4.7-flash";
+        return zp;
+      })(),
       kimi: { ...d.kimi, ...(parsed.kimi ?? {}) },
-      xiaomi: { ...d.xiaomi, ...(parsed.xiaomi ?? {}) },
+      xiaomi: (() => {
+        const xm = { ...d.xiaomi, ...(parsed.xiaomi ?? {}) };
+        if (!(xm.baseUrl ?? "").trim()) xm.baseUrl = d.xiaomi.baseUrl;
+        if (!(xm.model ?? "").trim()) xm.model = d.xiaomi.model;
+        return xm;
+      })(),
       privacy: { ...d.privacy, ...(parsed.privacy ?? {}) },
       geminiTemperature:
         typeof (parsed as any).geminiTemperature === "number" && Number.isFinite((parsed as any).geminiTemperature)
