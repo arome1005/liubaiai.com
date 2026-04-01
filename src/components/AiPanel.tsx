@@ -297,7 +297,7 @@ export function AiPanel(props: {
       core:
         "小米 MiMo 提供 OpenAI 兼容接口；写作常用 mimo-v2-pro（偏强）与 mimo-v2-flash（偏快），在高级后端配置中可一键选择。",
       meters: { prose: 3, follow: 4, cost: 2 },
-      note: "Base URL 默认为 api.xiaomimimo.com/v1；请在控制台创建 API Key 后填入。若遇 CORS，需改用后端代理。",
+      note: "Base URL 默认为 api.mimo-v2.com/v1（MiMo 官方）；请在控制台创建 API Key 后填入。若遇 CORS，需改用后端代理。",
     },
   };
 

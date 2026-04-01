@@ -17,8 +17,8 @@ export function defaultAiSettings(): AiSettings {
     zhipu: { id: "zhipu", label: "智谱", model: "glm-4.7-flash", baseUrl: "https://open.bigmodel.cn/api/paas/v4" },
     // Kimi（月之暗面）：OpenAI 兼容。
     kimi: { id: "kimi", label: "Kimi", model: "moonshot-v1-8k", baseUrl: "https://api.moonshot.cn/v1" },
-    // 小米 MiMo：OpenAI 兼容，根路径见 https://api.xiaomimimo.com/v1
-    xiaomi: { id: "xiaomi", label: "小米", model: "mimo-v2-flash", baseUrl: "https://api.xiaomimimo.com/v1" },
+    // 小米 MiMo：OpenAI 兼容，官方 Base 为 https://api.mimo-v2.com/v1（文档见 mimo-v2.com）
+    xiaomi: { id: "xiaomi", label: "小米", model: "mimo-v2-flash", baseUrl: "https://api.mimo-v2.com/v1" },
     privacy: {
       consentAccepted: false,
       allowCloudProviders: false,
@@ -65,6 +65,10 @@ export function loadAiSettings(): AiSettings {
         const xm = { ...d.xiaomi, ...(parsed.xiaomi ?? {}) };
         if (!(xm.baseUrl ?? "").trim()) xm.baseUrl = d.xiaomi.baseUrl;
         if (!(xm.model ?? "").trim()) xm.model = d.xiaomi.model;
+        const bu = (xm.baseUrl ?? "").trim();
+        if (/^https?:\/\/api\.xiaomimimo\.com/i.test(bu)) {
+          xm.baseUrl = d.xiaomi.baseUrl;
+        }
         return xm;
       })(),
       privacy: { ...d.privacy, ...(parsed.privacy ?? {}) },

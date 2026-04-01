@@ -17,7 +17,27 @@ export function resolveOpenAiCompatibleBaseUrl(cfg: AiProviderConfig): string {
   const t = (cfg.baseUrl ?? "").trim();
   if (t) return t;
   if (cfg.id === "openai") return "https://api.openai.com/v1";
+  if (cfg.id === "xiaomi") return "https://api.mimo-v2.com/v1";
   throw new Error(`${cfg.label}：请先在「高级后端配置」填写 Base URL`);
+}
+
+/** 小米 MiMo 官方文档使用 max_completion_tokens（非 max_tokens），与部分 OpenAI 兼容实现不同 */
+function openAiChatBody(
+  cfg: AiProviderConfig,
+  messages: AiChatMessage[],
+  temperature: number,
+  stream: boolean,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: cfg.model,
+    messages,
+    temperature: Math.min(2, Math.max(0, temperature)),
+  };
+  if (cfg.id === "xiaomi") {
+    body.max_completion_tokens = 8192;
+  }
+  if (stream) body.stream = true;
+  return body;
 }
 
 export async function generateWithProvider(args: {
@@ -65,17 +85,17 @@ async function generateOpenAI(
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
   const url = joinUrl(resolveOpenAiCompatibleBaseUrl(cfg), "/chat/completions");
+  const payload =
+    cfg.id === "xiaomi"
+      ? openAiChatBody(cfg, messages, temperature, false)
+      : { model: cfg.model, messages, temperature };
   const resp = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${key}`,
     },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages,
-      temperature,
-    }),
+    body: JSON.stringify(payload),
     signal,
   });
   const raw = await resp.json();
@@ -93,18 +113,17 @@ async function generateOpenAIStream(
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
   const url = joinUrl(resolveOpenAiCompatibleBaseUrl(cfg), "/chat/completions");
+  const payload =
+    cfg.id === "xiaomi"
+      ? openAiChatBody(cfg, messages, temperature, true)
+      : { model: cfg.model, messages, temperature, stream: true };
   const resp = await fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${key}`,
     },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages,
-      temperature,
-      stream: true,
-    }),
+    body: JSON.stringify(payload),
     signal,
   });
   if (!resp.ok) {

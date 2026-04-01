@@ -98,16 +98,22 @@ async function testOpenAICompatibleModel(args: { cfg: AiProviderConfig; model: s
   const key = (args.cfg.apiKey ?? "").trim();
   if (!key) throw new Error("请先填写 API Key");
   const url = joinUrl(baseUrl, "/chat/completions");
+  const body: Record<string, unknown> = {
+    model: args.model,
+    messages: [{ role: "user", content: "ping" }],
+    temperature: 0.1,
+    stream: false,
+  };
+  // 小米 MiMo 官方文档使用 max_completion_tokens，不接受 max_tokens；否则会报 Param Incorrect
+  if (args.cfg.id === "xiaomi") {
+    body.max_completion_tokens = 64;
+  } else {
+    body.max_tokens = 8;
+  }
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
-    body: JSON.stringify({
-      model: args.model,
-      messages: [{ role: "user", content: "ping" }],
-      temperature: 0.1,
-      max_tokens: 8,
-      stream: false,
-    }),
+    body: JSON.stringify(body),
   });
   const raw = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error((raw as any)?.error?.message ?? `HTTP ${resp.status}`);
@@ -653,7 +659,7 @@ export function BackendModelConfigModal(props: {
                                       : id === "kimi"
                                         ? "https://api.moonshot.cn/v1"
                                         : id === "xiaomi"
-                                          ? "https://api.xiaomimimo.com/v1"
+                                          ? "https://api.mimo-v2.com/v1"
                                           : "http://localhost:11434"
                           }
                         />
