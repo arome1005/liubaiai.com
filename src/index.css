@@ -1468,6 +1468,13 @@ select {
   display: block;
 }
 
+/* 微调：让部分 PNG 视觉居中（参考 OpenAI / 豆包） */
+.provider-logo[data-provider="anthropic"] img,
+.provider-logo[data-provider="gemini"] img,
+.provider-logo[data-provider="ollama"] img {
+  transform: translateX(1px);
+}
+
 /* “燎原（豆包）”在深色模式下选中时呈余烬红 */
 :root[data-theme="dark"] .model-picker-item.is-active[data-provider="doubao"] {
   color: #8b0000;
