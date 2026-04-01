@@ -1,4 +1,4 @@
-export type AiProviderId = "openai" | "anthropic" | "gemini" | "ollama";
+export type AiProviderId = "openai" | "anthropic" | "gemini" | "ollama" | "doubao";
 
 export type AiProviderConfig = {
   id: AiProviderId;
@@ -18,6 +18,7 @@ export type AiSettings = {
   anthropic: AiProviderConfig;
   gemini: AiProviderConfig;
   ollama: AiProviderConfig;
+  doubao: AiProviderConfig;
   /**
    * AI 隐私与上传范围（仅对“非本机模型”生效）。
    * 注意：本项目为纯前端直连；只要发起请求，就会把本次 prompt 发往对应提供方。

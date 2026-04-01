@@ -61,8 +61,10 @@ export function AiPanel(props: {
           ? "linear-gradient(135deg, #a855f7, #db2777)"
           : p === "gemini"
             ? "linear-gradient(135deg, #22c55e, #14b8a6)"
+            : p === "doubao"
+              ? "linear-gradient(135deg, #f97316, #ef4444)"
             : "linear-gradient(135deg, #111827, #6b7280)";
-    const text = p === "openai" ? "" : p === "anthropic" ? "雨" : p === "gemini" ? "云" : "龙";
+    const text = p === "openai" ? "" : p === "anthropic" ? "雨" : p === "gemini" ? "云" : p === "doubao" ? "豆" : "龙";
     return (
       <span
         aria-hidden
@@ -195,6 +197,16 @@ export function AiPanel(props: {
       meters: { prose: 3, follow: 3, cost: 1, costText: "极低消耗" },
       note: "本地运行受限于设备性能，适合快速草拟或在离线环境下作为创作基座。",
     },
+    doubao: {
+      label: "豆包",
+      subtitle: "轻快好用 · 中文友好",
+      tip: "豆包（Doubao）",
+      quote: "“一口热豆，入口顺滑；写作也能又快又稳。”",
+      core:
+        "中文友好，响应轻快。适合日常续写、改写与灵感拓展；若你使用火山引擎 Ark 的 OpenAI 兼容接口，可直接在设置里填 Base URL / Model / Key。",
+      meters: { prose: 4, follow: 4, cost: 2 },
+      note: "若遇到调用失败，多半是 Base URL 或 Model 命名不一致；请以你控制台的 Ark 接口参数为准。",
+    },
   };
 
   const [settings, setSettings] = useState<AiSettings>(() => loadAiSettings());
@@ -234,6 +246,8 @@ export function AiPanel(props: {
         ? settings.anthropic
         : p === "gemini"
           ? settings.gemini
+          : p === "doubao"
+            ? settings.doubao
           : settings.ollama;
   }, [settings]);
 
@@ -661,7 +675,7 @@ export function AiPanel(props: {
 
             <div className="model-picker-body">
               <div className="model-picker-left" role="tablist" aria-label="模型列表">
-                {(["openai", "anthropic", "gemini", "ollama"] as AiProviderId[]).map((id) => {
+                {(["openai", "anthropic", "gemini", "doubao", "ollama"] as AiProviderId[]).map((id) => {
                   const ui = PROVIDER_UI[id];
                   const isCloud = id !== "ollama";
                   const disabled = isCloud && !(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);

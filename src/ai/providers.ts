@@ -22,6 +22,7 @@ export async function generateWithProvider(args: {
   const { provider, config, messages } = args;
   if (provider === "ollama") return generateOllama(config, messages, args.signal);
   if (provider === "openai") return generateOpenAI(config, messages, args.signal);
+  if (provider === "doubao") return generateOpenAI(config, messages, args.signal);
   if (provider === "anthropic") return generateAnthropic(config, messages, args.signal);
   return generateGemini(config, messages, args.signal);
 }
@@ -37,6 +38,7 @@ export async function generateWithProviderStream(args: {
   const { provider, config, messages, onDelta } = args;
   if (provider === "ollama") return generateOllamaStream(config, messages, onDelta, args.signal);
   if (provider === "openai") return generateOpenAIStream(config, messages, onDelta, args.signal);
+  if (provider === "doubao") return generateOpenAIStream(config, messages, onDelta, args.signal);
   // Claude/Gemini：先用可取消的非流式（后续再补真流式）
   return generateWithProvider({ provider, config, messages, temperature: args.temperature, signal: args.signal });
 }
@@ -58,7 +60,7 @@ async function generateOpenAI(cfg: AiProviderConfig, messages: AiChatMessage[], 
     signal,
   });
   const raw = await resp.json();
-  if (!resp.ok) throw new Error(`OpenAI 请求失败：${raw?.error?.message ?? resp.status}`);
+  if (!resp.ok) throw new Error(`${cfg.label} 请求失败：${raw?.error?.message ?? resp.status}`);
   const text = raw?.choices?.[0]?.message?.content ?? "";
   return { text, raw };
 }
@@ -87,10 +89,10 @@ async function generateOpenAIStream(
   });
   if (!resp.ok) {
     const raw = await resp.json().catch(() => ({}));
-    throw new Error(`OpenAI 请求失败：${(raw as any)?.error?.message ?? resp.status}`);
+    throw new Error(`${cfg.label} 请求失败：${(raw as any)?.error?.message ?? resp.status}`);
   }
   const reader = resp.body?.getReader();
-  if (!reader) throw new Error("OpenAI 流式响应不可用");
+  if (!reader) throw new Error(`${cfg.label} 流式响应不可用`);
   const dec = new TextDecoder("utf-8");
   let buf = "";
   let full = "";

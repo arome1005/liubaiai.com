@@ -362,7 +362,7 @@ export function SettingsPage() {
         <div className="settings-callout" role="alert" id="ai-privacy">
           <strong>AI 隐私与上传范围（重要）</strong>
           <p>
-            只要你点击「生成」，本次提示词会发送到你选择的提供方。若选择 OpenAI / Claude / Gemini，即代表会通过网络发送内容到第三方服务。
+            只要你点击「生成」，本次提示词会发送到你选择的提供方。若选择 OpenAI / Claude / Gemini / 豆包，即代表会通过网络发送内容到第三方服务。
             你可以在下方明确选择<strong>允许上传哪些内容</strong>；默认仅允许使用本机 Ollama，且不允许云端提供方。
           </p>
           <p className="muted small" style={{ marginTop: "-0.25rem" }}>
@@ -398,7 +398,7 @@ export function SettingsPage() {
               setAiSettings((s) => ({ ...s, privacy: { ...s.privacy, allowCloudProviders: e.target.checked } }))
             }
           />
-          <span>允许使用云端提供方（OpenAI / Claude / Gemini）</span>
+          <span>允许使用云端提供方（OpenAI / Claude / Gemini / 豆包）</span>
         </label>
 
         <details className="settings-ai-provider">
@@ -489,6 +489,7 @@ export function SettingsPage() {
             <option value="openai">见山</option>
             <option value="anthropic">听雨</option>
             <option value="gemini">观云</option>
+            <option value="doubao">豆包</option>
             <option value="ollama">潜龙</option>
           </select>
         </label>
@@ -602,6 +603,39 @@ export function SettingsPage() {
               type="password"
               value={aiSettings.gemini.apiKey ?? ""}
               onChange={(e) => setAiSettings((s) => ({ ...s, gemini: { ...s.gemini, apiKey: e.target.value } }))}
+            />
+          </label>
+        </details>
+
+        <details className="settings-ai-provider">
+          <summary>豆包 配置</summary>
+          <p className="muted small">
+            豆包通常通过火山引擎 Ark 的 OpenAI 兼容接口调用。不同账号/区域的 Base URL 与 Model 命名可能不同，请以你控制台为准。
+          </p>
+          <label className="row">
+            <span>Base URL</span>
+            <input
+              name="doubaoBaseUrl"
+              value={aiSettings.doubao.baseUrl ?? ""}
+              onChange={(e) => setAiSettings((s) => ({ ...s, doubao: { ...s.doubao, baseUrl: e.target.value } }))}
+              placeholder="https://ark.cn-beijing.volces.com/api/v3"
+            />
+          </label>
+          <label className="row">
+            <span>Model</span>
+            <input
+              name="doubaoModel"
+              value={aiSettings.doubao.model}
+              onChange={(e) => setAiSettings((s) => ({ ...s, doubao: { ...s.doubao, model: e.target.value } }))}
+            />
+          </label>
+          <label className="row">
+            <span>API Key</span>
+            <input
+              name="doubaoApiKey"
+              type="password"
+              value={aiSettings.doubao.apiKey ?? ""}
+              onChange={(e) => setAiSettings((s) => ({ ...s, doubao: { ...s.doubao, apiKey: e.target.value } }))}
             />
           </label>
         </details>
