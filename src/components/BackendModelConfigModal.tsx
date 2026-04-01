@@ -13,11 +13,38 @@ type GeminiModelVerdict = "ok" | "err";
 type GeminiModelHealth = Record<string, { verdict: GeminiModelVerdict; testedAt: number }>;
 
 const GEMINI_HEALTH_KEY = "liubai:geminiModelHealth";
+const HEALTH_KEY_PREFIX = "liubai:modelHealth:";
 
 function joinUrl(base: string, path: string) {
   const b = base.replace(/\/+$/, "");
   const p = path.replace(/^\/+/, "");
   return `${b}/${p}`;
+}
+
+type ModelVerdict = "ok" | "err";
+type ModelHealth = Record<string, { verdict: ModelVerdict; testedAt: number }>;
+
+function healthKey(provider: AiProviderId) {
+  return `${HEALTH_KEY_PREFIX}${provider}`;
+}
+
+function loadModelHealth(provider: AiProviderId): ModelHealth {
+  try {
+    const raw = localStorage.getItem(healthKey(provider));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as ModelHealth;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveModelHealth(provider: AiProviderId, next: ModelHealth) {
+  try {
+    localStorage.setItem(healthKey(provider), JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
 }
 
 function loadGeminiModelHealth(): GeminiModelHealth {
@@ -57,59 +84,6 @@ function setCfg(s: AiSettings, id: AiProviderId, patch: Partial<AiProviderConfig
   return { ...s, ollama: next };
 }
 
-async function testProviderConnection(args: { provider: AiProviderId; cfg: AiProviderConfig }): Promise<string> {
-  const { provider, cfg } = args;
-  const baseUrl = (cfg.baseUrl ?? "").trim();
-
-  if (provider === "ollama") {
-    const url = joinUrl(baseUrl || "http://localhost:11434", "/api/tags");
-    const resp = await fetch(url, { method: "GET" });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const raw = await resp.json().catch(() => ({}));
-    const n = Array.isArray((raw as any)?.models) ? (raw as any).models.length : 0;
-    return n ? `连接成功（发现 ${n} 个本地模型）` : "连接成功";
-  }
-
-  const key = (cfg.apiKey ?? "").trim();
-  if (!key) throw new Error("请先填写 API Key");
-
-  if (provider === "gemini") {
-    const base = baseUrl || "https://generativelanguage.googleapis.com";
-    const url = joinUrl(base, `/v1beta/models?key=${encodeURIComponent(key)}`);
-    const resp = await fetch(url, { method: "GET" });
-    const raw = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error((raw as any)?.error?.message ?? `HTTP ${resp.status}`);
-    const n = Array.isArray((raw as any)?.models) ? (raw as any).models.length : 0;
-    return n ? `连接成功（可用模型 ${n} 个）` : "连接成功";
-  }
-
-  if (provider === "anthropic") {
-    const url = joinUrl(baseUrl || "https://api.anthropic.com", "/v1/models");
-    const resp = await fetch(url, {
-      method: "GET",
-      headers: {
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-      },
-    });
-    const raw = await resp.json().catch(() => ({}));
-    if (!resp.ok) throw new Error((raw as any)?.error?.message ?? `HTTP ${resp.status}`);
-    const n = Array.isArray((raw as any)?.data) ? (raw as any).data.length : 0;
-    return n ? `连接成功（可用模型 ${n} 个）` : "连接成功";
-  }
-
-  // openai / doubao (OpenAI-compatible)
-  const url = joinUrl(baseUrl || "https://api.openai.com/v1", "/models");
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${key}` },
-  });
-  const raw = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error((raw as any)?.error?.message ?? `HTTP ${resp.status}`);
-  const n = Array.isArray((raw as any)?.data) ? (raw as any).data.length : 0;
-  return n ? `连接成功（可用模型 ${n} 个）` : "连接成功";
-}
-
 async function testGeminiModel(args: { cfg: AiProviderConfig; modelOverride?: string }): Promise<string> {
   const baseUrl = (args.cfg.baseUrl ?? "").trim() || "https://generativelanguage.googleapis.com";
   const key = (args.cfg.apiKey ?? "").trim();
@@ -135,6 +109,65 @@ async function testGeminiModel(args: { cfg: AiProviderConfig; modelOverride?: st
   return text ? "连接成功（该模型可用）" : "连接成功（该模型可用）";
 }
 
+async function testOpenAICompatibleModel(args: { cfg: AiProviderConfig; model: string }): Promise<void> {
+  const baseUrl = (args.cfg.baseUrl ?? "").trim() || "https://api.openai.com/v1";
+  const key = (args.cfg.apiKey ?? "").trim();
+  if (!key) throw new Error("请先填写 API Key");
+  const url = joinUrl(baseUrl, "/chat/completions");
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    body: JSON.stringify({
+      model: args.model,
+      messages: [{ role: "user", content: "ping" }],
+      temperature: 0.1,
+      max_tokens: 8,
+      stream: false,
+    }),
+  });
+  const raw = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error((raw as any)?.error?.message ?? `HTTP ${resp.status}`);
+}
+
+async function testAnthropicModel(args: { cfg: AiProviderConfig; model: string }): Promise<void> {
+  const baseUrl = (args.cfg.baseUrl ?? "").trim() || "https://api.anthropic.com";
+  const key = (args.cfg.apiKey ?? "").trim();
+  if (!key) throw new Error("请先填写 API Key");
+  const url = joinUrl(baseUrl, "/v1/messages");
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: args.model,
+      max_tokens: 16,
+      messages: [{ role: "user", content: "ping" }],
+    }),
+  });
+  const raw = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error((raw as any)?.error?.message ?? `HTTP ${resp.status}`);
+}
+
+async function testOllamaModel(args: { cfg: AiProviderConfig; model: string }): Promise<void> {
+  const baseUrl = (args.cfg.baseUrl ?? "").trim() || "http://localhost:11434";
+  const url = joinUrl(baseUrl, "/api/chat");
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: args.model,
+      stream: false,
+      messages: [{ role: "user", content: "ping" }],
+      options: { temperature: 0.1 },
+    }),
+  });
+  const raw = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error((raw as any)?.error ?? `HTTP ${resp.status}`);
+}
+
 function EyeToggle(props: { shown: boolean; onToggle: () => void; label?: string }) {
   return (
     <button type="button" className="icon-btn" onClick={props.onToggle} title={props.shown ? "隐藏" : "显示"}>
@@ -158,6 +191,34 @@ export function BackendModelConfigModal(props: {
     running: false,
     idx: 0,
     total: 0,
+  });
+  const [modelHealth, setModelHealth] = useState<Record<AiProviderId, ModelHealth>>({
+    openai: loadModelHealth("openai"),
+    anthropic: loadModelHealth("anthropic"),
+    gemini: loadModelHealth("gemini"),
+    doubao: loadModelHealth("doubao"),
+    ollama: loadModelHealth("ollama"),
+  });
+  const [modelHealthDirty, setModelHealthDirty] = useState<Record<AiProviderId, boolean>>({
+    openai: false,
+    anthropic: false,
+    gemini: false,
+    doubao: false,
+    ollama: false,
+  });
+  const [modelBatch, setModelBatch] = useState<Record<AiProviderId, { running: boolean; idx: number; total: number }>>({
+    openai: { running: false, idx: 0, total: 0 },
+    anthropic: { running: false, idx: 0, total: 0 },
+    gemini: { running: false, idx: 0, total: 0 },
+    doubao: { running: false, idx: 0, total: 0 },
+    ollama: { running: false, idx: 0, total: 0 },
+  });
+  const [modelLists, setModelLists] = useState<Record<AiProviderId, string[]>>({
+    openai: [],
+    anthropic: [],
+    gemini: [],
+    doubao: [],
+    ollama: [],
   });
   const [showKey, setShowKey] = useState<Record<AiProviderId, boolean>>({
     openai: false,
@@ -217,6 +278,10 @@ export function BackendModelConfigModal(props: {
                   saveGeminiModelHealth(geminiHealth);
                   setGeminiHealthDirty(false);
                 }
+                for (const p of ["openai", "anthropic", "gemini", "doubao", "ollama"] as AiProviderId[]) {
+                  if (modelHealthDirty[p]) saveModelHealth(p, modelHealth[p]);
+                }
+                setModelHealthDirty({ openai: false, anthropic: false, gemini: false, doubao: false, ollama: false });
                 props.onSave();
               }}
             >
@@ -382,6 +447,8 @@ export function BackendModelConfigModal(props: {
                 const s = testState[id];
                 const keyShown = showKey[id];
                 const isGemini = id === "gemini";
+                const batch = modelBatch[id];
+                const list = modelLists[id].length ? modelLists[id] : [cfg.model].filter(Boolean);
                 return (
                   <section className="backend-panel">
                     <div className="backend-panel-head">
@@ -395,18 +462,40 @@ export function BackendModelConfigModal(props: {
                         <button
                           type="button"
                           className="btn small"
-                          disabled={s.status === "testing" || (isGemini && geminiBatch.running)}
+                          disabled={s.status === "testing" || (isGemini && geminiBatch.running) || (!isGemini && batch.running)}
                           onClick={() => {
                             if (!isGemini) {
+                              const models = list;
+                              setModelBatch((m) => ({ ...m, [id]: { running: true, idx: 0, total: models.length } }));
                               setTestState((prev) => ({ ...prev, [id]: { status: "testing" } }));
                               void (async () => {
-                                try {
-                                  const msg = await testProviderConnection({ provider: id, cfg });
-                                  setTestState((prev) => ({ ...prev, [id]: { status: "ok", message: msg } }));
-                                } catch (e) {
-                                  const msg = e instanceof Error ? e.message : "连接失败";
-                                  setTestState((prev) => ({ ...prev, [id]: { status: "err", message: msg } }));
+                                const baseCfg = getCfg(settings, id);
+                                for (let i = 0; i < models.length; i++) {
+                                  const model = models[i]!;
+                                  setModelBatch((m) => ({ ...m, [id]: { running: true, idx: i + 1, total: models.length } }));
+                                  try {
+                                    if (id === "openai" || id === "doubao") {
+                                      await testOpenAICompatibleModel({ cfg: baseCfg, model });
+                                    } else if (id === "anthropic") {
+                                      await testAnthropicModel({ cfg: baseCfg, model });
+                                    } else {
+                                      await testOllamaModel({ cfg: baseCfg, model });
+                                    }
+                                    setModelHealth((h) => ({
+                                      ...h,
+                                      [id]: { ...h[id], [model]: { verdict: "ok", testedAt: Date.now() } },
+                                    }));
+                                  } catch {
+                                    setModelHealth((h) => ({
+                                      ...h,
+                                      [id]: { ...h[id], [model]: { verdict: "err", testedAt: Date.now() } },
+                                    }));
+                                  } finally {
+                                    setModelHealthDirty((d) => ({ ...d, [id]: true }));
+                                  }
                                 }
+                                setModelBatch((m) => ({ ...m, [id]: { running: false, idx: 0, total: 0 } }));
+                                setTestState((prev) => ({ ...prev, [id]: { status: "ok", message: "批量测试完成" } }));
                               })();
                               return;
                             }
@@ -433,11 +522,16 @@ export function BackendModelConfigModal(props: {
                             })();
                           }}
                         >
-                          {isGemini ? "一键测试全部版本" : "测试连接"}
+                          {isGemini ? "一键测试全部版本" : "一键测试全部版本"}
                         </button>
                         {isGemini && geminiBatch.running ? (
                           <span className="backend-test muted small">
                             测试中… {geminiBatch.idx}/{geminiBatch.total}
+                          </span>
+                        ) : null}
+                        {!isGemini && batch.running ? (
+                          <span className="backend-test muted small">
+                            测试中… {batch.idx}/{batch.total}
                           </span>
                         ) : null}
                         {s.status === "ok" && !isGemini ? <span className="backend-test backend-test--ok">连接成功</span> : null}
@@ -571,10 +665,59 @@ export function BackendModelConfigModal(props: {
                             </div>
                           </div>
                         ) : (
-                          <input
-                            value={cfg.model}
-                            onChange={(e) => onChange(setCfg(settings, id, { model: e.target.value }))}
-                          />
+                          <div style={{ display: "grid", gap: 10 }}>
+                            <input
+                              value={cfg.model}
+                              onChange={(e) => onChange(setCfg(settings, id, { model: e.target.value }))}
+                              placeholder="当前默认 model"
+                            />
+
+                            <details className="backend-details">
+                              <summary>版本清单（逐一测试）</summary>
+                              <p className="muted small" style={{ marginTop: 8 }}>
+                                每行一个版本；点击右上角“一键测试全部版本”会按此清单依次测试，并在下方显示 ✅/❌。
+                              </p>
+                              <textarea
+                                value={list.join("\n")}
+                                onChange={(e) =>
+                                  setModelLists((m) => ({
+                                    ...m,
+                                    [id]: e.target.value
+                                      .split("\n")
+                                      .map((s) => s.trim())
+                                      .filter(Boolean),
+                                  }))
+                                }
+                                rows={6}
+                                style={{ width: "100%", fontFamily: "ui-monospace, Menlo, Monaco, Consolas, monospace" }}
+                                placeholder="例如：\n<model-1>\n<model-2>"
+                              />
+                            </details>
+
+                            <div className="backend-health">
+                              <div className="backend-health-head">
+                                <div style={{ fontWeight: 800 }}>本 App 可用版本（测试结果）</div>
+                                <div className="muted small">{modelHealthDirty[id] ? "（未保存）" : "（已保存）"}</div>
+                              </div>
+                              <div className="backend-health-list">
+                                {list.map((m) => {
+                                  const r = modelHealth[id]?.[m];
+                                  const mark = r?.verdict === "ok" ? "✅" : r?.verdict === "err" ? "❌" : "—";
+                                  return (
+                                    <div key={m} className="backend-health-row">
+                                      <span className="backend-health-model">{m}</span>
+                                      <span className="backend-health-mark" aria-label={mark}>
+                                        {mark}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <p className="muted small" style={{ marginTop: 8 }}>
+                                说明：结果来自右上角“一键测试全部版本”的实时请求；点击右上角“保存”后会被记住。
+                              </p>
+                            </div>
+                          </div>
                         )}
                       </label>
                     </div>
