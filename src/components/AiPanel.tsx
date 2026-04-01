@@ -1,8 +1,8 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { exportBibleMarkdown, searchReferenceLibrary } from "../db/repo";
 import type { BibleGlossaryTerm, ReferenceExcerpt, ReferenceSearchHit, Work, Chapter } from "../db/types";
 import { generateWithProviderStream } from "../ai/providers";
-import { loadAiSettings, saveAiSettings } from "../ai/storage";
+import { getProviderConfig, loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiChatMessage, AiProviderId, AiSettings } from "../ai/types";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
 
@@ -83,8 +83,29 @@ export function AiPanel(props: {
               ? "/logos/ollama.png"
               : p === "doubao"
                 ? "/logos/doubao.png"
-                : null;
-    const text = p === "openai" ? "" : p === "anthropic" ? "雨" : p === "gemini" ? "云" : p === "doubao" ? "豆" : "龙";
+                : p === "zhipu"
+                  ? "/logos/zhipu.png"
+                  : p === "kimi"
+                    ? "/logos/kimi.png"
+                    : p === "xiaomi"
+                      ? "/logos/xiaomi.png"
+                      : null;
+    const text =
+      p === "openai"
+        ? ""
+        : p === "anthropic"
+          ? "雨"
+          : p === "gemini"
+            ? "云"
+            : p === "doubao"
+              ? "豆"
+              : p === "zhipu"
+                ? "谱"
+                : p === "kimi"
+                  ? "月"
+                  : p === "xiaomi"
+                    ? "米"
+                    : "龙";
     return (
       <span
         aria-hidden
@@ -232,6 +253,36 @@ export function AiPanel(props: {
       meters: { prose: 3, follow: 5, cost: 2, costText: "极低" },
       note: "若遇到调用失败，多半是 Base URL 或 Model 命名不一致；请以你控制台/通用接口参数为准。",
     },
+    zhipu: {
+      label: "智谱",
+      subtitle: "墨竹清劲 · 文理兼备",
+      tip: "智谱 GLM",
+      quote: "“竹影扫阶尘不动，月穿潭底水无痕。”",
+      core:
+        "智谱 GLM 系列在中文理解与指令遵循上均衡扎实，适合长文写作中的结构梳理、设定补全与多轮改写；请以开放平台文档中的模型名为准配置。",
+      meters: { prose: 4, follow: 4, cost: 2 },
+      note: "使用 OpenAI 兼容接口（/chat/completions）；若报错请核对 Base URL、Key 与模型 ID。",
+    },
+    kimi: {
+      label: "Kimi",
+      subtitle: "长卷如月 · 徐徐展开",
+      tip: "Kimi（Moonshot）",
+      quote: "“月色入户，清辉满纸。”",
+      core:
+        "Kimi 擅长在长上下文里保持线索不断裂，适合需要“带着前文记忆”续写与扩写的场景；流式输出与本 App 的生成体验契合。",
+      meters: { prose: 4, follow: 4, cost: 3 },
+      note: "默认 Base URL 为 Moonshot 文档中的 v1 根路径；模型名以控制台为准。",
+    },
+    xiaomi: {
+      label: "小米",
+      subtitle: "锋刃内敛 · 务实为文",
+      tip: "小米 MiMo",
+      quote: "“工欲善其事，必先利其器。”",
+      core:
+        "小米大模型接口以官方开放平台为准；若提供 OpenAI 兼容入口，可在本 App 中与其它云端模型同样配置 Base URL 与模型名后使用。",
+      meters: { prose: 3, follow: 4, cost: 2 },
+      note: "请先在小米开放平台确认 OpenAI 兼容 Base URL 与模型 ID；未填 Base URL 时无法发起请求。",
+    },
   };
 
   const [settings, setSettings] = useState<AiSettings>(() => loadAiSettings());
@@ -263,18 +314,7 @@ export function AiPanel(props: {
     messages: AiChatMessage[];
   } | null>(null);
 
-  const providerCfg = useMemo(() => {
-    const p = settings.provider;
-    return p === "openai"
-      ? settings.openai
-      : p === "anthropic"
-        ? settings.anthropic
-        : p === "gemini"
-          ? settings.gemini
-          : p === "doubao"
-            ? settings.doubao
-          : settings.ollama;
-  }, [settings]);
+  const providerCfg = useMemo(() => getProviderConfig(settings, settings.provider), [settings]);
 
   const isCloudProvider = settings.provider !== "ollama";
   const cloudAllowed = !isCloudProvider
@@ -282,6 +322,12 @@ export function AiPanel(props: {
     : settings.privacy.consentAccepted && settings.privacy.allowCloudProviders;
   const [providerPickerOpen, setProviderPickerOpen] = useState(false);
   const [pickerActive, setPickerActive] = useState<AiProviderId>("ollama");
+  /** Gemini 弹窗内：模型档位 / 神思，默认折叠，点底部按钮才展开小面板 */
+  const [geminiTunePanel, setGeminiTunePanel] = useState<null | "gear" | "shensi">(null);
+
+  useEffect(() => {
+    if (!providerPickerOpen || pickerActive !== "gemini") setGeminiTunePanel(null);
+  }, [providerPickerOpen, pickerActive]);
 
   const selectedText = useMemo(() => props.getSelectedText(), [props]);
 
@@ -701,7 +747,7 @@ export function AiPanel(props: {
 
             <div className="model-picker-body">
               <div className="model-picker-left" role="tablist" aria-label="模型列表">
-                {(["openai", "anthropic", "gemini", "doubao", "ollama"] as AiProviderId[]).map((id) => {
+                {(["openai", "anthropic", "gemini", "doubao", "zhipu", "kimi", "xiaomi", "ollama"] as AiProviderId[]).map((id) => {
                   const ui = PROVIDER_UI[id];
                   const isCloud = id !== "ollama";
                   const disabled = isCloud && !(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);
@@ -802,71 +848,109 @@ export function AiPanel(props: {
                     </div>
 
                     {pickerActive === "gemini" ? (
-                      <div className="model-picker-tune">
-                        <div className="model-tune-grid">
-                          <div className="model-tune-card">
-                            <div className="muted small">神思</div>
-                            <div className="mind-buttons" role="group" aria-label="神思">
-                              {(["初见", "入微", "化境"] as const).map((k) => {
-                                const active = settings.gemini.model === GEMINI_MIND[k];
+                      <div className="model-picker-tune model-picker-tune--dock">
+                        {geminiTunePanel === "gear" ? (
+                          <div className="model-picker-tune-drawer" role="region" aria-label="模型档位">
+                            <div className="model-tune-card model-tune-card--full">
+                              <div className="muted small">模型档位</div>
+                              <div className="mind-buttons" role="group" aria-label="模型档位">
+                                {(["初见", "入微", "化境"] as const).map((k) => {
+                                  const active = settings.gemini.model === GEMINI_MIND[k];
+                                  return (
+                                    <button
+                                      key={k}
+                                      type="button"
+                                      className={"mind-btn" + (active ? " is-active" : "")}
+                                      onClick={() => {
+                                        const model = GEMINI_MIND[k];
+                                        updateSettings({ gemini: { ...settings.gemini, model } });
+                                      }}
+                                    >
+                                      {k}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <p className="muted small" style={{ marginTop: 10, marginBottom: 0, fontWeight: 300 }}>
+                                初见 / 入微 / 化境 对应 Lite / Flash / Pro，可按写作需求切换。
+                              </p>
+                            </div>
+                          </div>
+                        ) : null}
+
+                        {geminiTunePanel === "shensi" ? (
+                          <div className="model-picker-tune-drawer" role="region" aria-label="神思">
+                            <div className="model-tune-card model-tune-card--full">
+                              <div className="muted small">神思（Temperature）</div>
+                              {(() => {
+                                const pct = Math.max(0, Math.min(100, ((settings.geminiTemperature - 0.1) / 1.9) * 100));
+                                const invPct = 100 - pct;
+                                const tubeBg = `linear-gradient(to top,
+                                rgba(0,0,0,0.78) 0%,
+                                rgba(0,0,0,0.78) ${pct}%,
+                                rgba(0,0,0,0.12) ${pct}%,
+                                rgba(0,0,0,0.12) 100%)`;
                                 return (
-                                  <button
-                                    key={k}
-                                    type="button"
-                                    className={"mind-btn" + (active ? " is-active" : "")}
-                                    onClick={() => {
-                                      const model = GEMINI_MIND[k];
-                                      updateSettings({ gemini: { ...settings.gemini, model } });
-                                    }}
-                                  >
-                                    {k}
-                                  </button>
+                                  <div className="temp-wrap">
+                                    <div className="temp-float muted small" style={{ top: `${invPct}%` }}>
+                                      {tempSides(settings.geminiTemperature).center}
+                                    </div>
+                                    <div className="temp-row">
+                                      <div className="temp-side muted small">{tempSides(settings.geminiTemperature).left}</div>
+                                      <div className="temp-vert" aria-label="Temperature slider">
+                                        <div className="temp-tube" aria-hidden="true" style={{ background: tubeBg }} />
+                                        <input
+                                          className="temp-slider temp-slider--vert"
+                                          type="range"
+                                          min={0.1}
+                                          max={2.0}
+                                          step={0.1}
+                                          value={settings.geminiTemperature}
+                                          onChange={(e) => {
+                                            const v = Math.max(0.1, Math.min(2.0, Number(e.target.value) || 1.2));
+                                            updateSettings({ geminiTemperature: v });
+                                          }}
+                                        />
+                                      </div>
+                                      <div className="temp-side muted small" style={{ textAlign: "right" }}>
+                                        {tempSides(settings.geminiTemperature).right}
+                                      </div>
+                                    </div>
+                                  </div>
                                 );
-                              })}
+                              })()}
+                              <p className="muted small" style={{ marginTop: 10, marginBottom: 0, fontWeight: 300 }}>
+                                竖轴拉动调节灵敏度；再次点击底部「神思」可收起。
+                              </p>
                             </div>
                           </div>
+                        ) : null}
 
-                          <div className="model-tune-card">
-                            <div className="muted small">神思程度（Temperature）</div>
-                            <div className="temp-wrap">
-                              <div
-                                className="temp-float muted small"
-                                style={{
-                                  top: `${Math.round(((2.0 - settings.geminiTemperature) / 1.9) * 100)}%`,
-                                }}
-                              >
-                                {tempSides(settings.geminiTemperature).center}
-                              </div>
-                              <div className="temp-vert">
-                                <input
-                                  className="temp-slider temp-slider--vert"
-                                  type="range"
-                                  min={0.1}
-                                  max={2.0}
-                                  step={0.1}
-                                  value={settings.geminiTemperature}
-                                  onChange={(e) => {
-                                    const v = Math.max(0.1, Math.min(2.0, Number(e.target.value) || 1.2));
-                                    updateSettings({ geminiTemperature: v });
-                                  }}
-                                />
-                              </div>
-                              <div className="temp-sides muted small">
-                                <span>{tempSides(settings.geminiTemperature).left}</span>
-                                <span>{tempSides(settings.geminiTemperature).right}</span>
-                              </div>
-                            </div>
-                          </div>
+                        <div className="model-picker-cost-row">
+                          <span className="muted small">字数消耗</span>
+                          <Meter value={settings.gemini.model === GEMINI_MIND["化境"] ? 5 : 2} max={5} />
+                          <span className="muted small">
+                            {settings.gemini.model === GEMINI_MIND["化境"] ? "（化境自动拉满）" : ""}
+                          </span>
+                        </div>
 
-                          <div className="model-tune-card">
-                            <div className="muted small">字数消耗</div>
-                            <div style={{ marginTop: 8 }}>
-                              <Meter value={settings.gemini.model === GEMINI_MIND["化境"] ? 5 : 2} max={5} />
-                              <span className="muted small" style={{ marginLeft: 8 }}>
-                                {settings.gemini.model === GEMINI_MIND["化境"] ? "（化境自动拉满）" : ""}
-                              </span>
-                            </div>
-                          </div>
+                        <div className="model-picker-tune-dock" role="toolbar" aria-label="观云调参">
+                          <button
+                            type="button"
+                            className={"model-picker-dock-btn" + (geminiTunePanel === "gear" ? " is-active" : "")}
+                            aria-pressed={geminiTunePanel === "gear"}
+                            onClick={() => setGeminiTunePanel((p) => (p === "gear" ? null : "gear"))}
+                          >
+                            模型档位
+                          </button>
+                          <button
+                            type="button"
+                            className={"model-picker-dock-btn" + (geminiTunePanel === "shensi" ? " is-active" : "")}
+                            aria-pressed={geminiTunePanel === "shensi"}
+                            onClick={() => setGeminiTunePanel((p) => (p === "shensi" ? null : "shensi"))}
+                          >
+                            神思
+                          </button>
                         </div>
                       </div>
                     ) : null}

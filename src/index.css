@@ -1798,6 +1798,28 @@ select {
 .model-picker-tune {
   margin-top: 12px;
 }
+.model-picker-tune--dock {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.model-picker-tune-drawer {
+  margin-bottom: 10px;
+  animation: model-tune-drawer-in 0.18s ease-out;
+}
+@keyframes model-tune-drawer-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
 .model-tune-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1808,6 +1830,59 @@ select {
   border-radius: 12px;
   padding: 10px 12px;
   background: var(--surface-2);
+}
+.model-tune-card--full {
+  width: 100%;
+  box-sizing: border-box;
+}
+.model-picker-cost-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 0 12px;
+  border-bottom: 1px solid var(--border);
+}
+.model-picker-tune-dock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding-top: 12px;
+}
+.model-picker-dock-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: rgba(0, 0, 0, 0.55);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.model-picker-dock-btn:hover {
+  color: rgba(0, 0, 0, 0.85);
+  border-color: rgba(0, 0, 0, 0.25);
+}
+.model-picker-dock-btn.is-active {
+  background: #000;
+  color: #fff;
+  border-color: #000;
+}
+:root[data-theme="dark"] .model-picker-dock-btn {
+  color: rgba(255, 255, 255, 0.65);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+:root[data-theme="dark"] .model-picker-dock-btn:hover {
+  color: rgba(255, 255, 255, 0.95);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+:root[data-theme="dark"] .model-picker-dock-btn.is-active {
+  background: #fff;
+  color: #000;
+  border-color: #fff;
 }
 .mind-buttons {
   display: inline-flex;
@@ -1848,6 +1923,20 @@ select {
   position: relative;
   padding-top: 10px;
 }
+.temp-row {
+  display: grid;
+  grid-template-columns: 1fr 120px 1fr;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+.temp-side {
+  color: rgba(0, 0, 0, 0.45);
+  font-weight: 300;
+}
+:root[data-theme="dark"] .temp-side {
+  color: rgba(255, 255, 255, 0.55);
+}
 .temp-float {
   position: absolute;
   left: 50%;
@@ -1865,11 +1954,27 @@ select {
 }
 
 .temp-vert {
-  height: 92px;
+  height: 110px;
+  width: 120px;
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-top: 10px;
+}
+.temp-tube {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+:root[data-theme="dark"] .temp-tube {
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 .temp-slider {
   width: 100%;
@@ -1877,20 +1982,20 @@ select {
   outline: none;
 }
 .temp-slider--vert {
-  width: 92px; /* becomes height after rotate */
+  width: 110px; /* becomes height after rotate */
   height: 2px;
   transform: rotate(-90deg);
   transform-origin: center;
-  background: linear-gradient(90deg, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.85));
+  background: transparent;
   border-radius: 999px;
 }
 :root[data-theme="dark"] .temp-slider {
-  background: linear-gradient(90deg, rgba(255, 255, 255, 0.25), rgba(255, 255, 255, 0.9));
+  background: transparent;
 }
 .temp-slider::-webkit-slider-thumb {
   appearance: none;
-  width: 12px;
-  height: 12px;
+  width: 11px;
+  height: 11px;
   border-radius: 999px;
   background: #000;
   border: 2px solid #fff;
@@ -1898,12 +2003,6 @@ select {
 :root[data-theme="dark"] .temp-slider::-webkit-slider-thumb {
   background: #fff;
   border-color: #000;
-}
-.temp-sides {
-  margin-top: 10px;
-  display: flex;
-  justify-content: space-between;
-  font-weight: 300;
 }
 
 @media (max-width: 820px) {

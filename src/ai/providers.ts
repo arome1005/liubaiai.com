@@ -12,6 +12,14 @@ function joinUrl(base: string, path: string) {
   return `${b}/${p}`;
 }
 
+/** OpenAI 兼容：仅 OpenAI 默认域名；其它提供方必须显式填写 Base URL，避免误打到 api.openai.com。 */
+export function resolveOpenAiCompatibleBaseUrl(cfg: AiProviderConfig): string {
+  const t = (cfg.baseUrl ?? "").trim();
+  if (t) return t;
+  if (cfg.id === "openai") return "https://api.openai.com/v1";
+  throw new Error(`${cfg.label}：请先在「高级后端配置」填写 Base URL`);
+}
+
 export async function generateWithProvider(args: {
   provider: AiProviderId;
   config: AiProviderConfig;
@@ -23,6 +31,9 @@ export async function generateWithProvider(args: {
   if (provider === "ollama") return generateOllama(config, messages, args.temperature, args.signal);
   if (provider === "openai") return generateOpenAI(config, messages, args.temperature, args.signal);
   if (provider === "doubao") return generateOpenAI(config, messages, args.temperature, args.signal);
+  if (provider === "zhipu") return generateOpenAI(config, messages, args.temperature, args.signal);
+  if (provider === "kimi") return generateOpenAI(config, messages, args.temperature, args.signal);
+  if (provider === "xiaomi") return generateOpenAI(config, messages, args.temperature, args.signal);
   if (provider === "anthropic") return generateAnthropic(config, messages, args.temperature, args.signal);
   return generateGemini(config, messages, args.temperature, args.signal);
 }
@@ -39,6 +50,9 @@ export async function generateWithProviderStream(args: {
   if (provider === "ollama") return generateOllamaStream(config, messages, onDelta, args.temperature, args.signal);
   if (provider === "openai") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
   if (provider === "doubao") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
+  if (provider === "zhipu") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
+  if (provider === "kimi") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
+  if (provider === "xiaomi") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
   // Claude/Gemini：先用可取消的非流式（后续再补真流式）
   return generateWithProvider({ provider, config, messages, temperature: args.temperature, signal: args.signal });
 }
@@ -50,7 +64,7 @@ async function generateOpenAI(
   signal?: AbortSignal,
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
-  const url = joinUrl(cfg.baseUrl ?? "https://api.openai.com/v1", "/chat/completions");
+  const url = joinUrl(resolveOpenAiCompatibleBaseUrl(cfg), "/chat/completions");
   const resp = await fetch(url, {
     method: "POST",
     headers: {
@@ -78,7 +92,7 @@ async function generateOpenAIStream(
   signal?: AbortSignal,
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
-  const url = joinUrl(cfg.baseUrl ?? "https://api.openai.com/v1", "/chat/completions");
+  const url = joinUrl(resolveOpenAiCompatibleBaseUrl(cfg), "/chat/completions");
   const resp = await fetch(url, {
     method: "POST",
     headers: {

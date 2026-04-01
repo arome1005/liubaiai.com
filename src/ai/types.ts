@@ -1,4 +1,15 @@
-export type AiProviderId = "openai" | "anthropic" | "gemini" | "ollama" | "doubao";
+export type AiProviderId =
+  | "openai"
+  | "anthropic"
+  | "gemini"
+  | "ollama"
+  | "doubao"
+  /** 智谱 GLM（OpenAI 兼容） */
+  | "zhipu"
+  /** Kimi / Moonshot（OpenAI 兼容） */
+  | "kimi"
+  /** 小米 MiMo 等（OpenAI 兼容；Base URL 以官方文档为准） */
+  | "xiaomi";
 
 export type AiProviderConfig = {
   id: AiProviderId;
@@ -19,6 +30,9 @@ export type AiSettings = {
   gemini: AiProviderConfig;
   ollama: AiProviderConfig;
   doubao: AiProviderConfig;
+  zhipu: AiProviderConfig;
+  kimi: AiProviderConfig;
+  xiaomi: AiProviderConfig;
   /**
    * AI 隐私与上传范围（仅对“非本机模型”生效）。
    * 注意：本项目为纯前端直连；只要发起请求，就会把本次 prompt 发往对应提供方。

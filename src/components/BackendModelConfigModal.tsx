@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import type { AiProviderId, AiProviderConfig, AiSettings } from "../ai/types";
+import { getProviderConfig, patchProviderConfig } from "../ai/storage";
+import { resolveOpenAiCompatibleBaseUrl } from "../ai/providers";
 
 type ProviderTestState =
   | { status: "idle" }
@@ -66,24 +68,6 @@ function saveGeminiModelHealth(next: GeminiModelHealth) {
   }
 }
 
-function getCfg(s: AiSettings, id: AiProviderId): AiProviderConfig {
-  if (id === "openai") return s.openai;
-  if (id === "anthropic") return s.anthropic;
-  if (id === "gemini") return s.gemini;
-  if (id === "doubao") return s.doubao;
-  return s.ollama;
-}
-
-function setCfg(s: AiSettings, id: AiProviderId, patch: Partial<AiProviderConfig>): AiSettings {
-  const cur = getCfg(s, id);
-  const next = { ...cur, ...patch };
-  if (id === "openai") return { ...s, openai: next };
-  if (id === "anthropic") return { ...s, anthropic: next };
-  if (id === "gemini") return { ...s, gemini: next };
-  if (id === "doubao") return { ...s, doubao: next };
-  return { ...s, ollama: next };
-}
-
 async function testGeminiModel(args: { cfg: AiProviderConfig; modelOverride?: string }): Promise<string> {
   const baseUrl = (args.cfg.baseUrl ?? "").trim() || "https://generativelanguage.googleapis.com";
   const key = (args.cfg.apiKey ?? "").trim();
@@ -110,7 +94,7 @@ async function testGeminiModel(args: { cfg: AiProviderConfig; modelOverride?: st
 }
 
 async function testOpenAICompatibleModel(args: { cfg: AiProviderConfig; model: string }): Promise<void> {
-  const baseUrl = (args.cfg.baseUrl ?? "").trim() || "https://api.openai.com/v1";
+  const baseUrl = resolveOpenAiCompatibleBaseUrl(args.cfg);
   const key = (args.cfg.apiKey ?? "").trim();
   if (!key) throw new Error("请先填写 API Key");
   const url = joinUrl(baseUrl, "/chat/completions");
@@ -197,6 +181,9 @@ export function BackendModelConfigModal(props: {
     anthropic: loadModelHealth("anthropic"),
     gemini: loadModelHealth("gemini"),
     doubao: loadModelHealth("doubao"),
+    zhipu: loadModelHealth("zhipu"),
+    kimi: loadModelHealth("kimi"),
+    xiaomi: loadModelHealth("xiaomi"),
     ollama: loadModelHealth("ollama"),
   });
   const [modelHealthDirty, setModelHealthDirty] = useState<Record<AiProviderId, boolean>>({
@@ -204,6 +191,9 @@ export function BackendModelConfigModal(props: {
     anthropic: false,
     gemini: false,
     doubao: false,
+    zhipu: false,
+    kimi: false,
+    xiaomi: false,
     ollama: false,
   });
   const [modelBatch, setModelBatch] = useState<Record<AiProviderId, { running: boolean; idx: number; total: number }>>({
@@ -211,6 +201,9 @@ export function BackendModelConfigModal(props: {
     anthropic: { running: false, idx: 0, total: 0 },
     gemini: { running: false, idx: 0, total: 0 },
     doubao: { running: false, idx: 0, total: 0 },
+    zhipu: { running: false, idx: 0, total: 0 },
+    kimi: { running: false, idx: 0, total: 0 },
+    xiaomi: { running: false, idx: 0, total: 0 },
     ollama: { running: false, idx: 0, total: 0 },
   });
   const [modelLists, setModelLists] = useState<Record<AiProviderId, string[]>>({
@@ -218,6 +211,9 @@ export function BackendModelConfigModal(props: {
     anthropic: [],
     gemini: [],
     doubao: [],
+    zhipu: [],
+    kimi: [],
+    xiaomi: [],
     ollama: [],
   });
   const [showKey, setShowKey] = useState<Record<AiProviderId, boolean>>({
@@ -225,6 +221,9 @@ export function BackendModelConfigModal(props: {
     anthropic: false,
     gemini: false,
     doubao: false,
+    zhipu: false,
+    kimi: false,
+    xiaomi: false,
     ollama: false,
   });
   const [testState, setTestState] = useState<Record<AiProviderId, ProviderTestState>>({
@@ -232,6 +231,9 @@ export function BackendModelConfigModal(props: {
     anthropic: { status: "idle" },
     gemini: { status: "idle" },
     doubao: { status: "idle" },
+    zhipu: { status: "idle" },
+    kimi: { status: "idle" },
+    xiaomi: { status: "idle" },
     ollama: { status: "idle" },
   });
 
@@ -241,6 +243,9 @@ export function BackendModelConfigModal(props: {
       { id: "anthropic" as const, label: "听雨", title: "Claude（听雨）" },
       { id: "gemini" as const, label: "观云", title: "Gemini（观云）" },
       { id: "doubao" as const, label: "燎原", title: "豆包（燎原）" },
+      { id: "zhipu" as const, label: "智谱", title: "智谱 GLM" },
+      { id: "kimi" as const, label: "Kimi", title: "Kimi（Moonshot）" },
+      { id: "xiaomi" as const, label: "小米", title: "小米 MiMo" },
       { id: "ollama" as const, label: "潜龙", title: "Ollama（潜龙）" },
     ] satisfies Array<{ id: AiProviderId; label: string; title: string }>;
   }, []);
@@ -278,10 +283,28 @@ export function BackendModelConfigModal(props: {
                   saveGeminiModelHealth(geminiHealth);
                   setGeminiHealthDirty(false);
                 }
-                for (const p of ["openai", "anthropic", "gemini", "doubao", "ollama"] as AiProviderId[]) {
+                for (const p of [
+                  "openai",
+                  "anthropic",
+                  "gemini",
+                  "doubao",
+                  "zhipu",
+                  "kimi",
+                  "xiaomi",
+                  "ollama",
+                ] as AiProviderId[]) {
                   if (modelHealthDirty[p]) saveModelHealth(p, modelHealth[p]);
                 }
-                setModelHealthDirty({ openai: false, anthropic: false, gemini: false, doubao: false, ollama: false });
+                setModelHealthDirty({
+                  openai: false,
+                  anthropic: false,
+                  gemini: false,
+                  doubao: false,
+                  zhipu: false,
+                  kimi: false,
+                  xiaomi: false,
+                  ollama: false,
+                });
                 props.onSave();
               }}
             >
@@ -332,7 +355,7 @@ export function BackendModelConfigModal(props: {
               <section className="backend-panel">
                 <h3 style={{ margin: 0 }}>AI 隐私与上传范围</h3>
                 <p className="muted small" style={{ marginTop: 6 }}>
-                  只要你点击「生成」，本次提示词会发送到你选择的提供方。选择 OpenAI / Claude / Gemini / 豆包 即代表会通过网络发送内容到第三方服务。
+                  只要你点击「生成」，本次提示词会发送到你选择的提供方。选择 OpenAI / Claude / Gemini / 豆包 / 智谱 / Kimi / 小米 等云端模型即代表会通过网络发送内容到第三方服务。
                 </p>
 
                 <label className="row row--check" style={{ marginTop: 10 }}>
@@ -361,7 +384,7 @@ export function BackendModelConfigModal(props: {
                     checked={settings.privacy.allowCloudProviders}
                     onChange={(e) => onChange({ ...settings, privacy: { ...settings.privacy, allowCloudProviders: e.target.checked } })}
                   />
-                  <span>允许使用云端提供方（OpenAI / Claude / Gemini / 豆包）</span>
+                  <span>允许使用云端提供方（OpenAI / Claude / Gemini / 豆包 / 智谱 / Kimi / 小米 等）</span>
                 </label>
 
                 <details className="backend-details" style={{ marginTop: 10 }}>
@@ -410,6 +433,9 @@ export function BackendModelConfigModal(props: {
                       <option value="anthropic">听雨</option>
                       <option value="gemini">观云</option>
                       <option value="doubao">燎原</option>
+                      <option value="zhipu">智谱</option>
+                      <option value="kimi">Kimi</option>
+                      <option value="xiaomi">小米</option>
                       <option value="ollama">潜龙</option>
                     </select>
                   </label>
@@ -443,7 +469,7 @@ export function BackendModelConfigModal(props: {
             {providers.some((p) => p.id === nav) ? (
               (() => {
                 const id = nav as AiProviderId;
-                const cfg = getCfg(settings, id);
+                const cfg = getProviderConfig(settings, id);
                 const s = testState[id];
                 const keyShown = showKey[id];
                 const isGemini = id === "gemini";
@@ -469,12 +495,12 @@ export function BackendModelConfigModal(props: {
                               setModelBatch((m) => ({ ...m, [id]: { running: true, idx: 0, total: models.length } }));
                               setTestState((prev) => ({ ...prev, [id]: { status: "testing" } }));
                               void (async () => {
-                                const baseCfg = getCfg(settings, id);
+                                const baseCfg = getProviderConfig(settings, id);
                                 for (let i = 0; i < models.length; i++) {
                                   const model = models[i]!;
                                   setModelBatch((m) => ({ ...m, [id]: { running: true, idx: i + 1, total: models.length } }));
                                   try {
-                                    if (id === "openai" || id === "doubao") {
+                                    if (id === "openai" || id === "doubao" || id === "zhipu" || id === "kimi" || id === "xiaomi") {
                                       await testOpenAICompatibleModel({ cfg: baseCfg, model });
                                     } else if (id === "anthropic") {
                                       await testAnthropicModel({ cfg: baseCfg, model });
@@ -504,7 +530,7 @@ export function BackendModelConfigModal(props: {
                             setGeminiBatch({ running: true, idx: 0, total: geminiPresetModels.length });
                             setTestState((prev) => ({ ...prev, gemini: { status: "testing" } }));
                             void (async () => {
-                              const baseCfg = getCfg(settings, "gemini");
+                              const baseCfg = getProviderConfig(settings, "gemini");
                               for (let i = 0; i < geminiPresetModels.length; i++) {
                                 const m = geminiPresetModels[i]!;
                                 setGeminiBatch({ running: true, idx: i + 1, total: geminiPresetModels.length });
@@ -545,7 +571,7 @@ export function BackendModelConfigModal(props: {
                         <div className="backend-label muted small">Base URL</div>
                         <input
                           value={cfg.baseUrl ?? ""}
-                          onChange={(e) => onChange(setCfg(settings, id, { baseUrl: e.target.value }))}
+                          onChange={(e) => onChange(patchProviderConfig(settings, id, { baseUrl: e.target.value }))}
                           placeholder={
                             id === "openai"
                               ? "https://api.openai.com/v1"
@@ -555,7 +581,13 @@ export function BackendModelConfigModal(props: {
                                   ? "https://generativelanguage.googleapis.com"
                                   : id === "doubao"
                                     ? "https://ark.cn-beijing.volces.com/api/v3"
-                                    : "http://localhost:11434"
+                                    : id === "zhipu"
+                                      ? "https://open.bigmodel.cn/api/paas/v4"
+                                      : id === "kimi"
+                                        ? "https://api.moonshot.cn/v1"
+                                        : id === "xiaomi"
+                                          ? "（见小米开放平台文档中的 OpenAI 兼容根路径）"
+                                          : "http://localhost:11434"
                           }
                         />
                       </label>
@@ -566,7 +598,7 @@ export function BackendModelConfigModal(props: {
                           <input
                             type={keyShown ? "text" : "password"}
                             value={cfg.apiKey ?? ""}
-                            onChange={(e) => onChange(setCfg(settings, id, { apiKey: e.target.value }))}
+                            onChange={(e) => onChange(patchProviderConfig(settings, id, { apiKey: e.target.value }))}
                             placeholder={id === "ollama" ? "（Ollama 通常不需要）" : ""}
                             disabled={id === "ollama"}
                           />
@@ -586,7 +618,7 @@ export function BackendModelConfigModal(props: {
                           <div style={{ display: "grid", gap: 8 }}>
                             <select
                               value={cfg.model}
-                              onChange={(e) => onChange(setCfg(settings, id, { model: e.target.value }))}
+                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
                             >
                               {geminiPresetModels.map((m) => (
                                 <option key={m} value={m}>
@@ -604,11 +636,11 @@ export function BackendModelConfigModal(props: {
                                   setTestState((prev) => ({ ...prev, gemini: { status: "testing" } }));
                                   void (async () => {
                                     try {
-                                      const msg = await testGeminiModel({ cfg: getCfg(settings, "gemini") });
+                                      const msg = await testGeminiModel({ cfg: getProviderConfig(settings, "gemini") });
                                       setTestState((prev) => ({ ...prev, gemini: { status: "ok", message: msg } }));
                                       setGeminiHealth((h) => ({
                                         ...h,
-                                        [getCfg(settings, "gemini").model]: { verdict: "ok", testedAt: Date.now() },
+                                        [getProviderConfig(settings, "gemini").model]: { verdict: "ok", testedAt: Date.now() },
                                       }));
                                       setGeminiHealthDirty(true);
                                     } catch (e) {
@@ -616,7 +648,7 @@ export function BackendModelConfigModal(props: {
                                       setTestState((prev) => ({ ...prev, gemini: { status: "err", message: msg } }));
                                       setGeminiHealth((h) => ({
                                         ...h,
-                                        [getCfg(settings, "gemini").model]: { verdict: "err", testedAt: Date.now() },
+                                        [getProviderConfig(settings, "gemini").model]: { verdict: "err", testedAt: Date.now() },
                                       }));
                                       setGeminiHealthDirty(true);
                                     }
@@ -634,7 +666,7 @@ export function BackendModelConfigModal(props: {
                             </p>
                             <input
                               value={cfg.model}
-                              onChange={(e) => onChange(setCfg(settings, id, { model: e.target.value }))}
+                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
                               placeholder="例如：gemini-3.1-pro-preview"
                             />
 
@@ -668,7 +700,7 @@ export function BackendModelConfigModal(props: {
                           <div style={{ display: "grid", gap: 10 }}>
                             <input
                               value={cfg.model}
-                              onChange={(e) => onChange(setCfg(settings, id, { model: e.target.value }))}
+                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
                               placeholder="当前默认 model"
                             />
 
