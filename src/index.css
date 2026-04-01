@@ -70,19 +70,28 @@ body {
   overflow: hidden; /* make each column scroll independently */
 }
 
-/* AppShell layout */
+/* AppShell / EditorShell layout */
 .app-shell {
   height: 100vh;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--shell-right-w);
   grid-template-rows: 1fr;
   background: var(--bg);
 }
 
-.app-shell--right-closed {
+/* 全局导航页：单栏，无右侧 AI 栏 */
+.app-shell--app {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* 写作全屏壳：主区 + 右侧栏（AI 等仅在此出现） */
+.app-shell--editor {
+  grid-template-columns: minmax(0, 1fr) var(--shell-right-w);
+}
+
+.app-shell--editor.app-shell--right-closed {
   grid-template-columns: minmax(0, 1fr) 0;
 }
-.app-shell--right-closed .app-right {
+.app-shell--editor.app-shell--right-closed .app-right {
   display: none;
 }
 
@@ -96,6 +105,36 @@ body {
   height: 100%;
   display: flex;
   flex-direction: column;
+}
+
+/* 写作：无顶栏七导航，主区铺满；编辑页自带 padding */
+.app-shell--editor .app-main--editor {
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-topbar--editor {
+  flex-shrink: 0;
+}
+
+.app-topbar-left--editor {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.app-topbar-left--editor .app-topbar-title {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.app-editor-back {
+  flex-shrink: 0;
 }
 
 .app-masthead {
@@ -284,6 +323,12 @@ body {
   display: flex;
   gap: 0.5rem;
   align-items: center;
+}
+
+.app-topbar-actions--editor {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: min(100%, 52rem);
 }
 
 .editor-topbar-actions {
@@ -506,15 +551,15 @@ body {
   gap: 0.5rem;
 }
 
-/* Responsive: switch right rail to drawer */
+/* Responsive: switch right rail to drawer（仅写作壳） */
 @media (max-width: 1100px) {
-  .app-shell {
+  .app-shell--editor {
     grid-template-columns: minmax(0, 1fr);
   }
-  .app-shell--right-closed {
+  .app-shell--editor.app-shell--right-closed {
     grid-template-columns: minmax(0, 1fr);
   }
-  .app-shell--right-closed .app-right {
+  .app-shell--editor.app-shell--right-closed .app-right {
     display: block;
   }
 
@@ -2451,9 +2496,7 @@ select {
     border-right: none;
     border-bottom: 1px solid var(--typora-border);
   }
-  .ai-panel {
-    display: none;
-  }
+  /* 勿全局隐藏 .ai-panel：AiPanel 已挂在 EditorShell 右侧栏，全局隐藏会导致「打开右栏」空白 */
 }
 
 .editor-textarea {

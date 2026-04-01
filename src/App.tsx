@@ -5,6 +5,7 @@ import { LibraryPage } from "./pages/LibraryPage";
 import { LogicPage } from "./pages/LogicPage";
 import { InspirationPage } from "./pages/InspirationPage";
 import { ChatPage } from "./pages/ChatPage";
+import { ShengHuiPage } from "./pages/ShengHuiPage";
 import { BiblePage } from "./pages/BiblePage";
 import { EditorPage } from "./pages/EditorPage";
 import { SummaryOverviewPage } from "./pages/SummaryOverviewPage";
@@ -14,6 +15,7 @@ import { PrivacyPage } from "./pages/PrivacyPage";
 import { TermsPage } from "./pages/TermsPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { AppShell } from "./components/AppShell";
+import { EditorShell } from "./components/EditorShell";
 import { applyThemePreference, readThemePreference, THEME_KEY } from "./theme";
 
 const FONT_KEY = "liubai:fontSizePx";
@@ -42,15 +44,18 @@ export default function App() {
   return (
     <ErrorBoundary>
       <Routes>
+        <Route element={<EditorShell />}>
+          <Route path="/work/:workId" element={<EditorPage />} />
+        </Route>
         <Route element={<AppShell />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/logic" element={<LogicPage />} />
           <Route path="/inspiration" element={<InspirationPage />} />
           <Route path="/chat" element={<ChatPage />} />
+          <Route path="/sheng-hui" element={<ShengHuiPage />} />
           <Route path="/work/:workId/bible" element={<BiblePage />} />
           <Route path="/work/:workId/summary" element={<SummaryOverviewPage />} />
-          <Route path="/work/:workId" element={<EditorPage />} />
           <Route path="/reference" element={<ReferenceLibraryPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/privacy" element={<PrivacyPage />} />

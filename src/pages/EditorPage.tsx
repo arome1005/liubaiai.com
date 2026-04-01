@@ -172,7 +172,7 @@ export function EditorPage() {
     [inspirationList, activeId],
   );
 
-  // Mount AI panel into global right rail (AppShell)
+  // Mount AI 等面板到写作壳右侧栏（仅 EditorShell）
   useEffect(() => {
     if (!workId || !work) return;
     rightRail.setTabEnabled("ai", true);
@@ -1520,7 +1520,7 @@ export function EditorPage() {
           </div>
         </main>
 
-        {/* AI 面板已迁移到全局右侧栏（AppShell） */}
+        {/* AI 面板已迁移到全局右侧栏（EditorShell / AppShell） */}
       </div>
 
       {summaryOpen && activeChapter && (

@@ -28,14 +28,13 @@ export function HomePage() {
 
   const featureLinks = useMemo(() => {
     const plotTo = lastWorkId ? `/work/${lastWorkId}/bible` : "/library";
-    const writeTo = lastWorkId ? `/work/${lastWorkId}` : "/library";
     return [
       { to: "/library", label: "留白" },
       { to: "/logic", label: "推演" },
       { to: "/inspiration", label: "流光" },
       { to: "/chat", label: "问策" },
       { to: plotTo, label: "落笔" },
-      { to: writeTo, label: "生辉" },
+      { to: "/sheng-hui", label: "生辉" },
       { to: "/reference", label: "藏经" },
     ];
   }, [lastWorkId]);
