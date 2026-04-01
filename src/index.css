@@ -1449,6 +1449,24 @@ select {
   border-color: var(--border);
 }
 
+/* Provider logos (model picker) */
+.provider-logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--fg);
+}
+.provider-logo img {
+  display: block;
+}
+
 /* “燎原（豆包）”在深色模式下选中时呈余烬红 */
 :root[data-theme="dark"] .model-picker-item.is-active[data-provider="doubao"] {
   color: #8b0000;

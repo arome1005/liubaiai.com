@@ -53,42 +53,23 @@ export function AiPanel(props: {
   function ProviderLogo(props: { provider: AiProviderId }) {
     const p = props.provider;
     const imgSrc =
-      p === "ollama"
-        ? "/logos/ollama.png"
-        : p === "gemini"
-          ? "/logos/gemini.png"
-          : p === "doubao"
-            ? "/logos/doubao.png"
-            : null;
-    const bg =
       p === "openai"
-        ? "linear-gradient(135deg, #0ea5e9, #2563eb)"
+        ? "/logos/openai.png"
         : p === "anthropic"
-          ? "linear-gradient(135deg, #a855f7, #db2777)"
+          ? "/logos/claude.png"
           : p === "gemini"
-            ? "linear-gradient(135deg, #22c55e, #14b8a6)"
-            : p === "doubao"
-              ? "transparent"
-            : "linear-gradient(135deg, #111827, #6b7280)";
+            ? "/logos/gemini.png"
+            : p === "ollama"
+              ? "/logos/ollama.png"
+              : p === "doubao"
+                ? "/logos/doubao.png"
+                : null;
     const text = p === "openai" ? "" : p === "anthropic" ? "雨" : p === "gemini" ? "云" : p === "doubao" ? "豆" : "龙";
     return (
       <span
         aria-hidden
-        style={{
-          width: 22,
-          height: 22,
-          borderRadius: 8,
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          background: bg,
-          color: p === "doubao" ? "currentColor" : "#fff",
-          fontWeight: 800,
-          fontSize: 12,
-          letterSpacing: "-0.02em",
-          flexShrink: 0,
-          overflow: "hidden",
-        }}
+        className="provider-logo"
+        data-provider={p}
         title={p}
       >
         {imgSrc ? (
@@ -97,30 +78,14 @@ export function AiPanel(props: {
             alt=""
             width={22}
             height={22}
-            style={{ display: "block", width: 22, height: 22, objectFit: "cover" }}
+            style={{ display: "block", width: 22, height: 22, objectFit: "contain" }}
             onError={(e) => {
               // Fallback to text badge if image not present.
               (e.currentTarget as HTMLImageElement).style.display = "none";
             }}
           />
         ) : null}
-        {p === "openai" ? (
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 100 100"
-            fill="none"
-            width="16"
-            height="16"
-            aria-hidden
-            focusable="false"
-            style={{ display: "block" }}
-          >
-            <path
-              d="M79 50C79 33.9837 66.0163 21 50 21C33.9837 21 21 33.9837 21 50C21 66.0163 33.9837 79 50 79C66.0163 79 79 66.0163 79 50ZM50 72C37.8497 72 28 62.1503 28 50C28 37.8497 37.8497 28 50 28C62.1503 28 72 37.8497 72 50C72 62.1503 62.1503 72 50 72Z"
-              fill="white"
-            />
-          </svg>
-        ) : p === "doubao" ? (
+        {p === "doubao" ? (
           // Minimal linear flame icon (uses currentColor)
           <svg
             xmlns="http://www.w3.org/2000/svg"
