@@ -9,10 +9,34 @@ type ProviderTestState =
 
 type NavId = "privacy" | "defaults" | AiProviderId;
 
+type GeminiModelVerdict = "ok" | "err";
+type GeminiModelHealth = Record<string, { verdict: GeminiModelVerdict; testedAt: number }>;
+
+const GEMINI_HEALTH_KEY = "liubai:geminiModelHealth";
+
 function joinUrl(base: string, path: string) {
   const b = base.replace(/\/+$/, "");
   const p = path.replace(/^\/+/, "");
   return `${b}/${p}`;
+}
+
+function loadGeminiModelHealth(): GeminiModelHealth {
+  try {
+    const raw = localStorage.getItem(GEMINI_HEALTH_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as GeminiModelHealth;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveGeminiModelHealth(next: GeminiModelHealth) {
+  try {
+    localStorage.setItem(GEMINI_HEALTH_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
 }
 
 function getCfg(s: AiSettings, id: AiProviderId): AiProviderConfig {
@@ -128,6 +152,8 @@ export function BackendModelConfigModal(props: {
 }) {
   const { open, settings, onChange } = props;
   const [nav, setNav] = useState<NavId>("privacy");
+  const [geminiHealth, setGeminiHealth] = useState<GeminiModelHealth>(() => loadGeminiModelHealth());
+  const [geminiHealthDirty, setGeminiHealthDirty] = useState(false);
   const [showKey, setShowKey] = useState<Record<AiProviderId, boolean>>({
     openai: false,
     anthropic: false,
@@ -177,7 +203,18 @@ export function BackendModelConfigModal(props: {
             <div className="muted small">保存在本机 localStorage；纯前端直连可能遇到 CORS。</div>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <button type="button" className="btn" onClick={props.onSave}>
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                // Persist model-version test results only when user saves.
+                if (geminiHealthDirty) {
+                  saveGeminiModelHealth(geminiHealth);
+                  setGeminiHealthDirty(false);
+                }
+                props.onSave();
+              }}
+            >
               保存
             </button>
             <button type="button" className="btn ghost" onClick={props.onClose}>
@@ -439,9 +476,19 @@ export function BackendModelConfigModal(props: {
                                     try {
                                       const msg = await testGeminiModel({ cfg: getCfg(settings, "gemini") });
                                       setTestState((prev) => ({ ...prev, gemini: { status: "ok", message: msg } }));
+                                      setGeminiHealth((h) => ({
+                                        ...h,
+                                        [getCfg(settings, "gemini").model]: { verdict: "ok", testedAt: Date.now() },
+                                      }));
+                                      setGeminiHealthDirty(true);
                                     } catch (e) {
                                       const msg = e instanceof Error ? e.message : "连接失败";
                                       setTestState((prev) => ({ ...prev, gemini: { status: "err", message: msg } }));
+                                      setGeminiHealth((h) => ({
+                                        ...h,
+                                        [getCfg(settings, "gemini").model]: { verdict: "err", testedAt: Date.now() },
+                                      }));
+                                      setGeminiHealthDirty(true);
                                     }
                                   })();
                                 }}
@@ -460,6 +507,32 @@ export function BackendModelConfigModal(props: {
                               onChange={(e) => onChange(setCfg(settings, id, { model: e.target.value }))}
                               placeholder="例如：gemini-3.1-pro-preview"
                             />
+
+                            <div className="backend-health">
+                              <div className="backend-health-head">
+                                <div style={{ fontWeight: 800 }}>本 App 可用版本（测试结果）</div>
+                                <div className="muted small">
+                                  {geminiHealthDirty ? "（未保存）" : "（已保存）"}
+                                </div>
+                              </div>
+                              <div className="backend-health-list">
+                                {geminiPresetModels.map((m) => {
+                                  const r = geminiHealth[m];
+                                  const mark = r?.verdict === "ok" ? "✅" : r?.verdict === "err" ? "❌" : "—";
+                                  return (
+                                    <div key={m} className="backend-health-row">
+                                      <span className="backend-health-model">{m}</span>
+                                      <span className="backend-health-mark" aria-label={mark}>
+                                        {mark}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <p className="muted small" style={{ marginTop: 8 }}>
+                                说明：结果来源于你点击“测试该模型版本”的实时请求；点击右上角“保存”后会被记住。
+                              </p>
+                            </div>
                           </div>
                         ) : (
                           <input

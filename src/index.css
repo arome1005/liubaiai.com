@@ -1604,6 +1604,45 @@ select {
   user-select: none;
   font-weight: 700;
 }
+
+.backend-health {
+  margin-top: 14px;
+  border: 1px dashed rgba(180, 180, 180, 0.5);
+  border-radius: 12px;
+  padding: 12px 12px;
+  background: rgba(255, 255, 255, 0.55);
+}
+.backend-health-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+.backend-health-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+.backend-health-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(180, 180, 180, 0.25);
+  background: rgba(255, 255, 255, 0.75);
+}
+.backend-health-model {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.backend-health-mark {
+  flex: 0 0 auto;
+}
 .backend-provider-actions {
   display: inline-flex;
   align-items: center;
@@ -1629,6 +1668,14 @@ select {
 }
 :root[data-theme="dark"] .backend-modal {
   background: rgba(0, 0, 0, 0.86);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+:root[data-theme="dark"] .backend-health {
+  background: rgba(0, 0, 0, 0.38);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+:root[data-theme="dark"] .backend-health-row {
+  background: rgba(0, 0, 0, 0.65);
   border-color: rgba(255, 255, 255, 0.12);
 }
 :root[data-theme="dark"] .backend-modal-head,
