@@ -52,7 +52,8 @@ export function AiPanel(props: {
 }) {
   function ProviderLogo(props: { provider: AiProviderId }) {
     const p = props.provider;
-    const imgSrc = p === "ollama" ? "/logos/ollama.png" : null;
+    const imgSrc =
+      p === "ollama" ? "/logos/ollama.png" : p === "gemini" ? "/logos/gemini.png" : null;
     const bg =
       p === "openai"
         ? "linear-gradient(135deg, #0ea5e9, #2563eb)"

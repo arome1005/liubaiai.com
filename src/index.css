@@ -121,12 +121,25 @@ body {
 }
 
 .app-brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
   font-weight: 800;
   letter-spacing: -0.02em;
   color: inherit;
+  text-decoration: none;
 }
 .app-brand-link:hover {
   text-decoration: none;
+}
+.app-brand-mark {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: block;
+  box-shadow: var(--shadow-sm);
 }
 
 .app-nav-links {
@@ -469,8 +482,12 @@ body {
 /* When nav collapsed, hide text labels */
 .app-shell--nav-collapsed .app-nav-text,
 .app-shell--nav-collapsed .app-nav-group-title,
-.app-shell--nav-collapsed .app-brand-link {
+.app-shell--nav-collapsed .app-brand-text {
   display: none;
+}
+.app-shell--nav-collapsed .app-brand-link {
+  justify-content: center;
+  width: 100%;
 }
 .app-shell--nav-collapsed .app-nav {
   padding-left: 0.4rem;

@@ -212,7 +212,8 @@ export function AppShell() {
       <aside className={"app-nav" + (navOpenMobile ? " open" : "")} aria-label="主导航">
         <div className="app-brand">
           <Link to="/" className="app-brand-link" title="回到作品库">
-            留白写作
+            <img className="app-brand-mark" src="/favicon.svg" alt="" width={28} height={28} />
+            <span className="app-brand-text">留白写作</span>
           </Link>
         </div>
 
