@@ -218,16 +218,6 @@ export function BackendModelConfigModal(props: {
     xiaomi: { running: false, idx: 0, total: 0 },
     ollama: { running: false, idx: 0, total: 0 },
   });
-  const [modelLists, setModelLists] = useState<Record<AiProviderId, string[]>>({
-    openai: [],
-    anthropic: [],
-    gemini: [],
-    doubao: [],
-    zhipu: [],
-    kimi: [],
-    xiaomi: [],
-    ollama: [],
-  });
   const [showKey, setShowKey] = useState<Record<AiProviderId, boolean>>({
     openai: false,
     anthropic: false,
@@ -272,6 +262,24 @@ export function BackendModelConfigModal(props: {
     [],
   );
 
+  /** 见山：常用 OpenAI 模型 ID（可手动覆盖） */
+  const openaiPresetModels = useMemo(() => ["gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3-mini"], []);
+
+  /** 听雨：常用 Claude 模型 ID */
+  const anthropicPresetModels = useMemo(
+    () => ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-sonnet-4-20250514"],
+    [],
+  );
+
+  /** 燎原：豆包 Ark 常用（以控制台为准） */
+  const doubaoPresetModels = useMemo(() => ["doubao-seed-1.6", "doubao-seed-1.6-250615"], []);
+
+  /** Kimi：Moonshot 常用 */
+  const kimiPresetModels = useMemo(
+    () => ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k", "kimi-k2.5-turbo-preview"],
+    [],
+  );
+
   /** 小米 MiMo 写作常用（文档另有 omni/tts 等可手动填写） */
   const xiaomiWritingModels = useMemo(() => ["mimo-v2-pro", "mimo-v2-flash"] as const, []);
 
@@ -286,6 +294,28 @@ export function BackendModelConfigModal(props: {
       ] as const,
     [],
   );
+
+  /** 一键测试 / 底部健康表：各云端预置模型 ID（Ollama 走本地检测） */
+  function presetModelIdsForProvider(pid: AiProviderId): string[] | null {
+    switch (pid) {
+      case "openai":
+        return [...openaiPresetModels];
+      case "anthropic":
+        return [...anthropicPresetModels];
+      case "doubao":
+        return [...doubaoPresetModels];
+      case "zhipu":
+        return zhipuPresetModels.map((x) => x.id);
+      case "kimi":
+        return [...kimiPresetModels];
+      case "xiaomi":
+        return [...xiaomiWritingModels];
+      case "gemini":
+        return [...geminiPresetModels];
+      default:
+        return null;
+    }
+  }
 
   if (!open) return null;
 
@@ -507,11 +537,11 @@ export function BackendModelConfigModal(props: {
                 const isGemini = id === "gemini";
                 const batch = modelBatch[id];
                 const list =
-                  id === "ollama" && ollamaDetected.length > 0
-                    ? ollamaDetected
-                    : modelLists[id].length
-                      ? modelLists[id]
-                      : [cfg.model].filter(Boolean);
+                  id === "ollama"
+                    ? ollamaDetected.length > 0
+                      ? ollamaDetected
+                      : [cfg.model].filter(Boolean)
+                    : presetModelIdsForProvider(id) ?? [cfg.model].filter(Boolean);
                 return (
                   <section className="backend-panel">
                     <div className="backend-panel-head">
@@ -662,7 +692,9 @@ export function BackendModelConfigModal(props: {
                                   {m}
                                 </option>
                               ))}
-                              <option value={cfg.model}>{cfg.model}</option>
+                              {cfg.model && !geminiPresetModels.includes(cfg.model) ? (
+                                <option value={cfg.model}>{cfg.model}（当前）</option>
+                              ) : null}
                             </select>
                             <div className="backend-provider-actions">
                               <button
@@ -729,7 +761,7 @@ export function BackendModelConfigModal(props: {
                                 })}
                               </div>
                               <p className="muted small" style={{ marginTop: 8 }}>
-                                说明：结果来源于你点击“测试该模型版本”的实时请求；点击右上角“保存”后会被记住。
+                                说明：结果来源于你点击「测试该模型版本」或「一键测试全部版本」的实时请求；点击右上角「保存」后会被记住。
                               </p>
                             </div>
                           </div>
@@ -748,14 +780,6 @@ export function BackendModelConfigModal(props: {
                                 <option value={cfg.model}>{cfg.model}（当前）</option>
                               ) : null}
                             </select>
-                            <p className="muted small" style={{ margin: 0 }}>
-                              写作常用上述二者；其它如 mimo-v2-omni、mimo-v2-tts 请在下框手动填写。
-                            </p>
-                            <input
-                              value={cfg.model}
-                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
-                              placeholder="模型 ID，如 mimo-v2-pro / mimo-v2-flash"
-                            />
                             <div className="backend-provider-actions">
                               <button
                                 type="button"
@@ -764,20 +788,31 @@ export function BackendModelConfigModal(props: {
                                 onClick={() => {
                                   setTestState((prev) => ({ ...prev, xiaomi: { status: "testing" } }));
                                   void (async () => {
+                                    const model = cfg.model.trim() || "mimo-v2-flash";
                                     try {
                                       await testOpenAICompatibleModel({
                                         cfg: getProviderConfig(settings, "xiaomi"),
-                                        model: cfg.model.trim() || "mimo-v2-flash",
+                                        model,
                                       });
                                       setTestState((prev) => ({ ...prev, xiaomi: { status: "ok", message: "连接成功" } }));
+                                      setModelHealth((h) => ({
+                                        ...h,
+                                        xiaomi: { ...h.xiaomi, [model]: { verdict: "ok", testedAt: Date.now() } },
+                                      }));
+                                      setModelHealthDirty((d) => ({ ...d, xiaomi: true }));
                                     } catch (e) {
                                       const msg = e instanceof Error ? e.message : "连接失败";
                                       setTestState((prev) => ({ ...prev, xiaomi: { status: "err", message: msg } }));
+                                      setModelHealth((h) => ({
+                                        ...h,
+                                        xiaomi: { ...h.xiaomi, [model]: { verdict: "err", testedAt: Date.now() } },
+                                      }));
+                                      setModelHealthDirty((d) => ({ ...d, xiaomi: true }));
                                     }
                                   })();
                                 }}
                               >
-                                测试当前模型
+                                测试该模型版本
                               </button>
                               {testState.xiaomi.status === "ok" ? (
                                 <span className="backend-test backend-test--ok">可用</span>
@@ -786,92 +821,21 @@ export function BackendModelConfigModal(props: {
                                 <span className="backend-test backend-test--err">{testState.xiaomi.message}</span>
                               ) : null}
                             </div>
-                          </div>
-                        ) : id === "zhipu" ? (
-                          <div style={{ display: "grid", gap: 10 }}>
-                            <div style={{ display: "grid", gap: 8 }}>
-                              <select
-                                value={cfg.model}
-                                onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
-                              >
-                                {zhipuPresetModels.map((x) => (
-                                  <option key={x.id} value={x.id}>
-                                    {x.label}
-                                  </option>
-                                ))}
-                                {cfg.model && !zhipuPresetModels.some((x) => x.id === cfg.model) ? (
-                                  <option value={cfg.model}>{cfg.model}（当前）</option>
-                                ) : null}
-                              </select>
-                              <p className="muted small" style={{ margin: 0 }}>
-                                写作常用 glm-4.7 / glm-4.7-flash；更强推理与 Agent 场景可试 glm-5。其它名称请在下框粘贴控制台中的 model 字符串。
-                              </p>
-                              <input
-                                value={cfg.model}
-                                onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
-                                placeholder="例如：glm-5 / glm-4.7 / glm-4.7-flash"
-                              />
-                              <div className="backend-provider-actions">
-                                <button
-                                  type="button"
-                                  className="btn small"
-                                  disabled={testState.zhipu.status === "testing"}
-                                  onClick={() => {
-                                    setTestState((prev) => ({ ...prev, zhipu: { status: "testing" } }));
-                                    void (async () => {
-                                      try {
-                                        await testOpenAICompatibleModel({
-                                          cfg: getProviderConfig(settings, "zhipu"),
-                                          model: cfg.model.trim() || "glm-4.7-flash",
-                                        });
-                                        setTestState((prev) => ({ ...prev, zhipu: { status: "ok", message: "连接成功" } }));
-                                      } catch (e) {
-                                        const msg = e instanceof Error ? e.message : "连接失败";
-                                        setTestState((prev) => ({ ...prev, zhipu: { status: "err", message: msg } }));
-                                      }
-                                    })();
-                                  }}
-                                >
-                                  测试当前模型
-                                </button>
-                                {testState.zhipu.status === "ok" ? (
-                                  <span className="backend-test backend-test--ok">可用</span>
-                                ) : null}
-                                {testState.zhipu.status === "err" ? (
-                                  <span className="backend-test backend-test--err">{testState.zhipu.message}</span>
-                                ) : null}
-                              </div>
-                            </div>
-
-                            <details className="backend-details">
-                              <summary>版本清单（逐一测试）</summary>
-                              <p className="muted small" style={{ marginTop: 8 }}>
-                                每行一个版本；点击右上角「一键测试全部版本」会按此清单依次测试，并在下方显示 ✅/❌。
-                              </p>
-                              <textarea
-                                value={list.join("\n")}
-                                onChange={(e) =>
-                                  setModelLists((m) => ({
-                                    ...m,
-                                    [id]: e.target.value
-                                      .split("\n")
-                                      .map((s) => s.trim())
-                                      .filter(Boolean),
-                                  }))
-                                }
-                                rows={6}
-                                style={{ width: "100%", fontFamily: "ui-monospace, Menlo, Monaco, Consolas, monospace" }}
-                                placeholder={"例如：\nglm-5\nglm-4.7\nglm-4.7-flashx\nglm-4.7-flash"}
-                              />
-                            </details>
-
+                            <p className="muted small" style={{ margin: 0 }}>
+                              写作常用上述二者；其它如 mimo-v2-omni、mimo-v2-tts 请在下框手动填写。
+                            </p>
+                            <input
+                              value={cfg.model}
+                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                              placeholder="模型 ID，如 mimo-v2-pro / mimo-v2-flash"
+                            />
                             <div className="backend-health">
                               <div className="backend-health-head">
                                 <div style={{ fontWeight: 800 }}>本 App 可用版本（测试结果）</div>
                                 <div className="muted small">{modelHealthDirty[id] ? "（未保存）" : "（已保存）"}</div>
                               </div>
                               <div className="backend-health-list">
-                                {list.map((m) => {
+                                {xiaomiWritingModels.map((m) => {
                                   const r = modelHealth[id]?.[m];
                                   const mark = r?.verdict === "ok" ? "✅" : r?.verdict === "err" ? "❌" : "—";
                                   return (
@@ -885,7 +849,95 @@ export function BackendModelConfigModal(props: {
                                 })}
                               </div>
                               <p className="muted small" style={{ marginTop: 8 }}>
-                                说明：结果来自右上角「一键测试全部版本」的实时请求；点击右上角「保存」后会被记住。
+                                说明：结果来源于你点击「测试该模型版本」或「一键测试全部版本」的实时请求；点击右上角「保存」后会被记住。
+                              </p>
+                            </div>
+                          </div>
+                        ) : id === "zhipu" ? (
+                          <div style={{ display: "grid", gap: 8 }}>
+                            <select
+                              value={cfg.model}
+                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                            >
+                              {zhipuPresetModels.map((x) => (
+                                <option key={x.id} value={x.id}>
+                                  {x.label}
+                                </option>
+                              ))}
+                              {cfg.model && !zhipuPresetModels.some((x) => x.id === cfg.model) ? (
+                                <option value={cfg.model}>{cfg.model}（当前）</option>
+                              ) : null}
+                            </select>
+                            <div className="backend-provider-actions">
+                              <button
+                                type="button"
+                                className="btn small"
+                                disabled={testState.zhipu.status === "testing"}
+                                onClick={() => {
+                                  setTestState((prev) => ({ ...prev, zhipu: { status: "testing" } }));
+                                  void (async () => {
+                                    const model = cfg.model.trim() || "glm-4.7-flash";
+                                    try {
+                                      await testOpenAICompatibleModel({
+                                        cfg: getProviderConfig(settings, "zhipu"),
+                                        model,
+                                      });
+                                      setTestState((prev) => ({ ...prev, zhipu: { status: "ok", message: "连接成功" } }));
+                                      setModelHealth((h) => ({
+                                        ...h,
+                                        zhipu: { ...h.zhipu, [model]: { verdict: "ok", testedAt: Date.now() } },
+                                      }));
+                                      setModelHealthDirty((d) => ({ ...d, zhipu: true }));
+                                    } catch (e) {
+                                      const msg = e instanceof Error ? e.message : "连接失败";
+                                      setTestState((prev) => ({ ...prev, zhipu: { status: "err", message: msg } }));
+                                      setModelHealth((h) => ({
+                                        ...h,
+                                        zhipu: { ...h.zhipu, [model]: { verdict: "err", testedAt: Date.now() } },
+                                      }));
+                                      setModelHealthDirty((d) => ({ ...d, zhipu: true }));
+                                    }
+                                  })();
+                                }}
+                              >
+                                测试该模型版本
+                              </button>
+                              {testState.zhipu.status === "ok" ? (
+                                <span className="backend-test backend-test--ok">可用</span>
+                              ) : null}
+                              {testState.zhipu.status === "err" ? (
+                                <span className="backend-test backend-test--err">{testState.zhipu.message}</span>
+                              ) : null}
+                            </div>
+                            <p className="muted small" style={{ margin: 0 }}>
+                              写作常用 glm-4.7 / glm-4.7-flash；更强推理与 Agent 场景可试 glm-5。其它名称请在下框粘贴控制台中的 model 字符串。
+                            </p>
+                            <input
+                              value={cfg.model}
+                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                              placeholder="例如：glm-5 / glm-4.7 / glm-4.7-flash"
+                            />
+                            <div className="backend-health">
+                              <div className="backend-health-head">
+                                <div style={{ fontWeight: 800 }}>本 App 可用版本（测试结果）</div>
+                                <div className="muted small">{modelHealthDirty[id] ? "（未保存）" : "（已保存）"}</div>
+                              </div>
+                              <div className="backend-health-list">
+                                {zhipuPresetModels.map((x) => {
+                                  const r = modelHealth[id]?.[x.id];
+                                  const mark = r?.verdict === "ok" ? "✅" : r?.verdict === "err" ? "❌" : "—";
+                                  return (
+                                    <div key={x.id} className="backend-health-row">
+                                      <span className="backend-health-model">{x.id}</span>
+                                      <span className="backend-health-mark" aria-label={mark}>
+                                        {mark}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <p className="muted small" style={{ marginTop: 8 }}>
+                                说明：结果来源于你点击「测试该模型版本」或「一键测试全部版本」的实时请求；点击右上角「保存」后会被记住。
                               </p>
                             </div>
                           </div>
@@ -1023,61 +1075,113 @@ export function BackendModelConfigModal(props: {
                               </p>
                             </div>
                           </div>
-                        ) : (
-                          <div style={{ display: "grid", gap: 10 }}>
-                            <input
-                              value={cfg.model}
-                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
-                              placeholder="当前默认 model"
-                            />
-
-                            <details className="backend-details">
-                              <summary>版本清单（逐一测试）</summary>
-                              <p className="muted small" style={{ marginTop: 8 }}>
-                                每行一个版本；点击右上角“一键测试全部版本”会按此清单依次测试，并在下方显示 ✅/❌。
-                              </p>
-                              <textarea
-                                value={list.join("\n")}
-                                onChange={(e) =>
-                                  setModelLists((m) => ({
-                                    ...m,
-                                    [id]: e.target.value
-                                      .split("\n")
-                                      .map((s) => s.trim())
-                                      .filter(Boolean),
-                                  }))
-                                }
-                                rows={6}
-                                style={{ width: "100%", fontFamily: "ui-monospace, Menlo, Monaco, Consolas, monospace" }}
-                                placeholder="例如：\n<model-1>\n<model-2>"
-                              />
-                            </details>
-
-                            <div className="backend-health">
-                              <div className="backend-health-head">
-                                <div style={{ fontWeight: 800 }}>本 App 可用版本（测试结果）</div>
-                                <div className="muted small">{modelHealthDirty[id] ? "（未保存）" : "（已保存）"}</div>
+                        ) : id === "openai" || id === "anthropic" || id === "doubao" || id === "kimi" ? (
+                          (() => {
+                            const cloudPresets =
+                              id === "openai"
+                                ? openaiPresetModels
+                                : id === "anthropic"
+                                  ? anthropicPresetModels
+                                  : id === "doubao"
+                                    ? doubaoPresetModels
+                                    : kimiPresetModels;
+                            const inPreset = cloudPresets.includes(cfg.model);
+                            return (
+                              <div style={{ display: "grid", gap: 8 }}>
+                                <select
+                                  value={cfg.model}
+                                  onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                                >
+                                  {cloudPresets.map((m) => (
+                                    <option key={m} value={m}>
+                                      {m}
+                                    </option>
+                                  ))}
+                                  {cfg.model && !inPreset ? <option value={cfg.model}>{cfg.model}（当前）</option> : null}
+                                </select>
+                                <div className="backend-provider-actions">
+                                  <button
+                                    type="button"
+                                    className="btn small"
+                                    disabled={testState[id].status === "testing"}
+                                    onClick={() => {
+                                      setTestState((prev) => ({ ...prev, [id]: { status: "testing" } }));
+                                      void (async () => {
+                                        const model = cfg.model.trim() || cloudPresets[0]!;
+                                        try {
+                                          if (id === "anthropic") {
+                                            await testAnthropicModel({
+                                              cfg: getProviderConfig(settings, id),
+                                              model,
+                                            });
+                                          } else {
+                                            await testOpenAICompatibleModel({
+                                              cfg: getProviderConfig(settings, id),
+                                              model,
+                                            });
+                                          }
+                                          setTestState((prev) => ({ ...prev, [id]: { status: "ok", message: "连接成功" } }));
+                                          setModelHealth((h) => ({
+                                            ...h,
+                                            [id]: { ...h[id], [model]: { verdict: "ok", testedAt: Date.now() } },
+                                          }));
+                                          setModelHealthDirty((d) => ({ ...d, [id]: true }));
+                                        } catch (e) {
+                                          const msg = e instanceof Error ? e.message : "连接失败";
+                                          setTestState((prev) => ({ ...prev, [id]: { status: "err", message: msg } }));
+                                          setModelHealth((h) => ({
+                                            ...h,
+                                            [id]: { ...h[id], [model]: { verdict: "err", testedAt: Date.now() } },
+                                          }));
+                                          setModelHealthDirty((d) => ({ ...d, [id]: true }));
+                                        }
+                                      })();
+                                    }}
+                                  >
+                                    测试该模型版本
+                                  </button>
+                                  {testState[id].status === "ok" ? (
+                                    <span className="backend-test backend-test--ok">可用</span>
+                                  ) : null}
+                                  {testState[id].status === "err" ? (
+                                    <span className="backend-test backend-test--err">{testState[id].message}</span>
+                                  ) : null}
+                                </div>
+                                <p className="muted small" style={{ margin: 0 }}>
+                                  你也可以手动输入其它模型字符串（直接粘贴覆盖上方下拉所选值）。
+                                </p>
+                                <input
+                                  value={cfg.model}
+                                  onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                                  placeholder="当前默认 model"
+                                />
+                                <div className="backend-health">
+                                  <div className="backend-health-head">
+                                    <div style={{ fontWeight: 800 }}>本 App 可用版本（测试结果）</div>
+                                    <div className="muted small">{modelHealthDirty[id] ? "（未保存）" : "（已保存）"}</div>
+                                  </div>
+                                  <div className="backend-health-list">
+                                    {cloudPresets.map((m) => {
+                                      const r = modelHealth[id]?.[m];
+                                      const mark = r?.verdict === "ok" ? "✅" : r?.verdict === "err" ? "❌" : "—";
+                                      return (
+                                        <div key={m} className="backend-health-row">
+                                          <span className="backend-health-model">{m}</span>
+                                          <span className="backend-health-mark" aria-label={mark}>
+                                            {mark}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                  <p className="muted small" style={{ marginTop: 8 }}>
+                                    说明：结果来源于你点击「测试该模型版本」或「一键测试全部版本」的实时请求；点击右上角「保存」后会被记住。
+                                  </p>
+                                </div>
                               </div>
-                              <div className="backend-health-list">
-                                {list.map((m) => {
-                                  const r = modelHealth[id]?.[m];
-                                  const mark = r?.verdict === "ok" ? "✅" : r?.verdict === "err" ? "❌" : "—";
-                                  return (
-                                    <div key={m} className="backend-health-row">
-                                      <span className="backend-health-model">{m}</span>
-                                      <span className="backend-health-mark" aria-label={mark}>
-                                        {mark}
-                                      </span>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                              <p className="muted small" style={{ marginTop: 8 }}>
-                                说明：结果来自右上角“一键测试全部版本”的实时请求；点击右上角“保存”后会被记住。
-                              </p>
-                            </div>
-                          </div>
-                        )}
+                            );
+                          })()
+                        ) : null}
                       </label>
                     </div>
                   </section>
