@@ -765,20 +765,7 @@ export function AiPanel(props: {
                         <ProviderLogo provider={pickerActive} />
                         <div>
                           <div style={{ fontWeight: 900, fontSize: 18 }}>
-                            {ui.label}{" "}
-                            <span className="muted small">
-                              (
-                              {pickerActive === "openai"
-                                ? "OpenAI"
-                                : pickerActive === "anthropic"
-                                  ? "Claude"
-                                  : pickerActive === "gemini"
-                                    ? "Gemini"
-                                    : pickerActive === "doubao"
-                                      ? "豆包"
-                                      : "Ollama"}
-                              )
-                            </span>
+                            {ui.label}
                           </div>
                           <div className="muted small">{ui.subtitle}</div>
                         </div>
