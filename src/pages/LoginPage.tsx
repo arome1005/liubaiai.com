@@ -8,6 +8,7 @@ import {
   authRequestRegisterCode,
   type AuthUser,
 } from "../api/auth";
+import { apiUrl } from "../api/base";
 
 function googleErrLabel(code: string): string {
   const map: Record<string, string> = {
@@ -137,7 +138,7 @@ export function LoginPage() {
     setMsg(null);
     setGoogleBusy(true);
     try {
-      const res = await fetch("/api/auth/google/start-url", { credentials: "include" });
+      const res = await fetch(apiUrl("/api/auth/google/start-url"), { credentials: "include" });
       let data: { url?: string; error?: string };
       try {
         data = (await res.json()) as { url?: string; error?: string };

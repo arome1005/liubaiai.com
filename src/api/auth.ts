@@ -1,16 +1,18 @@
+import { apiUrl } from "./base";
+
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 export type AuthUser = { id: string; email: string };
 
 export async function authMe(): Promise<{ user: AuthUser | null }> {
-  const r = await fetch("/api/auth/me", { credentials: "include" });
+  const r = await fetch(apiUrl("/api/auth/me"), { credentials: "include" });
   if (!r.ok) throw new Error("ME_FAILED");
   return r.json() as Promise<{ user: AuthUser | null }>;
 }
 
 /** 发送注册验证码到邮箱（未创建账号） */
 export async function authRequestRegisterCode(email: string): Promise<{ ok: true; dev?: { code: string } }> {
-  const r = await fetch("/api/auth/register/request-code", {
+  const r = await fetch(apiUrl("/api/auth/register/request-code"), {
     method: "POST",
     credentials: "include",
     headers: JSON_HEADERS,
@@ -27,7 +29,7 @@ export async function authRegisterComplete(
   password: string,
   code: string,
 ): Promise<{ user: AuthUser }> {
-  const r = await fetch("/api/auth/register/complete", {
+  const r = await fetch(apiUrl("/api/auth/register/complete"), {
     method: "POST",
     credentials: "include",
     headers: JSON_HEADERS,
@@ -40,7 +42,7 @@ export async function authRegisterComplete(
 }
 
 export async function authLogin(email: string, password: string): Promise<{ user: AuthUser }> {
-  const r = await fetch("/api/auth/login", {
+  const r = await fetch(apiUrl("/api/auth/login"), {
     method: "POST",
     credentials: "include",
     headers: JSON_HEADERS,
@@ -53,13 +55,13 @@ export async function authLogin(email: string, password: string): Promise<{ user
 }
 
 export async function authLogout(): Promise<void> {
-  await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+  await fetch(apiUrl("/api/auth/logout"), { method: "POST", credentials: "include" });
 }
 
 export async function authForgotPassword(
   email: string,
 ): Promise<{ ok: true; dev?: { resetUrl: string } }> {
-  const r = await fetch("/api/auth/forgot-password", {
+  const r = await fetch(apiUrl("/api/auth/forgot-password"), {
     method: "POST",
     credentials: "include",
     headers: JSON_HEADERS,
@@ -71,7 +73,7 @@ export async function authForgotPassword(
 }
 
 export async function authResetPassword(token: string, newPassword: string): Promise<{ user: AuthUser }> {
-  const r = await fetch("/api/auth/reset-password", {
+  const r = await fetch(apiUrl("/api/auth/reset-password"), {
     method: "POST",
     credentials: "include",
     headers: JSON_HEADERS,

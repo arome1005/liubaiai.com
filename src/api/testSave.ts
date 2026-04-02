@@ -1,3 +1,5 @@
+import { apiUrl } from "./base";
+
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
 export type TestSaveResponse = {
@@ -7,7 +9,7 @@ export type TestSaveResponse = {
 };
 
 export async function postTestSave(text: string): Promise<TestSaveResponse> {
-  const r = await fetch("/api/test-save", {
+  const r = await fetch(apiUrl("/api/test-save"), {
     method: "POST",
     credentials: "include",
     headers: JSON_HEADERS,
