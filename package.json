@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "db:test": "node --env-file=backend/.env backend/test-connection.js",
     "db:migrate": "node --env-file=backend/.env backend/migrate.js",
-    "api:dev": "node --env-file=backend/.env backend/server.js"
+    "api:dev": "node --env-file=backend/.env backend/server.js",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

@@ -1,0 +1,27 @@
+# 一键：同一台机子上静态站 + /api 反代到 Fastify（不再出现 /api 落到 index.html）
+# 用法：cp backend/.env.example backend/.env 并填好；然后：
+#   docker compose up -d --build
+# 浏览器访问 http://服务器IP/ （若 80 被占用，改下方 ports 为 "8080:80"）
+services:
+  api:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.api
+    env_file:
+      - backend/.env
+    environment:
+      API_HOST: "0.0.0.0"
+      API_PORT: "8788"
+    expose:
+      - "8788"
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.web
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: unless-stopped
