@@ -7,6 +7,11 @@ export default defineConfig({
   server: {
     /** 小米 MiMo 等 API 常不返回 CORS；开发时走同源代理避免浏览器拦截 fetch */
     proxy: {
+      '/api': {
+        target: 'http://localhost:8788',
+        changeOrigin: true,
+        secure: false,
+      },
       '/__proxy/mimo-v2': {
         target: 'https://api.mimo-v2.com',
         changeOrigin: true,

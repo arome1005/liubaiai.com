@@ -1,5 +1,6 @@
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
+import { authMe, type AuthUser } from "../api/auth";
 import { getWork, listChapters } from "../db/repo";
 import { wordCount } from "../util/wordCount";
 import type { Chapter, Work } from "../db/types";
@@ -16,6 +17,7 @@ function sectionLabelFromPath(pathname: string): string {
   if (pathname === "/library") return "留白";
   if (pathname.startsWith("/reference")) return "藏经";
   if (pathname.startsWith("/settings")) return "设置";
+  if (pathname.startsWith("/login")) return "登录";
   if (pathname.startsWith("/logic")) return "推演";
   if (pathname.startsWith("/inspiration")) return "流光";
   if (pathname.startsWith("/chat")) return "问策";
@@ -52,6 +54,7 @@ export function AppShell() {
 
   const [curWork, setCurWork] = useState<Work | null>(null);
   const [curChapters, setCurChapters] = useState<Chapter[]>([]);
+  const [authUser, setAuthUser] = useState<AuthUser | null | undefined>(undefined);
   const curBookWords = useMemo(() => {
     if (!curChapters.length) return 0;
     return curChapters.reduce((s, c) => s + (c.wordCountCache ?? wordCount(c.content)), 0);
@@ -60,6 +63,21 @@ export function AppShell() {
     if (!curWork?.progressCursor) return "";
     return curChapters.find((c) => c.id === curWork.progressCursor)?.title ?? "";
   }, [curWork?.progressCursor, curChapters]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { user } = await authMe();
+        if (!cancelled) setAuthUser(user);
+      } catch {
+        if (!cancelled) setAuthUser(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname]);
 
   useEffect(() => {
     if (!workIdInPath) {
@@ -89,7 +107,10 @@ export function AppShell() {
     }
   }, [workIdInPath]);
 
-  const hubPaths = useMemo(() => new Set(["/", "/library", "/logic", "/inspiration", "/chat", "/sheng-hui"]), []);
+  const hubPaths = useMemo(
+    () => new Set(["/", "/library", "/logic", "/inspiration", "/chat", "/sheng-hui", "/login"]),
+    [],
+  );
   const showPageTopbar = !hubPaths.has(pathname);
 
   const mastheadNavClass = (extra: string) => `app-masthead-link${extra}`;
@@ -136,6 +157,13 @@ export function AppShell() {
           </nav>
 
           <div className="app-masthead-right">
+            <Link
+              to="/login"
+              className="app-masthead-auth"
+              title={authUser ? authUser.email : "登录"}
+            >
+              {authUser === undefined ? "…" : authUser ? authUser.email.split("@")[0] : "登录"}
+            </Link>
             <Link to="/settings" className="icon-btn app-masthead-settings" title="设置" aria-label="设置">
               <SettingsGearIcon />
             </Link>

@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "db:test": "node --env-file=backend/.env backend/test-connection.js",
+    "db:migrate": "node --env-file=backend/.env backend/migrate.js",
+    "api:dev": "node --env-file=backend/.env backend/server.js"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",
@@ -17,11 +20,19 @@
     "@codemirror/search": "^6.6.0",
     "@codemirror/state": "^6.6.0",
     "@codemirror/view": "^6.40.0",
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/cors": "^11.2.0",
     "@lezer/highlight": "^1.2.3",
+    "bcryptjs": "^3.0.3",
     "dexie": "^4.4.1",
     "docx": "^9.6.1",
+    "dotenv": "^17.4.0",
+    "fastify": "^5.8.4",
+    "jsonwebtoken": "^9.0.3",
     "jszip": "^3.10.1",
     "mammoth": "^1.12.0",
+    "nodemailer": "^6.10.1",
+    "pg": "^8.20.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.13.2"

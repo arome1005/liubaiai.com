@@ -234,6 +234,22 @@ body {
   color: var(--fg);
 }
 
+.app-masthead-auth {
+  font-size: 0.82rem;
+  color: var(--muted);
+  text-decoration: none;
+  max-width: 7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0.25rem 0.35rem;
+  border-radius: var(--radius-sm);
+}
+.app-masthead-auth:hover {
+  color: var(--fg);
+  background: var(--surface-2);
+}
+
 .app-masthead-rail {
   font-size: 0.78rem;
 }
@@ -967,6 +983,11 @@ select {
 .back-link {
   color: var(--accent);
   margin-right: 0.5rem;
+}
+
+.login-page .login-msg {
+  margin-top: 0.75rem;
+  color: var(--fg);
 }
 
 .settings-page .page-header {
