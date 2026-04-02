@@ -54,6 +54,7 @@ export function LoginPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
+  const [googleBusy, setGoogleBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +130,34 @@ export function LoginPage() {
       setMsg(errLabel(e instanceof Error ? e.message : "LOGIN_FAILED"));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onGoogleLogin() {
+    setMsg(null);
+    setGoogleBusy(true);
+    try {
+      const res = await fetch("/api/auth/google/start-url", { credentials: "include" });
+      let data: { url?: string; error?: string };
+      try {
+        data = (await res.json()) as { url?: string; error?: string };
+      } catch {
+        setMsg("登录服务返回异常（请确认 /api 已反代到后端，而非静态页的 index.html）。");
+        return;
+      }
+      if (!res.ok || data.error) {
+        setMsg(googleErrLabel(data.error ?? "google_server"));
+        return;
+      }
+      if (data.url) {
+        window.location.assign(data.url);
+        return;
+      }
+      setMsg(googleErrLabel("google_server"));
+    } catch {
+      setMsg("无法连接登录服务，请检查网络或后端是否运行。");
+    } finally {
+      setGoogleBusy(false);
     }
   }
 
@@ -214,9 +243,14 @@ export function LoginPage() {
             <p className="muted small" style={{ marginTop: 0 }}>
               若该邮箱已用密码注册，首次使用 Google 将自动绑定同一账号。
             </p>
-            <a className="btn login-google-btn" href="/api/auth/google/start">
-              使用 Google 继续
-            </a>
+            <button
+              type="button"
+              className="btn login-google-btn"
+              onClick={() => void onGoogleLogin()}
+              disabled={busy || googleBusy}
+            >
+              {googleBusy ? "正在跳转…" : "使用 Google 继续"}
+            </button>
           </section>
 
           <section className="settings-section">

@@ -48,6 +48,24 @@ function publicAppUrl() {
   return String(process.env.APP_PUBLIC_URL ?? "http://localhost:5173").replace(/\/$/, "");
 }
 
+/** 设置 Google OAuth state Cookie 并返回授权页 URL；未配置客户端密钥时返回 null */
+function prepareGoogleOAuthStart(reply) {
+  const clientId = process.env.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return null;
+  const redirectUri =
+    process.env.GOOGLE_REDIRECT_URI || `${publicAppUrl()}/api/auth/google/callback`;
+  const state = crypto.randomBytes(24).toString("hex");
+  reply.setCookie(GOOGLE_STATE_COOKIE, state, {
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 600,
+    secure: false,
+  });
+  return buildGoogleAuthorizationUrl(clientId, redirectUri, state);
+}
+
 function setSessionCookie(reply, user) {
   const token = jwt.sign({ uid: user.id, email: user.email }, JWT_SECRET, { expiresIn: "30d" });
   reply.setCookie(COOKIE_NAME, token, {
@@ -259,25 +277,18 @@ export async function buildServer() {
     }
   });
 
-  /** Google OAuth：跳转授权页 */
+  /** Google OAuth：跳转授权页（直接 GET；部分静态托管会把 /api 回退成 SPA，见 start-url） */
   app.get("/api/auth/google/start", async (req, reply) => {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    if (!clientId || !clientSecret) {
-      return reply.redirect(`${publicAppUrl()}/login?error=google_not_configured`);
-    }
-    const redirectUri =
-      process.env.GOOGLE_REDIRECT_URI || `${publicAppUrl()}/api/auth/google/callback`;
-    const state = crypto.randomBytes(24).toString("hex");
-    reply.setCookie(GOOGLE_STATE_COOKIE, state, {
-      httpOnly: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: 600,
-      secure: false,
-    });
-    const url = buildGoogleAuthorizationUrl(clientId, redirectUri, state);
+    const url = prepareGoogleOAuthStart(reply);
+    if (!url) return reply.redirect(`${publicAppUrl()}/login?error=google_not_configured`);
     return reply.redirect(url);
+  });
+
+  /** 返回 Google 授权页 URL（JSON），前端再 location.assign，避免 /api 被 SPA 兜底时误进首页 */
+  app.get("/api/auth/google/start-url", async (req, reply) => {
+    const url = prepareGoogleOAuthStart(reply);
+    if (!url) return reply.send({ error: "google_not_configured" });
+    return reply.send({ url });
   });
 
   /** Google OAuth：回调，建号或绑定后写 Cookie 并回前端 */
