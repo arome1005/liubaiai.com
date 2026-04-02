@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import {
   authLogin,
   authLogout,
@@ -9,6 +9,18 @@ import {
   type AuthUser,
 } from "../api/auth";
 
+function googleErrLabel(code: string): string {
+  const map: Record<string, string> = {
+    google_not_configured: "未配置 Google 登录（需在环境变量中设置 GOOGLE_CLIENT_ID 等）",
+    google_denied: "已取消 Google 授权",
+    google_state: "安全校验失败，请重试",
+    google_no_code: "授权未完成，请重试",
+    google_no_email: "Google 未返回邮箱，无法登录",
+    google_server: "Google 登录失败，请稍后重试",
+  };
+  return map[code] ?? code;
+}
+
 function errLabel(code: string): string {
   const map: Record<string, string> = {
     BAD_EMAIL: "邮箱格式不正确",
@@ -16,6 +28,7 @@ function errLabel(code: string): string {
     EMAIL_TAKEN: "该邮箱已注册",
     BAD_INPUT: "请填写邮箱和密码",
     INVALID_CREDENTIALS: "邮箱或密码错误",
+    OAUTH_ONLY: "该邮箱仅支持 Google 登录，请使用下方 Google 按钮",
     EMAIL_NOT_VERIFIED: "请先完成邮箱验证（旧账号请联系管理员）",
     REGISTER_FAILED: "注册失败",
     LOGIN_FAILED: "登录失败",
@@ -26,12 +39,14 @@ function errLabel(code: string): string {
     MAIL_FAILED: "邮件发送失败，请检查服务器发信配置",
     BAD_CODE: "验证码不正确",
     OTP_EXPIRED: "验证码已过期，请重新获取",
+    USE_OTP_FLOW: "请使用「发送验证码」与「完成注册」完成注册",
   };
   return map[code] ?? code;
 }
 
 export function LoginPage() {
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -54,6 +69,19 @@ export function LoginPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    const oauth = searchParams.get("oauth");
+    const err = searchParams.get("error");
+    if (!oauth && !err) return;
+    if (oauth === "success") {
+      setMsg("Google 登录成功。");
+      void authMe().then(({ user: u }) => setUser(u));
+    } else if (err) {
+      setMsg(googleErrLabel(err));
+    }
+    window.history.replaceState({}, "", "/login");
+  }, [searchParams]);
 
   async function onSendCode() {
     setMsg(null);
@@ -176,6 +204,19 @@ export function LoginPage() {
                 登录
               </button>
             </div>
+            <p className="muted small" style={{ marginBottom: 0 }}>
+              <Link to="/forgot-password">忘记密码？</Link>
+            </p>
+          </section>
+
+          <section className="settings-section">
+            <h2>Google 登录</h2>
+            <p className="muted small" style={{ marginTop: 0 }}>
+              若该邮箱已用密码注册，首次使用 Google 将自动绑定同一账号。
+            </p>
+            <a className="btn login-google-btn" href="/api/auth/google/start">
+              使用 Google 继续
+            </a>
           </section>
 
           <section className="settings-section">

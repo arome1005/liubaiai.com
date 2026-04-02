@@ -232,6 +232,41 @@ create table if not exists email_otp_challenge (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_otp_email_created on email_otp_challenge(email, created_at desc);
+
+-- ========= phase2: password reset =========
+create table if not exists password_reset_token (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references app_user(id) on delete cascade,
+  email text not null,
+  token_hash text not null unique,
+  expires_at timestamptz not null,
+  consumed_at timestamptz null,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_pwd_reset_email_created on password_reset_token(email, created_at desc);
+
+-- ========= phase3: Google OAuth =========
+alter table app_user alter column password_hash drop not null;
+
+create table if not exists oauth_identity (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references app_user(id) on delete cascade,
+  provider text not null check (provider = 'google'),
+  provider_sub text not null,
+  email text,
+  created_at timestamptz not null default now(),
+  unique(provider, provider_sub)
+);
+create unique index if not exists uq_oauth_user_provider on oauth_identity(user_id, provider);
+
+-- ========= test_content（联调云端写入） =========
+create table if not exists test_content (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references app_user(id) on delete cascade,
+  content text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_test_content_user_created on test_content(user_id, created_at desc);
 `;
 
 async function main() {

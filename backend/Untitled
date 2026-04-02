@@ -1,0 +1,23 @@
+DB_HOST=96.44.165.50
+DB_PORT=56854
+DB_USER=aorme
+DB_PASSWORD=He056853
+DB_NAME=postgres
+DB_SSL=false
+
+# API
+API_HOST=127.0.0.1
+API_PORT=8788
+
+# Auth
+AUTH_JWT_SECRET=dev-secret-change-me
+AUTH_COOKIE_NAME=lb_session
+COOKIE_SECRET=dev-cookie-secret-change-me
+
+# Google OAuth
+GOOGLE_CLIENT_ID=1077388105329-7saslt3pb31gec3i3u9a3eqrgh3ublhn.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=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
+GOOGLE_REDIRECT_URI=http://localhost:5173/api/auth/google/callback
+
+# App Config
+APP_PUBLIC_URL=http://localhost:5173

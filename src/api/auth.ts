@@ -55,3 +55,30 @@ export async function authLogin(email: string, password: string): Promise<{ user
 export async function authLogout(): Promise<void> {
   await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
 }
+
+export async function authForgotPassword(
+  email: string,
+): Promise<{ ok: true; dev?: { resetUrl: string } }> {
+  const r = await fetch("/api/auth/forgot-password", {
+    method: "POST",
+    credentials: "include",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ email }),
+  });
+  const data = (await r.json().catch(() => ({}))) as { error?: string; ok?: boolean; dev?: { resetUrl: string } };
+  if (!r.ok) throw new Error(data.error ?? "FORGOT_FAILED");
+  return data as { ok: true; dev?: { resetUrl: string } };
+}
+
+export async function authResetPassword(token: string, newPassword: string): Promise<{ user: AuthUser }> {
+  const r = await fetch("/api/auth/reset-password", {
+    method: "POST",
+    credentials: "include",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ token, newPassword }),
+  });
+  const data = (await r.json().catch(() => ({}))) as { error?: string; user?: AuthUser };
+  if (!r.ok) throw new Error(data.error ?? "RESET_FAILED");
+  if (!data.user) throw new Error("RESET_FAILED");
+  return { user: data.user };
+}

@@ -990,6 +990,10 @@ select {
   color: var(--fg);
 }
 
+.login-page .login-google-btn {
+  margin-top: 0.25rem;
+}
+
 .settings-page .page-header {
   flex-direction: column;
   align-items: flex-start;

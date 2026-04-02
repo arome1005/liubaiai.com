@@ -18,6 +18,8 @@ function sectionLabelFromPath(pathname: string): string {
   if (pathname.startsWith("/reference")) return "藏经";
   if (pathname.startsWith("/settings")) return "设置";
   if (pathname.startsWith("/login")) return "登录";
+  if (pathname.startsWith("/forgot-password")) return "忘记密码";
+  if (pathname.startsWith("/reset-password")) return "重置密码";
   if (pathname.startsWith("/logic")) return "推演";
   if (pathname.startsWith("/inspiration")) return "流光";
   if (pathname.startsWith("/chat")) return "问策";
@@ -108,7 +110,18 @@ export function AppShell() {
   }, [workIdInPath]);
 
   const hubPaths = useMemo(
-    () => new Set(["/", "/library", "/logic", "/inspiration", "/chat", "/sheng-hui", "/login"]),
+    () =>
+      new Set([
+        "/",
+        "/library",
+        "/logic",
+        "/inspiration",
+        "/chat",
+        "/sheng-hui",
+        "/login",
+        "/forgot-password",
+        "/reset-password",
+      ]),
     [],
   );
   const showPageTopbar = !hubPaths.has(pathname);
