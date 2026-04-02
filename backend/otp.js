@@ -26,13 +26,3 @@ export function timingSafeEqualHex(a, b) {
     return false;
   }
 }
-
-/** 随机 token（hex 64 字符），用于邮件链接 */
-export function generatePasswordResetToken() {
-  return crypto.randomBytes(32).toString("hex");
-}
-
-export function hashPasswordResetToken(plainToken) {
-  const secret = process.env.OTP_HMAC_SECRET ?? process.env.AUTH_JWT_SECRET ?? "dev-otp-secret";
-  return crypto.createHmac("sha256", secret).update(`pwd-reset:${plainToken}`).digest("hex");
-}

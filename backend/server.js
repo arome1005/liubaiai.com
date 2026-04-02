@@ -1,33 +1,17 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import cookie from "@fastify/cookie";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import crypto from "node:crypto";
 import "dotenv/config";
 import { createPool } from "./db.js";
-import { buildGoogleAuthorizationUrl, exchangeGoogleCode, fetchGoogleUserInfo } from "./google-oauth.js";
-import { sendPasswordResetEmail, sendSignupOtpEmail } from "./mail.js";
+import { getSupabaseAdmin } from "./supabase-admin.js";
+import { sendSignupOtpEmail } from "./mail.js";
 import {
-  generatePasswordResetToken,
   generateSignupOtp,
   hashOtpCode,
-  hashPasswordResetToken,
   normalizeEmail as normalizeEmailOtp,
   timingSafeEqualHex,
 } from "./otp.js";
 
 const pool = createPool();
-
-function must(name) {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env ${name}`);
-  return v;
-}
-
-const JWT_SECRET = process.env.AUTH_JWT_SECRET ?? "dev-secret-change-me";
-const COOKIE_NAME = process.env.AUTH_COOKIE_NAME ?? "lb_session";
-const GOOGLE_STATE_COOKIE = "google_oauth_state";
 
 function nowMs() {
   return Date.now();
@@ -37,65 +21,48 @@ function normalizeEmail(email) {
   return normalizeEmailOtp(email);
 }
 
+/** 宽松校验：含 @ 即可（国际化邮箱由 SMTP / Supabase 侧再约束） */
+function emailLooksValid(email) {
+  const e = normalizeEmail(email);
+  return e.length >= 3 && e.includes("@");
+}
+
 const OTP_TTL_MS = Number(process.env.OTP_TTL_MS ?? String(10 * 60 * 1000));
 const OTP_RESEND_MS = Number(process.env.OTP_RESEND_MS ?? String(60 * 1000));
 const OTP_MAX_PER_HOUR = Number(process.env.OTP_MAX_PER_HOUR ?? "5");
 const OTP_MAX_ATTEMPTS = Number(process.env.OTP_MAX_ATTEMPTS ?? "5");
-const RESET_TOKEN_TTL_MS = Number(process.env.RESET_TOKEN_TTL_MS ?? String(60 * 60 * 1000));
-const RESET_MAX_PER_HOUR = Number(process.env.RESET_MAX_PER_HOUR ?? "3");
 
-function publicAppUrl() {
-  return String(process.env.APP_PUBLIC_URL ?? "http://localhost:5173").replace(/\/$/, "");
+/** 与 Supabase 同一 Postgres 时查询 auth.users；无权限或非 Supabase 库则返回 false */
+async function authUserExistsInSupabase(email) {
+  const e = normalizeEmail(email);
+  try {
+    const r = await pool.query("select id from auth.users where email = $1 limit 1", [e]);
+    return (r.rowCount ?? 0) > 0;
+  } catch {
+    return false;
+  }
 }
 
-/** 设置 Google OAuth state Cookie 并返回授权页 URL；未配置客户端密钥时返回 null */
-function prepareGoogleOAuthStart(reply) {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-  if (!clientId || !clientSecret) return null;
-  const redirectUri =
-    process.env.GOOGLE_REDIRECT_URI || `${publicAppUrl()}/api/auth/google/callback`;
-  const state = crypto.randomBytes(24).toString("hex");
-  reply.setCookie(GOOGLE_STATE_COOKIE, state, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: 600,
-    secure: false,
-  });
-  return buildGoogleAuthorizationUrl(clientId, redirectUri, state);
-}
-
-function setSessionCookie(reply, user) {
-  const token = jwt.sign({ uid: user.id, email: user.email }, JWT_SECRET, { expiresIn: "30d" });
-  reply.setCookie(COOKIE_NAME, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    secure: false,
-    maxAge: 60 * 60 * 24 * 30,
-  });
-}
-
-function requireAuth(req, reply) {
-  const token = req.cookies?.[COOKIE_NAME];
+async function requireAuth(req, reply) {
+  const h = req.headers.authorization ?? "";
+  const token = h.startsWith("Bearer ") ? h.slice(7).trim() : "";
   if (!token) return reply.code(401).send({ error: "UNAUTHENTICATED" });
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    if (!payload?.uid) throw new Error("bad token");
-    req.user = { id: payload.uid, email: payload.email ?? null };
+    const { data, error } = await getSupabaseAdmin().auth.getUser(token);
+    if (error || !data.user) return reply.code(401).send({ error: "UNAUTHENTICATED" });
+    req.user = { id: data.user.id, email: data.user.email ?? null };
   } catch {
     return reply.code(401).send({ error: "UNAUTHENTICATED" });
   }
 }
 
-/** 与 POST /api/auth/register/complete 相同（供 /api/auth/register 兼容旧客户端） */
+/** 验证码通过后由 Supabase Admin 建号；前端再 signInWithPassword */
 async function handleRegisterComplete(req, reply) {
   const body = req.body ?? {};
   const email = normalizeEmail(body.email);
   const password = String(body.password ?? "");
   const code = String(body.code ?? "").replace(/\s/g, "");
-  if (!email || !email.includes("@")) return reply.code(400).send({ error: "BAD_EMAIL" });
+  if (!emailLooksValid(email)) return reply.code(400).send({ error: "BAD_EMAIL" });
   if (password.length < 8) return reply.code(400).send({ error: "WEAK_PASSWORD" });
   if (!/^\d{6}$/.test(code)) return reply.code(400).send({ error: "BAD_CODE" });
 
@@ -123,34 +90,33 @@ async function handleRegisterComplete(req, reply) {
     return reply.code(400).send({ error: "BAD_CODE" });
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
-  const client = await pool.connect();
+  let created;
   try {
-    await client.query("begin");
-    const ins = await client.query(
-      "insert into app_user (email, password_hash, email_verified_at) values ($1, $2, now()) returning id, email",
-      [email, passwordHash],
-    );
-    const u = ins.rows[0];
-    await client.query("update email_otp_challenge set consumed_at = now() where id = $1", [row.id]);
-    await client.query("commit");
-    setSessionCookie(reply, u);
-    reply.send({ user: { id: u.id, email: u.email } });
+    const { data, error } = await getSupabaseAdmin().auth.admin.createUser({
+      email,
+      password,
+      email_confirm: true,
+    });
+    if (error) throw error;
+    created = data.user;
   } catch (e) {
-    try {
-      await client.query("rollback");
-    } catch {
-      /* ignore */
-    }
-    const msg = String(e?.message ?? "");
-    if (msg.includes("unique") || msg.includes("duplicate")) {
+    const code = e?.code ?? e?.status;
+    const msg = String(e?.message ?? e ?? "").toLowerCase();
+    if (
+      code === 422 ||
+      msg.includes("already") ||
+      msg.includes("registered") ||
+      msg.includes("duplicate") ||
+      msg.includes("exists")
+    ) {
       return reply.code(409).send({ error: "EMAIL_TAKEN" });
     }
-    req.log.error(e, "register complete failed");
-    reply.code(500).send({ error: "SERVER_ERROR" });
-  } finally {
-    client.release();
+    req.log.error(e, "supabase createUser failed");
+    return reply.code(500).send({ error: "REGISTER_FAILED" });
   }
+
+  await pool.query("update email_otp_challenge set consumed_at = now() where id = $1", [row.id]);
+  reply.send({ user: { id: created.id, email: created.email ?? email } });
 }
 
 export async function buildServer() {
@@ -159,9 +125,6 @@ export async function buildServer() {
   await app.register(cors, {
     origin: (origin, cb) => cb(null, true),
     credentials: true,
-  });
-  await app.register(cookie, {
-    secret: process.env.COOKIE_SECRET ?? "dev-cookie-secret-change-me",
   });
 
   app.get("/api/health", async () => ({ ok: true }));
@@ -176,13 +139,12 @@ export async function buildServer() {
     reply.send({ ok: true, userId: req.user.id, row: r.rows[0] });
   });
 
-  // ===== Auth (phase1: signup via email OTP) =====
+  // ===== 注册验证码（建号走 Supabase Admin；登录/会话/重置密码走前端 Supabase Auth） =====
   app.post("/api/auth/register/request-code", async (req, reply) => {
     const email = normalizeEmail(req.body?.email);
-    if (!email || !email.includes("@")) return reply.code(400).send({ error: "BAD_EMAIL" });
+    if (!emailLooksValid(email)) return reply.code(400).send({ error: "BAD_EMAIL" });
 
-    const taken = await pool.query("select 1 from app_user where email = $1", [email]);
-    if (taken.rowCount) return reply.code(409).send({ error: "EMAIL_TAKEN" });
+    if (await authUserExistsInSupabase(email)) return reply.code(409).send({ error: "EMAIL_TAKEN" });
 
     const since = new Date(Date.now() - 60 * 60 * 1000);
     const cnt = await pool.query(
@@ -237,244 +199,6 @@ export async function buildServer() {
       error: "USE_OTP_FLOW",
       hint: "请先 POST /api/auth/register/request-code 获取验证码，再提交 email、password、code 到本接口或 /api/auth/register/complete。",
     });
-  });
-
-  app.post("/api/auth/login", async (req, reply) => {
-    const body = req.body ?? {};
-    const email = normalizeEmail(body.email);
-    const password = String(body.password ?? "");
-    if (!email || !password) return reply.code(400).send({ error: "BAD_INPUT" });
-    const r = await pool.query(
-      "select id, email, password_hash, email_verified_at from app_user where email = $1",
-      [email],
-    );
-    const u = r.rows[0];
-    if (!u) return reply.code(401).send({ error: "INVALID_CREDENTIALS" });
-    if (!u.email_verified_at) return reply.code(403).send({ error: "EMAIL_NOT_VERIFIED" });
-    if (!u.password_hash) return reply.code(401).send({ error: "OAUTH_ONLY" });
-    const ok = await bcrypt.compare(password, u.password_hash);
-    if (!ok) return reply.code(401).send({ error: "INVALID_CREDENTIALS" });
-    setSessionCookie(reply, { id: u.id, email: u.email });
-    reply.send({ user: { id: u.id, email: u.email } });
-  });
-
-  app.post("/api/auth/logout", async (_req, reply) => {
-    reply.clearCookie(COOKIE_NAME, { path: "/" }).send({ ok: true });
-  });
-
-  app.get("/api/auth/me", async (req, reply) => {
-    const token = req.cookies?.[COOKIE_NAME];
-    if (!token) return reply.send({ user: null });
-    try {
-      const payload = jwt.verify(token, JWT_SECRET);
-      const uid = payload?.uid;
-      if (!uid) return reply.send({ user: null });
-      const r = await pool.query("select id, email from app_user where id = $1", [uid]);
-      const u = r.rows[0];
-      return reply.send({ user: u ? { id: u.id, email: u.email } : null });
-    } catch {
-      return reply.send({ user: null });
-    }
-  });
-
-  /** Google OAuth：跳转授权页（直接 GET；部分静态托管会把 /api 回退成 SPA，见 start-url） */
-  app.get("/api/auth/google/start", async (req, reply) => {
-    const url = prepareGoogleOAuthStart(reply);
-    if (!url) return reply.redirect(`${publicAppUrl()}/login?error=google_not_configured`);
-    return reply.redirect(url);
-  });
-
-  /** 返回 Google 授权页 URL（JSON），前端再 location.assign，避免 /api 被 SPA 兜底时误进首页 */
-  app.get("/api/auth/google/start-url", async (req, reply) => {
-    const url = prepareGoogleOAuthStart(reply);
-    if (!url) return reply.send({ error: "google_not_configured" });
-    return reply.send({ url });
-  });
-
-  /** Google OAuth：回调，建号或绑定后写 Cookie 并回前端 */
-  app.get("/api/auth/google/callback", async (req, reply) => {
-    const clientId = process.env.GOOGLE_CLIENT_ID;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-    const redirectUri =
-      process.env.GOOGLE_REDIRECT_URI || `${publicAppUrl()}/api/auth/google/callback`;
-    const stateCookie = req.cookies?.[GOOGLE_STATE_COOKIE];
-    const q = req.query;
-    const code = typeof q.code === "string" ? q.code : "";
-    const stateQ = typeof q.state === "string" ? q.state : "";
-    const errQ = typeof q.error === "string" ? q.error : "";
-
-    reply.clearCookie(GOOGLE_STATE_COOKIE, { path: "/" });
-
-    if (errQ) {
-      return reply.redirect(`${publicAppUrl()}/login?error=google_denied`);
-    }
-    if (!stateQ || !stateCookie || stateQ !== stateCookie) {
-      return reply.redirect(`${publicAppUrl()}/login?error=google_state`);
-    }
-    if (!code || !clientId || !clientSecret) {
-      return reply.redirect(`${publicAppUrl()}/login?error=google_no_code`);
-    }
-
-    try {
-      const tokens = await exchangeGoogleCode({ code, clientId, clientSecret, redirectUri });
-      const accessToken = tokens.access_token;
-      if (!accessToken) throw new Error("no_access_token");
-      const info = await fetchGoogleUserInfo(accessToken);
-      if (!info.email || !info.sub) {
-        return reply.redirect(`${publicAppUrl()}/login?error=google_no_email`);
-      }
-      const email = normalizeEmail(info.email);
-      const sub = String(info.sub);
-
-      const o1 = await pool.query(
-        "select user_id from oauth_identity where provider = 'google' and provider_sub = $1",
-        [sub],
-      );
-      if (o1.rowCount) {
-        const uid = o1.rows[0].user_id;
-        const u = await pool.query("select id, email from app_user where id = $1", [uid]);
-        const row = u.rows[0];
-        if (!row) {
-          return reply.redirect(`${publicAppUrl()}/login?error=google_server`);
-        }
-        setSessionCookie(reply, row);
-        return reply.redirect(`${publicAppUrl()}/login?oauth=success`);
-      }
-
-      const u2 = await pool.query("select id, email from app_user where email = $1", [email]);
-      if (u2.rowCount) {
-        const row = u2.rows[0];
-        try {
-          await pool.query(
-            "insert into oauth_identity (user_id, provider, provider_sub, email) values ($1, 'google', $2, $3)",
-            [row.id, sub, email],
-          );
-        } catch (e) {
-          const msg = String(e?.message ?? "");
-          if (!msg.includes("unique") && !msg.includes("duplicate")) throw e;
-        }
-        setSessionCookie(reply, row);
-        return reply.redirect(`${publicAppUrl()}/login?oauth=success`);
-      }
-
-      const client = await pool.connect();
-      try {
-        await client.query("begin");
-        const ins = await client.query(
-          "insert into app_user (email, password_hash, email_verified_at) values ($1, null, now()) returning id, email",
-          [email],
-        );
-        const newUser = ins.rows[0];
-        await client.query(
-          "insert into oauth_identity (user_id, provider, provider_sub, email) values ($1, 'google', $2, $3)",
-          [newUser.id, sub, email],
-        );
-        await client.query("commit");
-        setSessionCookie(reply, newUser);
-        return reply.redirect(`${publicAppUrl()}/login?oauth=success`);
-      } catch (e) {
-        try {
-          await client.query("rollback");
-        } catch {
-          /* ignore */
-        }
-        throw e;
-      } finally {
-        client.release();
-      }
-    } catch (e) {
-      req.log.error(e, "google oauth callback failed");
-      return reply.redirect(`${publicAppUrl()}/login?error=google_server`);
-    }
-  });
-
-  /** 忘记密码：发邮件（邮箱不存在也返回 ok，防枚举） */
-  app.post("/api/auth/forgot-password", async (req, reply) => {
-    const email = normalizeEmail(req.body?.email);
-    if (!email || !email.includes("@")) return reply.code(400).send({ error: "BAD_EMAIL" });
-
-    const u = await pool.query("select id, email from app_user where email = $1", [email]);
-    if (!u.rowCount) {
-      return reply.send({ ok: true });
-    }
-    const user = u.rows[0];
-
-    const since = new Date(Date.now() - 60 * 60 * 1000);
-    const cnt = await pool.query(
-      "select count(*)::int as n from password_reset_token where email = $1 and created_at >= $2",
-      [email, since],
-    );
-    if ((cnt.rows[0]?.n ?? 0) >= RESET_MAX_PER_HOUR) {
-      return reply.code(429).send({ error: "RATE_LIMIT" });
-    }
-
-    const plain = generatePasswordResetToken();
-    const tokenHash = hashPasswordResetToken(plain);
-    const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MS);
-    await pool.query(
-      "insert into password_reset_token (user_id, email, token_hash, expires_at) values ($1, $2, $3, $4)",
-      [user.id, email, tokenHash, expiresAt],
-    );
-
-    const resetUrl = `${publicAppUrl()}/reset-password?token=${encodeURIComponent(plain)}`;
-    try {
-      await sendPasswordResetEmail(email, resetUrl);
-    } catch (e) {
-      req.log.error(e, "sendPasswordResetEmail failed");
-      return reply.code(500).send({ error: "MAIL_FAILED" });
-    }
-
-    const payload = { ok: true };
-    if (process.env.MAIL_DEV_RETURN_CODE === "1") {
-      payload.dev = { resetUrl };
-    }
-    reply.send(payload);
-  });
-
-  /** 用邮件链接中的 token 设置新密码并登录 */
-  app.post("/api/auth/reset-password", async (req, reply) => {
-    const plainToken = String(req.body?.token ?? "").trim();
-    const password = String(req.body?.newPassword ?? "");
-    if (!plainToken) return reply.code(400).send({ error: "BAD_TOKEN" });
-    if (password.length < 8) return reply.code(400).send({ error: "WEAK_PASSWORD" });
-
-    const tokenHash = hashPasswordResetToken(plainToken);
-    const r = await pool.query(
-      "select id, user_id, expires_at from password_reset_token where token_hash = $1 and consumed_at is null",
-      [tokenHash],
-    );
-    const row = r.rows[0];
-    if (!row) return reply.code(400).send({ error: "BAD_TOKEN" });
-    if (new Date(row.expires_at) < new Date()) {
-      await pool.query("update password_reset_token set consumed_at = now() where id = $1", [row.id]);
-      return reply.code(400).send({ error: "TOKEN_EXPIRED" });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 10);
-    const client = await pool.connect();
-    try {
-      await client.query("begin");
-      await client.query("update app_user set password_hash = $1 where id = $2", [passwordHash, row.user_id]);
-      await client.query(
-        "update password_reset_token set consumed_at = now() where user_id = $1 and consumed_at is null",
-        [row.user_id],
-      );
-      const u = await client.query("select id, email from app_user where id = $1", [row.user_id]);
-      await client.query("commit");
-      const user = u.rows[0];
-      setSessionCookie(reply, user);
-      reply.send({ user: { id: user.id, email: user.email } });
-    } catch (e) {
-      try {
-        await client.query("rollback");
-      } catch {
-        /* ignore */
-      }
-      req.log.error(e, "reset password failed");
-      reply.code(500).send({ error: "SERVER_ERROR" });
-    } finally {
-      client.release();
-    }
   });
 
   // ===== Works =====

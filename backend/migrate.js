@@ -5,18 +5,11 @@ const pool = createPool();
 const SQL = `
 create extension if not exists pgcrypto;
 
--- ========= auth/users (minimal, for today) =========
-create table if not exists app_user (
-  id uuid primary key default gen_random_uuid(),
-  email text not null unique,
-  password_hash text not null,
-  created_at timestamptz not null default now()
-);
-
 -- ========= core writing =========
+-- user_id = Supabase auth.users.id（不设外键，便于本地 Postgres 开发；生产建议与 Supabase 同一库）
 create table if not exists work (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references app_user(id) on delete cascade,
+  user_id uuid not null,
   title text not null,
   created_at bigint not null,
   updated_at bigint not null,
@@ -217,10 +210,7 @@ create table if not exists reference_excerpt_tag (
 );
 create unique index if not exists uq_excerpt_tag on reference_excerpt_tag(excerpt_id, tag_id);
 
--- ========= phase1: email OTP signup =========
-alter table app_user add column if not exists email_verified_at timestamptz;
-update app_user set email_verified_at = coalesce(email_verified_at, now());
-
+-- ========= phase1: email OTP signup（建号在 Supabase Auth） =========
 create table if not exists email_otp_challenge (
   id uuid primary key default gen_random_uuid(),
   email text not null,
@@ -233,36 +223,10 @@ create table if not exists email_otp_challenge (
 );
 create index if not exists idx_otp_email_created on email_otp_challenge(email, created_at desc);
 
--- ========= phase2: password reset =========
-create table if not exists password_reset_token (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references app_user(id) on delete cascade,
-  email text not null,
-  token_hash text not null unique,
-  expires_at timestamptz not null,
-  consumed_at timestamptz null,
-  created_at timestamptz not null default now()
-);
-create index if not exists idx_pwd_reset_email_created on password_reset_token(email, created_at desc);
-
--- ========= phase3: Google OAuth =========
-alter table app_user alter column password_hash drop not null;
-
-create table if not exists oauth_identity (
-  id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references app_user(id) on delete cascade,
-  provider text not null check (provider = 'google'),
-  provider_sub text not null,
-  email text,
-  created_at timestamptz not null default now(),
-  unique(provider, provider_sub)
-);
-create unique index if not exists uq_oauth_user_provider on oauth_identity(user_id, provider);
-
 -- ========= test_content（联调云端写入） =========
 create table if not exists test_content (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references app_user(id) on delete cascade,
+  user_id uuid not null,
   content text not null,
   created_at timestamptz not null default now()
 );

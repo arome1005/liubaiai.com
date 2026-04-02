@@ -1,27 +1,66 @@
-import { useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { authResetPassword } from "../api/auth";
+import { getSupabase } from "../lib/supabase";
 
-function errLabel(code: string): string {
+function errLabel(msg: string): string {
   const map: Record<string, string> = {
     WEAK_PASSWORD: "密码至少 8 位",
-    BAD_TOKEN: "链接无效或已使用",
-    TOKEN_EXPIRED: "链接已过期，请重新申请重置",
-    RESET_FAILED: "重置失败",
-    SERVER_ERROR: "服务器错误",
+    SESSION_MISSING: "请先通过邮件中的链接打开本页",
+    UPDATE_FAILED: "更新密码失败，请重试或重新申请重置",
   };
-  return map[code] ?? code;
+  return map[msg] ?? msg;
 }
 
 export function ResetPasswordPage() {
   const [search] = useSearchParams();
   const nav = useNavigate();
-  const token = useMemo(() => search.get("token")?.trim() ?? "", [search]);
-
   const [password, setPassword] = useState("");
   const [password2, setPassword2] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      if (!import.meta.env.VITE_SUPABASE_URL) {
+        if (!cancelled) setMsg("未配置 Supabase 前端环境变量。");
+        return;
+      }
+      const supabase = getSupabase();
+
+      const code = search.get("code");
+      if (code) {
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) {
+          if (!cancelled) setMsg(errLabel("SESSION_MISSING"));
+          return;
+        }
+        window.history.replaceState(null, "", window.location.pathname);
+      } else {
+        const hash = window.location.hash.replace(/^#/, "");
+        if (hash) {
+          const p = new URLSearchParams(hash);
+          const access_token = p.get("access_token");
+          const refresh_token = p.get("refresh_token");
+          if (access_token && refresh_token) {
+            const { error } = await supabase.auth.setSession({ access_token, refresh_token });
+            if (error) {
+              if (!cancelled) setMsg(errLabel("SESSION_MISSING"));
+              return;
+            }
+            window.history.replaceState(null, "", window.location.pathname + window.location.search);
+          }
+        }
+      }
+
+      const { data } = await supabase.auth.getSession();
+      if (!cancelled) setSessionReady(!!data.session);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [search]);
 
   async function onSubmit() {
     setMsg(null);
@@ -29,19 +68,24 @@ export function ResetPasswordPage() {
       setMsg("两次输入的密码不一致");
       return;
     }
+    if (password.length < 8) {
+      setMsg(errLabel("WEAK_PASSWORD"));
+      return;
+    }
     setBusy(true);
     try {
-      await authResetPassword(token, password);
+      const { error } = await getSupabase().auth.updateUser({ password });
+      if (error) throw new Error("UPDATE_FAILED");
       setMsg("密码已更新，正在进入首页…");
       nav("/", { replace: true });
     } catch (e) {
-      setMsg(errLabel(e instanceof Error ? e.message : "RESET_FAILED"));
+      setMsg(errLabel(e instanceof Error ? e.message : "UPDATE_FAILED"));
     } finally {
       setBusy(false);
     }
   }
 
-  if (!token) {
+  if (!import.meta.env.VITE_SUPABASE_URL) {
     return (
       <div className="page settings-page login-page">
         <header className="page-header">
@@ -51,7 +95,25 @@ export function ResetPasswordPage() {
           <h1>重置密码</h1>
         </header>
         <section className="settings-section">
-          <p className="login-msg">链接无效或已过期，请从「忘记密码」重新获取邮件。</p>
+          <p className="login-msg">未配置 VITE_SUPABASE_URL。</p>
+        </section>
+      </div>
+    );
+  }
+
+  if (!sessionReady) {
+    return (
+      <div className="page settings-page login-page">
+        <header className="page-header">
+          <Link to="/login" className="back-link">
+            ← 返回登录
+          </Link>
+          <h1>重置密码</h1>
+        </header>
+        <section className="settings-section">
+          <p className="login-msg">
+            {msg ?? "正在验证邮件链接… 若长时间无响应，请从邮箱里的重置链接重新打开本页。"}
+          </p>
         </section>
       </div>
     );

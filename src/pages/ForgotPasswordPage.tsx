@@ -21,12 +21,8 @@ export function ForgotPasswordPage() {
     setMsg(null);
     setBusy(true);
     try {
-      const res = await authForgotPassword(email.trim());
-      if (res.dev?.resetUrl) {
-        setMsg(`开发模式：重置链接 ${res.dev.resetUrl}`);
-      } else {
-        setMsg("若该邮箱已注册，你将收到一封重置密码邮件（请查看垃圾箱）。");
-      }
+      await authForgotPassword(email.trim());
+      setMsg("若该邮箱已注册，你将收到一封重置密码邮件（由 Supabase 发送，请查看垃圾箱）。");
     } catch (e) {
       setMsg(errLabel(e instanceof Error ? e.message : "FORGOT_FAILED"));
     } finally {
@@ -45,12 +41,12 @@ export function ForgotPasswordPage() {
 
       <section className="settings-section">
         <p className="muted small" style={{ marginTop: 0 }}>
-          填写注册邮箱，我们将发送重置链接（链接在约 1 小时内有效）。
+          填写注册邮箱，Supabase 将发送重置链接（有效期见控制台与邮件说明；Redirect 需包含本站的 /reset-password）。
         </p>
         <label className="row">
           <span>邮箱</span>
           <input
-            type="email"
+            type="text"
             name="email"
             autoComplete="email"
             value={email}

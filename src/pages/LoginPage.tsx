@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import {
   authLogin,
   authLogout,
@@ -8,19 +8,6 @@ import {
   authRequestRegisterCode,
   type AuthUser,
 } from "../api/auth";
-import { apiUrl } from "../api/base";
-
-function googleErrLabel(code: string): string {
-  const map: Record<string, string> = {
-    google_not_configured: "未配置 Google 登录（需在环境变量中设置 GOOGLE_CLIENT_ID 等）",
-    google_denied: "已取消 Google 授权",
-    google_state: "安全校验失败，请重试",
-    google_no_code: "授权未完成，请重试",
-    google_no_email: "Google 未返回邮箱，无法登录",
-    google_server: "Google 登录失败，请稍后重试",
-  };
-  return map[code] ?? code;
-}
 
 function errLabel(code: string): string {
   const map: Record<string, string> = {
@@ -29,8 +16,6 @@ function errLabel(code: string): string {
     EMAIL_TAKEN: "该邮箱已注册",
     BAD_INPUT: "请填写邮箱和密码",
     INVALID_CREDENTIALS: "邮箱或密码错误",
-    OAUTH_ONLY: "该邮箱仅支持 Google 登录，请使用下方 Google 按钮",
-    EMAIL_NOT_VERIFIED: "请先完成邮箱验证（旧账号请联系管理员）",
     REGISTER_FAILED: "注册失败",
     LOGIN_FAILED: "登录失败",
     ME_FAILED: "无法获取登录状态",
@@ -41,13 +26,13 @@ function errLabel(code: string): string {
     BAD_CODE: "验证码不正确",
     OTP_EXPIRED: "验证码已过期，请重新获取",
     USE_OTP_FLOW: "请使用「发送验证码」与「完成注册」完成注册",
+    SUPABASE_NOT_CONFIGURED: "未配置 Supabase（VITE_SUPABASE_URL / ANON_KEY）",
   };
   return map[code] ?? code;
 }
 
 export function LoginPage() {
   const nav = useNavigate();
-  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [code, setCode] = useState("");
@@ -55,7 +40,6 @@ export function LoginPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [codeBusy, setCodeBusy] = useState(false);
-  const [googleBusy, setGoogleBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,19 +55,6 @@ export function LoginPage() {
       cancelled = true;
     };
   }, []);
-
-  useEffect(() => {
-    const oauth = searchParams.get("oauth");
-    const err = searchParams.get("error");
-    if (!oauth && !err) return;
-    if (oauth === "success") {
-      setMsg("Google 登录成功。");
-      void authMe().then(({ user: u }) => setUser(u));
-    } else if (err) {
-      setMsg(googleErrLabel(err));
-    }
-    window.history.replaceState({}, "", "/login");
-  }, [searchParams]);
 
   async function onSendCode() {
     setMsg(null);
@@ -134,34 +105,6 @@ export function LoginPage() {
     }
   }
 
-  async function onGoogleLogin() {
-    setMsg(null);
-    setGoogleBusy(true);
-    try {
-      const res = await fetch(apiUrl("/api/auth/google/start-url"), { credentials: "include" });
-      let data: { url?: string; error?: string };
-      try {
-        data = (await res.json()) as { url?: string; error?: string };
-      } catch {
-        setMsg("登录服务返回异常（请确认 /api 已反代到后端，而非静态页的 index.html）。");
-        return;
-      }
-      if (!res.ok || data.error) {
-        setMsg(googleErrLabel(data.error ?? "google_server"));
-        return;
-      }
-      if (data.url) {
-        window.location.assign(data.url);
-        return;
-      }
-      setMsg(googleErrLabel("google_server"));
-    } catch {
-      setMsg("无法连接登录服务，请检查网络或后端是否运行。");
-    } finally {
-      setGoogleBusy(false);
-    }
-  }
-
   async function onLogout() {
     setMsg(null);
     setBusy(true);
@@ -199,7 +142,9 @@ export function LoginPage() {
             </button>
           </p>
         ) : (
-          <p className="muted small">未登录。注册需先收取邮箱验证码；登录仅需邮箱与密码。</p>
+          <p className="muted small">
+            未登录。注册需先收取邮箱验证码；登录使用邮箱与密码（账号由 Supabase Auth 管理）。
+          </p>
         )}
       </section>
 
@@ -210,12 +155,12 @@ export function LoginPage() {
             <label className="row">
               <span>邮箱</span>
               <input
-                type="email"
+                type="text"
                 name="email"
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
+                placeholder="your@email"
               />
             </label>
             <label className="row">
@@ -223,7 +168,7 @@ export function LoginPage() {
               <input
                 type="password"
                 name="password"
-                autoComplete="new-password"
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="至少 8 位"
@@ -235,23 +180,8 @@ export function LoginPage() {
               </button>
             </div>
             <p className="muted small" style={{ marginBottom: 0 }}>
-              <Link to="/forgot-password">忘记密码？</Link>
+              <Link to="/forgot-password">忘记密码？</Link>（由 Supabase 发送重置邮件）
             </p>
-          </section>
-
-          <section className="settings-section">
-            <h2>Google 登录</h2>
-            <p className="muted small" style={{ marginTop: 0 }}>
-              若该邮箱已用密码注册，首次使用 Google 将自动绑定同一账号。
-            </p>
-            <button
-              type="button"
-              className="btn login-google-btn"
-              onClick={() => void onGoogleLogin()}
-              disabled={busy || googleBusy}
-            >
-              {googleBusy ? "正在跳转…" : "使用 Google 继续"}
-            </button>
           </section>
 
           <section className="settings-section">

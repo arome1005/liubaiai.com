@@ -1,4 +1,5 @@
 import { apiUrl } from "./base";
+import { authFetchHeaders } from "../lib/supabase";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -11,8 +12,7 @@ export type TestSaveResponse = {
 export async function postTestSave(text: string): Promise<TestSaveResponse> {
   const r = await fetch(apiUrl("/api/test-save"), {
     method: "POST",
-    credentials: "include",
-    headers: JSON_HEADERS,
+    headers: await authFetchHeaders(JSON_HEADERS),
     body: JSON.stringify({ text }),
   });
   const data = (await r.json().catch(() => ({}))) as { error?: string } & Partial<TestSaveResponse>;

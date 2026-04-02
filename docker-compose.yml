@@ -1,5 +1,5 @@
 # 一键：同一台机子上静态站 + /api 反代到 Fastify（不再出现 /api 落到 index.html）
-# 用法：cp backend/.env.example backend/.env 并填好；然后：
+# 用法：cp backend/.env.example backend/.env；项目根建 .env 含 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY（供 web 镜像构建）；
 #   docker compose up -d --build
 # 浏览器访问 http://服务器IP/ （若 80 被占用，改下方 ports 为 "8080:80"）
 services:
@@ -20,6 +20,10 @@ services:
     build:
       context: .
       dockerfile: deploy/docker/Dockerfile.web
+      args:
+        VITE_SUPABASE_URL: ${VITE_SUPABASE_URL:-}
+        VITE_SUPABASE_ANON_KEY: ${VITE_SUPABASE_ANON_KEY:-}
+        VITE_API_BASE: ${VITE_API_BASE:-}
     ports:
       - "80:80"
     depends_on:
