@@ -34,6 +34,8 @@ import {
 } from "./reference-search-index";
 import { wordCount } from "../util/wordCount";
 import type { WritingStore } from "./writing-store";
+import { normalizeImportRows } from "./import-normalize";
+import { remapImportMergePayload, type MergeRemapResult } from "./backup-merge-remap";
 
 /** 3.7：无 token 时的字面检索回退路径最多扫描的分块数，避免巨库一次读入过多正文 */
 const LITERAL_FALLBACK_MAX_CHUNKS = 500;
@@ -53,75 +55,6 @@ async function excerptTagIdsMap(db: ReturnType<typeof getDB>, excerptIds: string
     map.set(r.excerptId, list);
   }
   return map;
-}
-
-function normalizeImportRows(data: {
-  works: Work[];
-  chapters: Chapter[];
-  volumes?: Volume[];
-  chapterSnapshots?: ChapterSnapshot[];
-}): {
-  works: Work[];
-  volumes: Volume[];
-  chapters: Chapter[];
-  chapterSnapshots: ChapterSnapshot[];
-} {
-  let volumes = data.volumes ?? [];
-  const chapters = data.chapters.map((c) => ({ ...c }));
-  if (volumes.length === 0 && chapters.length > 0) {
-    const widSet = [...new Set(chapters.map((c) => c.workId))];
-    volumes = [];
-    for (const wid of widSet) {
-      const vid = crypto.randomUUID();
-      volumes.push({
-        id: vid,
-        workId: wid,
-        title: "正文",
-        order: 0,
-        createdAt: Date.now(),
-      });
-      for (let i = 0; i < chapters.length; i++) {
-        if (chapters[i].workId === wid && !chapters[i].volumeId) {
-          chapters[i] = { ...chapters[i], volumeId: vid };
-        }
-      }
-    }
-  }
-  for (let i = 0; i < chapters.length; i++) {
-    if (!chapters[i].volumeId) {
-      let vol = volumes.find((v) => v.workId === chapters[i].workId);
-      if (!vol) {
-        vol = {
-          id: crypto.randomUUID(),
-          workId: chapters[i].workId,
-          title: "正文",
-          order: 0,
-          createdAt: Date.now(),
-        };
-        volumes.push(vol);
-      }
-      chapters[i] = { ...chapters[i], volumeId: vol.id };
-    }
-    const content = chapters[i].content ?? "";
-    if (chapters[i].wordCountCache === undefined) {
-      chapters[i] = {
-        ...chapters[i],
-        wordCountCache: wordCount(content),
-      };
-    }
-    if (chapters[i].summary === undefined) {
-      chapters[i] = {
-        ...chapters[i],
-        summary: "",
-      };
-    }
-  }
-  return {
-    works: data.works.map((w) => normalizeWorkRow(w)),
-    volumes,
-    chapters,
-    chapterSnapshots: data.chapterSnapshots ?? [],
-  };
 }
 
 /**
@@ -1450,219 +1383,122 @@ export class WritingStoreIndexedDB implements WritingStore {
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
   }): Promise<void> {
-    const normalized = normalizeImportRows(data);
-    const refLibIn = data.referenceLibrary ?? [];
-    const refChunksIn = data.referenceChunks ?? [];
-    const refChapterHeadsIn = data.referenceChapterHeads ?? [];
-    const excerptsIn = data.referenceExcerpts ?? [];
-    const tagsIn = data.referenceTags ?? [];
-    const excerptTagsIn = data.referenceExcerptTags ?? [];
-    const bibleCharsIn = data.bibleCharacters ?? [];
-    const bibleWorldIn = data.bibleWorldEntries ?? [];
-    const bibleForeIn = data.bibleForeshadowing ?? [];
-    const bibleTimeIn = data.bibleTimelineEvents ?? [];
-    const bibleTplIn = data.bibleChapterTemplates ?? [];
-    const chapterBibleIn = data.chapterBible ?? [];
-    const bibleGlossIn = data.bibleGlossaryTerms ?? [];
-    const styleIn = data.workStyleCards ?? [];
-    const workMap = new Map<string, string>();
-    const volumeMap = new Map<string, string>();
-    const chapterMap = new Map<string, string>();
-    const refWorkMap = new Map<string, string>();
-    const chunkIdMap = new Map<string, string>();
-    const tagMap = new Map<string, string>();
-    const excerptOldToNew = new Map<string, string>();
+    const m = remapImportMergePayload(data, now);
+    await this.bulkAddFullMergeRemap(m);
+  }
 
-    for (const w of normalized.works) {
-      workMap.set(w.id, crypto.randomUUID());
+  /**
+   * Hybrid 存储：合并导入时仅把参考库相关行写入 IndexedDB（写作侧已由 Supabase 写入）。
+   */
+  async applyRemappedMergeReferenceOnly(m: MergeRemapResult): Promise<void> {
+    const db = getDB();
+    await db.transaction(
+      "rw",
+      [
+        db.referenceLibrary,
+        db.referenceChunks,
+        db.referenceExcerpts,
+        db.referenceTags,
+        db.referenceExcerptTags,
+        db.referenceChapterHeads,
+      ],
+      async () => {
+        if (m.newRefLib.length) await db.referenceLibrary.bulkAdd(m.newRefLib);
+        if (m.newRefChunks.length) await db.referenceChunks.bulkAdd(m.newRefChunks);
+        if (m.newRefChapterHeads.length) await db.referenceChapterHeads.bulkAdd(m.newRefChapterHeads);
+        if (m.newExcerpts.length) await db.referenceExcerpts.bulkAdd(m.newExcerpts);
+        if (m.newTags.length) await db.referenceTags.bulkAdd(m.newTags);
+        if (m.newExcerptTags.length) await db.referenceExcerptTags.bulkAdd(m.newExcerptTags);
+      },
+    );
+    for (const r of m.newRefLib) {
+      await this.rebuildReferenceSearchIndexForRefWork(r.id);
     }
-    for (const v of normalized.volumes) {
-      volumeMap.set(v.id, crypto.randomUUID());
-    }
-    for (const c of normalized.chapters) {
-      chapterMap.set(c.id, crypto.randomUUID());
-    }
-    for (const r of refLibIn) {
-      refWorkMap.set(r.id, crypto.randomUUID());
-    }
-    for (const t of tagsIn) {
-      tagMap.set(t.id, crypto.randomUUID());
-    }
+  }
 
-    const newWorks = normalized.works.map((w) => ({
-      ...w,
-      id: workMap.get(w.id)!,
-      progressCursor: w.progressCursor ? chapterMap.get(w.progressCursor) ?? null : null,
-    }));
-
-    const newVolumes = normalized.volumes.map((v) => ({
-      ...v,
-      id: volumeMap.get(v.id)!,
-      workId: workMap.get(v.workId)!,
-    }));
-
-    const newChapters = normalized.chapters.map((c) => ({
-      ...c,
-      id: chapterMap.get(c.id)!,
-      workId: workMap.get(c.workId)!,
-      volumeId: volumeMap.get(c.volumeId)!,
-    }));
-
-    const newSnaps = normalized.chapterSnapshots
-      .filter((s) => chapterMap.has(s.chapterId))
-      .map((s) => ({
-        ...s,
-        id: crypto.randomUUID(),
-        chapterId: chapterMap.get(s.chapterId)!,
-      }));
-
-    const newRefLib = refLibIn.map((r) => ({
-      ...r,
-      id: refWorkMap.get(r.id)!,
-      category: r.category ?? "",
-      chapterHeadCount: r.chapterHeadCount ?? 0,
-    }));
-
-    const newRefChunks = refChunksIn.map((c) => {
-      const nid = crypto.randomUUID();
-      chunkIdMap.set(c.id, nid);
-      return {
-        ...c,
-        id: nid,
-        refWorkId: refWorkMap.get(c.refWorkId)!,
-        isChapterHead: c.isChapterHead ?? false,
-        embeddings: c.embeddings ?? null,
-      };
-    });
-
-    const newRefChapterHeads: ReferenceChapterHead[] = [];
-    for (const h of refChapterHeadsIn) {
-      const nw = refWorkMap.get(h.refWorkId);
-      const nc = chunkIdMap.get(h.chunkId);
-      if (!nw || !nc) continue;
-      newRefChapterHeads.push({
-        ...h,
-        id: crypto.randomUUID(),
-        refWorkId: nw,
-        chunkId: nc,
-      });
+  /**
+   * Hybrid：全量导入时仅替换参考库相关表（写作数据已由 Supabase 写入）。
+   */
+  async importReferenceOnlyReplace(data: {
+    referenceLibrary?: ReferenceLibraryEntry[];
+    referenceChunks?: ReferenceChunk[];
+    referenceTokenPostings?: ReferenceTokenPosting[];
+    referenceExcerpts?: ReferenceExcerpt[];
+    referenceTags?: ReferenceTag[];
+    referenceExcerptTags?: ReferenceExcerptTag[];
+    referenceChapterHeads?: ReferenceChapterHead[];
+  }): Promise<void> {
+    const refLib = data.referenceLibrary ?? [];
+    const refChunks = data.referenceChunks ?? [];
+    const refChapterHeads = data.referenceChapterHeads ?? [];
+    const refPostings = data.referenceTokenPostings ?? [];
+    const refExcerpts = data.referenceExcerpts ?? [];
+    const refTags = data.referenceTags ?? [];
+    const refExcerptTags = data.referenceExcerptTags ?? [];
+    const db = getDB();
+    await db.transaction(
+      "rw",
+      [
+        db.referenceLibrary,
+        db.referenceChunks,
+        db.referenceTokenPostings,
+        db.referenceExcerpts,
+        db.referenceTags,
+        db.referenceExcerptTags,
+        db.referenceChapterHeads,
+      ],
+      async () => {
+        await db.referenceTokenPostings.clear();
+        await db.referenceExcerptTags.clear();
+        await db.referenceTags.clear();
+        await db.referenceExcerpts.clear();
+        await db.referenceChapterHeads.clear();
+        await db.referenceChunks.clear();
+        await db.referenceLibrary.clear();
+        if (refLib.length) {
+          await db.referenceLibrary.bulkAdd(
+            refLib.map((r) => ({
+              ...r,
+              category: r.category ?? "",
+              chapterHeadCount: r.chapterHeadCount ?? 0,
+            })),
+          );
+        }
+        if (refChunks.length) {
+          await db.referenceChunks.bulkAdd(
+            refChunks.map((c) => ({
+              ...c,
+              isChapterHead: c.isChapterHead ?? false,
+              embeddings: c.embeddings ?? null,
+            })),
+          );
+        }
+        if (refChapterHeads.length) await db.referenceChapterHeads.bulkAdd(refChapterHeads);
+        if (refPostings.length) await db.referenceTokenPostings.bulkAdd(refPostings);
+        if (refExcerpts.length) {
+          await db.referenceExcerpts.bulkAdd(
+            refExcerpts.map((e) => ({
+              ...e,
+              linkedWorkId: e.linkedWorkId ?? null,
+              linkedChapterId: e.linkedChapterId ?? null,
+            })),
+          );
+        }
+        if (refTags.length) await db.referenceTags.bulkAdd(refTags);
+        if (refExcerptTags.length) await db.referenceExcerptTags.bulkAdd(refExcerptTags);
+      },
+    );
+    if (refChunks.length > 0 && refChapterHeads.length === 0) {
+      const ids = [...new Set(refChunks.map((c) => c.refWorkId))];
+      for (const rid of ids) {
+        await this.syncChapterMetadataForRefWork(rid);
+      }
+    } else if (refChunks.length > 0 && refPostings.length === 0) {
+      await this.rebuildAllReferenceSearchIndex();
     }
+  }
 
-    const newExcerpts: ReferenceExcerpt[] = [];
-    for (const ex of excerptsIn) {
-      const nw = refWorkMap.get(ex.refWorkId);
-      const nc = chunkIdMap.get(ex.chunkId);
-      if (!nw || !nc) continue;
-      const newId = crypto.randomUUID();
-      excerptOldToNew.set(ex.id, newId);
-      const lw = ex.linkedWorkId ? workMap.get(ex.linkedWorkId) ?? null : null;
-      const lc = ex.linkedChapterId ? chapterMap.get(ex.linkedChapterId) ?? null : null;
-      newExcerpts.push({
-        ...ex,
-        id: newId,
-        refWorkId: nw,
-        chunkId: nc,
-        linkedWorkId: lw,
-        linkedChapterId: lc,
-      });
-    }
-
-    const newTags: ReferenceTag[] = tagsIn.map((t) => ({
-      ...t,
-      id: tagMap.get(t.id)!,
-    }));
-
-    const newExcerptTags: ReferenceExcerptTag[] = [];
-    for (const j of excerptTagsIn) {
-      const nid = excerptOldToNew.get(j.excerptId);
-      const tid = tagMap.get(j.tagId);
-      if (!nid || !tid) continue;
-      newExcerptTags.push({
-        id: crypto.randomUUID(),
-        excerptId: nid,
-        tagId: tid,
-      });
-    }
-
-    const newBibleChars: BibleCharacter[] = [];
-    for (const c of bibleCharsIn) {
-      const nw = workMap.get(c.workId);
-      if (!nw) continue;
-      newBibleChars.push({ ...c, id: crypto.randomUUID(), workId: nw });
-    }
-    const newBibleWorld: BibleWorldEntry[] = [];
-    for (const c of bibleWorldIn) {
-      const nw = workMap.get(c.workId);
-      if (!nw) continue;
-      newBibleWorld.push({ ...c, id: crypto.randomUUID(), workId: nw });
-    }
-    const newBibleFore: BibleForeshadow[] = [];
-    for (const c of bibleForeIn) {
-      const nw = workMap.get(c.workId);
-      if (!nw) continue;
-      const nc = c.chapterId ? chapterMap.get(c.chapterId) ?? null : null;
-      newBibleFore.push({
-        ...c,
-        id: crypto.randomUUID(),
-        workId: nw,
-        chapterId: nc,
-      });
-    }
-    const newBibleTime: BibleTimelineEvent[] = [];
-    for (const c of bibleTimeIn) {
-      const nw = workMap.get(c.workId);
-      if (!nw) continue;
-      const nc = c.chapterId ? chapterMap.get(c.chapterId) ?? null : null;
-      newBibleTime.push({
-        ...c,
-        id: crypto.randomUUID(),
-        workId: nw,
-        chapterId: nc,
-      });
-    }
-    const newBibleTpl: BibleChapterTemplate[] = [];
-    for (const c of bibleTplIn) {
-      const nw = workMap.get(c.workId);
-      if (!nw) continue;
-      newBibleTpl.push({ ...c, id: crypto.randomUUID(), workId: nw });
-    }
-    const newChapterBible: ChapterBible[] = [];
-    for (const c of chapterBibleIn) {
-      const nw = workMap.get(c.workId);
-      const nc = chapterMap.get(c.chapterId);
-      if (!nw || !nc) continue;
-      newChapterBible.push({
-        ...c,
-        id: crypto.randomUUID(),
-        workId: nw,
-        chapterId: nc,
-      });
-    }
-    const newBibleGloss: BibleGlossaryTerm[] = [];
-    for (const c of bibleGlossIn) {
-      const nw = workMap.get(c.workId);
-      if (!nw) continue;
-      newBibleGloss.push({ ...c, id: crypto.randomUUID(), workId: nw });
-    }
-
-    const newStyleCards: WorkStyleCard[] = [];
-    for (const s of styleIn) {
-      const wid = s.workId || s.id;
-      const nw = workMap.get(wid);
-      if (!nw) continue;
-      newStyleCards.push({
-        ...s,
-        id: nw,
-        workId: nw,
-        updatedAt: s.updatedAt ?? now(),
-        pov: s.pov ?? "",
-        tone: s.tone ?? "",
-        bannedPhrases: s.bannedPhrases ?? "",
-        styleAnchor: s.styleAnchor ?? "",
-        extraRules: s.extraRules ?? "",
-      });
-    }
-
+  private async bulkAddFullMergeRemap(m: MergeRemapResult): Promise<void> {
     const db = getDB();
     await db.transaction(
       "rw",
@@ -1687,39 +1523,28 @@ export class WritingStoreIndexedDB implements WritingStore {
         db.workStyleCards,
       ],
       async () => {
-        if (newWorks.length) await db.works.bulkAdd(newWorks);
-        if (newVolumes.length) await db.volumes.bulkAdd(newVolumes);
-        if (newChapters.length) await db.chapters.bulkAdd(newChapters);
-        if (newSnaps.length) await db.chapterSnapshots.bulkAdd(newSnaps);
-        if (newRefLib.length) await db.referenceLibrary.bulkAdd(newRefLib);
-        if (newRefChunks.length) await db.referenceChunks.bulkAdd(newRefChunks);
-        if (newRefChapterHeads.length) await db.referenceChapterHeads.bulkAdd(newRefChapterHeads);
-        if (newExcerpts.length) await db.referenceExcerpts.bulkAdd(newExcerpts);
-        if (newTags.length) await db.referenceTags.bulkAdd(newTags);
-        if (newExcerptTags.length) await db.referenceExcerptTags.bulkAdd(newExcerptTags);
-        if (newBibleChars.length) await db.bibleCharacters.bulkAdd(newBibleChars);
-        if (newBibleWorld.length) await db.bibleWorldEntries.bulkAdd(newBibleWorld);
-        if (newBibleFore.length) await db.bibleForeshadowing.bulkAdd(newBibleFore);
-        if (newBibleTime.length) await db.bibleTimelineEvents.bulkAdd(newBibleTime);
-        if (newBibleTpl.length) await db.bibleChapterTemplates.bulkAdd(newBibleTpl);
-        if (newChapterBible.length) await db.chapterBible.bulkAdd(newChapterBible);
-        if (newBibleGloss.length) await db.bibleGlossaryTerms.bulkAdd(newBibleGloss);
-        if (newStyleCards.length) await db.workStyleCards.bulkAdd(newStyleCards);
+        if (m.newWorks.length) await db.works.bulkAdd(m.newWorks);
+        if (m.newVolumes.length) await db.volumes.bulkAdd(m.newVolumes);
+        if (m.newChapters.length) await db.chapters.bulkAdd(m.newChapters);
+        if (m.newSnaps.length) await db.chapterSnapshots.bulkAdd(m.newSnaps);
+        if (m.newRefLib.length) await db.referenceLibrary.bulkAdd(m.newRefLib);
+        if (m.newRefChunks.length) await db.referenceChunks.bulkAdd(m.newRefChunks);
+        if (m.newRefChapterHeads.length) await db.referenceChapterHeads.bulkAdd(m.newRefChapterHeads);
+        if (m.newExcerpts.length) await db.referenceExcerpts.bulkAdd(m.newExcerpts);
+        if (m.newTags.length) await db.referenceTags.bulkAdd(m.newTags);
+        if (m.newExcerptTags.length) await db.referenceExcerptTags.bulkAdd(m.newExcerptTags);
+        if (m.newBibleChars.length) await db.bibleCharacters.bulkAdd(m.newBibleChars);
+        if (m.newBibleWorld.length) await db.bibleWorldEntries.bulkAdd(m.newBibleWorld);
+        if (m.newBibleFore.length) await db.bibleForeshadowing.bulkAdd(m.newBibleFore);
+        if (m.newBibleTime.length) await db.bibleTimelineEvents.bulkAdd(m.newBibleTime);
+        if (m.newBibleTpl.length) await db.bibleChapterTemplates.bulkAdd(m.newBibleTpl);
+        if (m.newChapterBible.length) await db.chapterBible.bulkAdd(m.newChapterBible);
+        if (m.newBibleGloss.length) await db.bibleGlossaryTerms.bulkAdd(m.newBibleGloss);
+        if (m.newStyleCards.length) await db.workStyleCards.bulkAdd(m.newStyleCards);
       },
     );
-    for (const r of newRefLib) {
+    for (const r of m.newRefLib) {
       await this.rebuildReferenceSearchIndexForRefWork(r.id);
     }
   }
-}
-
-/** 兼容旧备份 JSON 中的 `progressChapterId` */
-function normalizeWorkRow(raw: Work & { progressChapterId?: string | null }): Work {
-  return {
-    id: raw.id,
-    title: raw.title,
-    createdAt: raw.createdAt,
-    updatedAt: raw.updatedAt,
-    progressCursor: raw.progressCursor ?? raw.progressChapterId ?? null,
-  };
 }

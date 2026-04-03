@@ -1,12 +1,22 @@
 import type { WritingStore } from "./writing-store";
+import { WritingStoreHybrid } from "./writing-store-hybrid";
 import { WritingStoreIndexedDB } from "./writing-store-indexeddb";
 
 let store: WritingStore | null = null;
 
-/** 当前运行环境使用的存储后端（Web 默认为 IndexedDB）。 */
+function createDefaultStore(): WritingStore {
+  const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim();
+  const key = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim();
+  if (url && key) {
+    return new WritingStoreHybrid();
+  }
+  return new WritingStoreIndexedDB();
+}
+
+/** 当前运行环境使用的存储后端（未配 Supabase 时为 IndexedDB；配置齐全时为 Hybrid：写作上云 + 参考库本地）。 */
 export function getWritingStore(): WritingStore {
   if (!store) {
-    store = new WritingStoreIndexedDB();
+    store = createDefaultStore();
   }
   return store;
 }
