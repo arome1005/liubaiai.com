@@ -350,6 +350,16 @@ body {
   border-color: #262626;
 }
 
+/* 主按钮下方：Google / 手机验证码 / 微信等，后续只在此栈内扩展 */
+.login-v2-alt-logins {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.login-v2-alt-logins .login-v2-btn {
+  margin-bottom: 0;
+}
+
 .login-v2-footer {
   text-align: center;
   font-size: 0.875rem;

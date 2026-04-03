@@ -23,8 +23,10 @@ export function ResetPasswordPage() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      if (!import.meta.env.VITE_SUPABASE_URL) {
-        if (!cancelled) setMsg("未配置 Supabase 前端环境变量。");
+      const url = import.meta.env.VITE_SUPABASE_URL?.trim();
+      const anon = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+      if (!url || !anon) {
+        if (!cancelled) setMsg("未配置 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY。");
         return;
       }
       const supabase = getSupabase();
@@ -85,7 +87,7 @@ export function ResetPasswordPage() {
     }
   }
 
-  if (!import.meta.env.VITE_SUPABASE_URL) {
+  if (!import.meta.env.VITE_SUPABASE_URL?.trim() || !import.meta.env.VITE_SUPABASE_ANON_KEY?.trim()) {
     return (
       <div className="page settings-page login-page">
         <header className="page-header">
@@ -95,7 +97,7 @@ export function ResetPasswordPage() {
           <h1>重置密码</h1>
         </header>
         <section className="settings-section">
-          <p className="login-msg">未配置 VITE_SUPABASE_URL。</p>
+          <p className="login-msg">未配置 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY。</p>
         </section>
       </div>
     );

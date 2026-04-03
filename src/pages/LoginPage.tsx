@@ -340,9 +340,19 @@ export function LoginPage() {
           <button type="button" className="login-v2-btn login-v2-btn--primary login-v2-btn--emph" onClick={() => void onLogin()} disabled={busy}>
             登录
           </button>
-          <button type="button" className="login-v2-btn login-v2-btn--primary" disabled title="即将支持 Google 登录">
-            使用 Google 登录（即将开放）
-          </button>
+
+          {/* 其它登录方式：后续接入 Google / 手机验证码 / 微信 时只在本容器内增改 */}
+          <div className="login-v2-alt-logins" aria-label="更多登录方式">
+            <button type="button" className="login-v2-btn login-v2-btn--primary" disabled title="即将支持 Google 登录">
+              使用 Google 登录（即将开放）
+            </button>
+            <button type="button" className="login-v2-btn login-v2-btn--primary" disabled title="即将支持手机验证码登录">
+              手机验证码登录（即将开放）
+            </button>
+            <button type="button" className="login-v2-btn login-v2-btn--primary" disabled title="即将支持微信登录">
+              微信登录（即将开放）
+            </button>
+          </div>
 
           <p className="login-v2-footer">
             还没有账号？{" "}

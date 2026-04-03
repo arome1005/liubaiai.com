@@ -47,6 +47,11 @@
 
 **结论**：核心开发闭环在代码侧已接上；**未完成**主要是 **你方环境配置 + 真机联调 + 可选迁移与运维决策**。
 
+**仓库内已补的文档/校验（减轻 #4、#7 的认知负担）**
+
+- **#7 双轨 DDL**：`backend/migrate.js` 与 `supabase/schema.sql` 顶部互相说明用途（Supabase 托管 vs 自建 legacy）。
+- **#4 忘记密码**：根目录 `.env.example` 与 `backend/.env.example` 写明 Supabase Redirect URLs 须包含 `/reset-password`；`ResetPasswordPage` 同时要求 `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`（与 `authMe` 等一致）。
+
 ---
 
 ## 3. 今天（本次会话）具体改了什么

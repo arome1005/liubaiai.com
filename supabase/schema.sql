@@ -3,6 +3,7 @@
 -- 藏经 reference_* 仅存浏览器，此处不建表。
 -- 说明：面向「新库 / 未建 public 业务表」；若你已用旧版建过表，勿整段重跑，需单独做迁移。
 -- 若触发器报错：把 execute procedure 改为 execute function（按实例二选一）。
+-- 自建 Postgres（非 Supabase）legacy 建表见 backend/migrate.js — 勿与 Supabase 混用同一套迁移策略。
 -- =============================================================================
 
 create extension if not exists pgcrypto;

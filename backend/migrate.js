@@ -2,6 +2,11 @@ import { createPool } from "./db.js";
 
 const pool = createPool();
 
+/**
+ * 与 `supabase/schema.sql` 的关系：
+ * - **Supabase 托管**：在控制台 SQL Editor 执行仓库根目录 `supabase/schema.sql`（含 RLS、`app_user` 触发器等）。
+ * - **本脚本**：面向自建 VPS / 本地 Postgres 的 legacy 建表，**不含** Supabase Auth 侧策略；两套 DDL 可能长期分叉，勿假定与云端逐字一致。
+ */
 const SQL = `
 create extension if not exists pgcrypto;
 
