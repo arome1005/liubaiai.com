@@ -1,10 +1,15 @@
--- 留白写作：在 Supabase SQL Editor 中执行（与 auth.users 同库）
--- 藏经（reference_*）仅存浏览器 IndexedDB，此处不建表。
+-- =============================================================================
+-- 留白写作 · Supabase 完整初始化（单文件，空库在 SQL Editor 中整段执行一次即可）
+-- 藏经 reference_* 仅存浏览器，此处不建表。
+-- 说明：面向「新库 / 未建 public 业务表」；若你已用旧版建过表，勿整段重跑，需单独做迁移。
+-- 若触发器报错：把 execute procedure 改为 execute function（按实例二选一）。
+-- =============================================================================
 
 create extension if not exists pgcrypto;
 
--- ========= 用户镜像（与 auth.users 同步；供 test_content 等 FK）=========
--- 新用户注册后由下方 trigger 写入；已存在用户可执行 supabase/backfill-app-user.sql
+-- -----------------------------------------------------------------------------
+-- 1) 用户镜像 app_user（与 auth.users 一一对应；work / test_content 等均指向本表）
+-- -----------------------------------------------------------------------------
 create table if not exists public.app_user (
   id uuid primary key references auth.users (id) on delete cascade,
   email text,
@@ -12,10 +17,41 @@ create table if not exists public.app_user (
 );
 create index if not exists idx_app_user_email on public.app_user (email);
 
--- ========= 写作核心 =========
+-- -----------------------------------------------------------------------------
+-- 2) 新用户写入 auth.users 时，自动插入 app_user（SECURITY DEFINER + search_path）
+-- -----------------------------------------------------------------------------
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.app_user (id, email)
+  values (new.id, new.email)
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
+
+-- -----------------------------------------------------------------------------
+-- 3) 存量账号：把已有 auth.users 补进 app_user（新库为空时无影响；有老用户时必跑）
+-- -----------------------------------------------------------------------------
+insert into public.app_user (id, email)
+select id, email from auth.users
+on conflict (id) do nothing;
+
+-- -----------------------------------------------------------------------------
+-- 4) 写作核心（user_id → app_user，与 Auth 镜像一致）
+-- -----------------------------------------------------------------------------
 create table if not exists public.work (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
+  user_id uuid not null references public.app_user (id) on delete cascade,
   title text not null,
   created_at bigint not null,
   updated_at bigint not null,
@@ -65,7 +101,9 @@ create table if not exists public.work_style_card (
   updated_at bigint not null
 );
 
--- ========= 圣经 / 设定 =========
+-- -----------------------------------------------------------------------------
+-- 5) 圣经 / 设定
+-- -----------------------------------------------------------------------------
 create table if not exists public.bible_character (
   id uuid primary key default gen_random_uuid(),
   work_id uuid not null references public.work (id) on delete cascade,
@@ -154,7 +192,9 @@ create table if not exists public.bible_glossary_term (
 );
 create index if not exists idx_glossary_work_term on public.bible_glossary_term (work_id, term);
 
--- ========= 注册验证码（仅服务端 service_role 访问；前端勿直连） =========
+-- -----------------------------------------------------------------------------
+-- 6) 注册验证码（仅后端 service_role 访问；勿对 anon 建 policy）
+-- -----------------------------------------------------------------------------
 create table if not exists public.email_otp_challenge (
   id uuid primary key default gen_random_uuid(),
   email text not null,
@@ -167,7 +207,9 @@ create table if not exists public.email_otp_challenge (
 );
 create index if not exists idx_otp_email_created on public.email_otp_challenge (email, created_at desc);
 
--- ========= 联调 =========
+-- -----------------------------------------------------------------------------
+-- 7) 联调
+-- -----------------------------------------------------------------------------
 create table if not exists public.test_content (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.app_user (id) on delete cascade,
@@ -176,27 +218,9 @@ create table if not exists public.test_content (
 );
 create index if not exists idx_test_content_user_created on public.test_content (user_id, created_at desc);
 
--- 新 Supabase 用户写入 auth.users 时同步一行 app_user（与 Gemini/常见做法一致）
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  insert into public.app_user (id, email)
-  values (new.id, new.email)
-  on conflict (id) do nothing;
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
-
--- ========= RLS =========
+-- =============================================================================
+-- 8) RLS：先 ENABLE，再 DROP POLICY IF EXISTS，再 CREATE（策略段可重复执行）
+-- =============================================================================
 alter table public.work enable row level security;
 alter table public.volume enable row level security;
 alter table public.chapter enable row level security;
@@ -213,28 +237,31 @@ alter table public.app_user enable row level security;
 alter table public.test_content enable row level security;
 alter table public.email_otp_challenge enable row level security;
 
--- app_user（本人；插入由 trigger / 服务端完成）
+drop policy if exists app_user_self on public.app_user;
 create policy app_user_self on public.app_user for all
   using (auth.uid() = id)
   with check (auth.uid() = id);
 
--- work
+drop policy if exists work_select on public.work;
+drop policy if exists work_insert on public.work;
+drop policy if exists work_update on public.work;
+drop policy if exists work_delete on public.work;
 create policy work_select on public.work for select using (auth.uid() = user_id);
 create policy work_insert on public.work for insert with check (auth.uid() = user_id);
 create policy work_update on public.work for update using (auth.uid() = user_id);
 create policy work_delete on public.work for delete using (auth.uid() = user_id);
 
--- volume（经 work 归属）
+drop policy if exists volume_all on public.volume;
 create policy volume_all on public.volume for all using (
   exists (select 1 from public.work w where w.id = volume.work_id and w.user_id = auth.uid())
 );
 
--- chapter
+drop policy if exists chapter_all on public.chapter;
 create policy chapter_all on public.chapter for all using (
   exists (select 1 from public.work w where w.id = chapter.work_id and w.user_id = auth.uid())
 );
 
--- chapter_snapshot
+drop policy if exists snapshot_all on public.chapter_snapshot;
 create policy snapshot_all on public.chapter_snapshot for all using (
   exists (
     select 1
@@ -244,12 +271,18 @@ create policy snapshot_all on public.chapter_snapshot for all using (
   )
 );
 
--- work_style_card
+drop policy if exists wsc_all on public.work_style_card;
 create policy wsc_all on public.work_style_card for all using (
   exists (select 1 from public.work w where w.id = work_style_card.work_id and w.user_id = auth.uid())
 );
 
--- bible_*
+drop policy if exists bc_all on public.bible_character;
+drop policy if exists bw_all on public.bible_world_entry;
+drop policy if exists bf_all on public.bible_foreshadow;
+drop policy if exists bt_all on public.bible_timeline_event;
+drop policy if exists bct_all on public.bible_chapter_template;
+drop policy if exists cb_all on public.chapter_bible;
+drop policy if exists bgt_all on public.bible_glossary_term;
 create policy bc_all on public.bible_character for all using (
   exists (select 1 from public.work w where w.id = bible_character.work_id and w.user_id = auth.uid())
 );
@@ -272,8 +305,7 @@ create policy bgt_all on public.bible_glossary_term for all using (
   exists (select 1 from public.work w where w.id = bible_glossary_term.work_id and w.user_id = auth.uid())
 );
 
--- test_content
+drop policy if exists tc_all on public.test_content;
 create policy tc_all on public.test_content for all using (auth.uid() = user_id);
 
--- email_otp_challenge：禁止 anon/authenticated 直接访问（仅 service_role 绕过 RLS）
--- 不创建 policy = 默认拒绝
+-- email_otp_challenge：不建 policy → 仅 service_role 可访问
