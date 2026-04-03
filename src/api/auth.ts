@@ -1,5 +1,5 @@
 import { apiUrl } from "./base";
-import { getSupabase } from "../lib/supabase";
+import { getSessionStorageSupabase, getSupabase } from "../lib/supabase";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -9,15 +9,23 @@ function normEmail(email: string) {
   return String(email ?? "").trim().toLowerCase();
 }
 
+function mapUser(u: { id: string; email?: string | null }): AuthUser {
+  return { id: u.id, email: u.email ?? "" };
+}
+
 export async function authMe(): Promise<{ user: AuthUser | null }> {
   if (!import.meta.env.VITE_SUPABASE_URL?.trim() || !import.meta.env.VITE_SUPABASE_ANON_KEY?.trim()) {
     return { user: null };
   }
-  const { data, error } = await getSupabase().auth.getSession();
-  if (error) throw new Error("ME_FAILED");
-  const u = data.session?.user;
-  if (!u) return { user: null };
-  return { user: { id: u.id, email: u.email ?? "" } };
+  const persist = getSupabase();
+  const sessionOnly = getSessionStorageSupabase();
+  for (const sb of [sessionOnly, persist]) {
+    const { data, error } = await sb.auth.getSession();
+    if (error) throw new Error("ME_FAILED");
+    const u = data.session?.user;
+    if (u) return { user: mapUser(u) };
+  }
+  return { user: null };
 }
 
 /** 发送注册验证码到邮箱（未创建账号） */
@@ -37,6 +45,7 @@ export async function authRegisterComplete(
   email: string,
   password: string,
   code: string,
+  rememberLogin = true,
 ): Promise<{ user: AuthUser }> {
   const r = await fetch(apiUrl("/api/auth/register/complete"), {
     method: "POST",
@@ -47,7 +56,13 @@ export async function authRegisterComplete(
   if (!r.ok) throw new Error(data.error ?? "REGISTER_FAILED");
   if (!data.user) throw new Error("REGISTER_FAILED");
 
-  const { error } = await getSupabase().auth.signInWithPassword({
+  const persist = getSupabase();
+  const sessionOnly = getSessionStorageSupabase();
+  await persist.auth.signOut();
+  await sessionOnly.auth.signOut();
+
+  const client = rememberLogin ? persist : sessionOnly;
+  const { error } = await client.auth.signInWithPassword({
     email: normEmail(email),
     password,
   });
@@ -55,8 +70,14 @@ export async function authRegisterComplete(
   return { user: data.user };
 }
 
-export async function authLogin(email: string, password: string): Promise<{ user: AuthUser }> {
-  const { data, error } = await getSupabase().auth.signInWithPassword({
+export async function authLogin(email: string, password: string, rememberLogin = true): Promise<{ user: AuthUser }> {
+  const persist = getSupabase();
+  const sessionOnly = getSessionStorageSupabase();
+  await persist.auth.signOut();
+  await sessionOnly.auth.signOut();
+
+  const client = rememberLogin ? persist : sessionOnly;
+  const { data, error } = await client.auth.signInWithPassword({
     email: normEmail(email),
     password,
   });
@@ -71,6 +92,7 @@ export async function authLogin(email: string, password: string): Promise<{ user
 
 export async function authLogout(): Promise<void> {
   await getSupabase().auth.signOut();
+  await getSessionStorageSupabase().auth.signOut();
 }
 
 /** 由 Supabase 发送重置邮件（需在控制台配置 SMTP / 发信模板与 Redirect URLs） */

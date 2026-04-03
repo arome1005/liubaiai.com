@@ -128,6 +128,15 @@ export function AppShell() {
 
   const mastheadNavClass = (extra: string) => `app-masthead-link${extra}`;
 
+  /** 登录页：独立全屏，不显示主导航 */
+  if (pathname === "/login") {
+    return (
+      <div className="app-shell app-shell--auth-fullbleed">
+        <Outlet />
+      </div>
+    );
+  }
+
   return (
     <div className="app-shell app-shell--app">
       <div className="app-body">

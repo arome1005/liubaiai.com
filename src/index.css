@@ -83,6 +83,372 @@ body {
   grid-template-columns: minmax(0, 1fr);
 }
 
+/* 登录页：无顶栏，全屏分栏 */
+.app-shell--auth-fullbleed {
+  min-height: 100vh;
+  height: 100vh;
+  overflow: auto;
+  background: #fafafa;
+}
+
+.login-hero-page {
+  display: flex;
+  min-height: 100vh;
+  width: 100%;
+}
+
+.login-hero-page__left {
+  flex: 1;
+  min-width: 0;
+  min-height: 320px;
+}
+
+.login-hero-page__right {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 3rem 2rem 3.5rem;
+  background: #fafafa;
+  box-shadow: -6px 0 40px rgba(0, 0, 0, 0.04);
+}
+
+.login-hero-page__right-inner {
+  max-width: 400px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (max-width: 840px) {
+  .login-hero-page {
+    flex-direction: column;
+  }
+  .login-hero-page__left {
+    min-height: 220px;
+    flex: 0 0 auto;
+  }
+  .login-hero-page__right {
+    box-shadow: none;
+    flex: 1;
+  }
+}
+
+/* —— 登录页 v2：参考英文极简风（rounded-full 等效用 CSS 实现）—— */
+.login-v2-muted {
+  color: #737373;
+  font-size: 0.95rem;
+}
+
+.login-v2-toast {
+  position: fixed;
+  top: 1.25rem;
+  right: 1.25rem;
+  z-index: 10050;
+  max-width: min(22rem, calc(100vw - 2rem));
+  padding: 0.85rem 1.1rem;
+  border-radius: 12px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: #171717;
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  animation: login-v2-toast-in 0.22s ease-out;
+}
+
+@keyframes login-v2-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.login-v2-back {
+  font-size: 0.875rem;
+  margin: 0 0 2rem;
+}
+.login-v2-back a {
+  color: #6366f1;
+  text-decoration: none;
+}
+.login-v2-back a:hover {
+  text-decoration: underline;
+}
+
+.login-v2-title {
+  font-size: 1.875rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: #0a0a0a;
+  margin: 0 0 2rem;
+  line-height: 1.2;
+}
+
+.login-v2-sub {
+  font-size: 0.8125rem;
+  color: #737373;
+  margin: 0 0 2.25rem;
+  line-height: 1.5;
+}
+
+.login-v2-field {
+  margin-bottom: 1.5rem;
+}
+.login-v2-field label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #404040;
+  margin-bottom: 0.5rem;
+  letter-spacing: 0.02em;
+}
+
+/* rounded-full */
+.login-v2-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.9rem 1.15rem;
+  font-size: 1rem;
+  line-height: 1.4;
+  color: #171717;
+  background: rgba(250, 250, 250, 0.9);
+  border: 1px solid #e5e5e5;
+  border-radius: 9999px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.login-v2-input::placeholder {
+  color: #a3a3a3;
+}
+.login-v2-input:focus {
+  outline: none;
+  border-color: #a3a3a3;
+  box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.05);
+}
+
+.login-v2-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.login-v2-input-wrap .login-v2-input {
+  padding-right: 3rem;
+}
+
+.login-v2-pw-toggle {
+  position: absolute;
+  right: 0.65rem;
+  background: none;
+  border: none;
+  padding: 0.4rem;
+  cursor: pointer;
+  color: #737373;
+  border-radius: 9999px;
+  line-height: 0;
+}
+.login-v2-pw-toggle:hover {
+  color: #404040;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.login-v2-row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.25rem 0 2rem;
+  font-size: 0.8125rem;
+}
+
+.login-v2-check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #404040;
+  cursor: pointer;
+  user-select: none;
+}
+.login-v2-check input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: #171717;
+  cursor: pointer;
+}
+
+.login-v2-link {
+  color: #6366f1;
+  text-decoration: none;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.login-v2-link:hover {
+  text-decoration: underline;
+}
+
+.login-v2-link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-size: inherit;
+  font-weight: 500;
+  color: #6366f1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.login-v2-link-btn:hover {
+  text-decoration: underline;
+}
+
+.login-v2-btn {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.9rem 1.25rem;
+  margin-bottom: 0.85rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  text-align: center;
+  cursor: pointer;
+  border-radius: 9999px;
+  border: 1px solid #e5e5e5;
+  background: #fff;
+  color: #171717;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+.login-v2-btn:hover:not(:disabled) {
+  background: #fafafa;
+  border-color: #d4d4d4;
+}
+.login-v2-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.login-v2-btn--primary {
+  border-color: #171717;
+}
+.login-v2-btn--primary:hover:not(:disabled) {
+  background: #fafafa;
+  border-color: #0a0a0a;
+}
+
+.login-v2-btn--emph {
+  background: #0a0a0a;
+  color: #fff;
+  border-color: #0a0a0a;
+}
+.login-v2-btn--emph:hover:not(:disabled) {
+  background: #262626;
+  border-color: #262626;
+}
+
+.login-v2-footer {
+  text-align: center;
+  font-size: 0.875rem;
+  color: #737373;
+  margin: 2rem 0 0;
+}
+.login-v2-footer-link {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  color: #171717;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.login-v2-footer-link:hover {
+  color: #404040;
+}
+
+/* 注册弹窗 */
+.login-v2-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10040;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: rgba(10, 10, 10, 0.45);
+  backdrop-filter: blur(4px);
+}
+
+.login-v2-modal {
+  width: 100%;
+  max-width: 420px;
+  max-height: min(90vh, 640px);
+  overflow: auto;
+  padding: 1.5rem 1.5rem 1.75rem;
+  border-radius: 1.25rem;
+  background: #fafafa;
+  border: 1px solid #e5e5e5;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+}
+
+.login-v2-modal--wide {
+  max-width: 440px;
+}
+
+.login-v2-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+.login-v2-modal-head h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: #0a0a0a;
+  letter-spacing: -0.02em;
+}
+
+.login-v2-modal-close {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+  border: none;
+  border-radius: 9999px;
+  background: #fff;
+  border: 1px solid #e5e5e5;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #525252;
+}
+.login-v2-modal-close:hover {
+  background: #f5f5f5;
+}
+
+.login-v2-modal-desc {
+  font-size: 0.8125rem;
+  color: #737373;
+  line-height: 1.55;
+  margin: 0 0 1.25rem;
+}
+
+.login-v2-modal-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  margin-top: 0.25rem;
+}
+.login-v2-modal-actions .login-v2-btn {
+  margin-bottom: 0;
+}
+
 /* 写作全屏壳：主区 + 右侧栏（AI 等仅在此出现） */
 .app-shell--editor {
   grid-template-columns: minmax(0, 1fr) var(--shell-right-w);
