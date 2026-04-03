@@ -1,9 +1,10 @@
 ## 发布检查清单（Web / Vercel）
 
-最后更新：2026-03-31
+最后更新：2026-04-04
 
 ### 0. 基本
 - [ ] `npm run build` 通过
+- [ ] **生产环境变量**：`VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY` 已在托管平台配置并 **重新部署**；`/api` 已反代到 Node 或已设 `VITE_API_BASE`（见 `docs/production-deploy.md`）
 - [ ] 站点可打开（首页、写作、概要、圣经、参考库、设置）
 - [ ] 深色/浅色切换正常（无白块、文字可读）
 
