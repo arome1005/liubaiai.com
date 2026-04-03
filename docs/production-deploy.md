@@ -86,3 +86,15 @@ location /api/ {
 3. 后端日志是否收到 `POST /api/auth/register/request-code`。
 
 完成以上三项后，注册与登录应与本地联调行为一致（邮件仍取决于 SMTP 配置）。
+
+---
+
+## 已配置 `VITE_API_BASE` 但线上仍请求 `www.xxx.com/api/...` 且 405？
+
+**不是**「代码里没拼 `VITE_API_BASE`」：注册与测试接口已在 `src/api/auth.ts`、`src/api/testSave.ts` 中通过 **`apiUrl()`**（`src/api/base.ts`）拼接基址。
+
+常见原因：
+
+1. **未重新构建**：`VITE_*` 在 **`npm run build` 时**写入产物。在 Vercel 加/改变量后，必须 **Redeploy**（Deployments → 某次部署 → Redeploy，或推新 commit），让 **Build** 步骤带着新变量跑完。只改 Runtime 环境变量、不重跑 build，前端包里的基址仍是空的 → 浏览器继续用**相对路径** `/api/...`（相对当前域名）。
+2. **环境作用域**：变量是否勾选了 **Production**（若只在 Preview 里配，生产包仍为空）。
+3. **HTTPS 页面请求 HTTP API（混合内容）**：站点是 `https://www...`，若 `VITE_API_BASE=http://96.x.x.x:8788`，浏览器通常会**拦截**该请求（控制台 Mixed Content），或表现为失败。应对：给 API 配 **HTTPS**（域名 + 证书，或 Cloudflare 反代），并把 `VITE_API_BASE` 设为 **`https://...`**。
