@@ -13,7 +13,7 @@ function errLabel(code: string): string {
   const map: Record<string, string> = {
     BAD_EMAIL: "邮箱格式不正确",
     WEAK_PASSWORD: "密码至少 8 位",
-    EMAIL_TAKEN: "该邮箱已注册",
+    EMAIL_TAKEN: "该邮箱已注册，请使用上方「登录」。若忘记密码可走重置密码。",
     BAD_INPUT: "请填写邮箱和密码",
     INVALID_CREDENTIALS: "邮箱或密码错误",
     REGISTER_FAILED: "注册失败",

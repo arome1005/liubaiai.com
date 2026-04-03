@@ -20,7 +20,9 @@ const mimoProxy = {
 } as const
 
 // https://vite.dev/config/
+// 与后端共用 backend/.env，避免 VITE_SUPABASE_* 只写在 backend 时前端读不到
 export default defineConfig({
+  envDir: 'backend',
   plugins: [react()],
   server: {
     /** 小米 MiMo 等 API 常不返回 CORS；开发时走同源代理避免浏览器拦截 fetch */
