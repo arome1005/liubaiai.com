@@ -3,6 +3,15 @@
 
 create extension if not exists pgcrypto;
 
+-- ========= 用户镜像（与 auth.users 同步；供 test_content 等 FK）=========
+-- 新用户注册后由下方 trigger 写入；已存在用户可执行 supabase/backfill-app-user.sql
+create table if not exists public.app_user (
+  id uuid primary key references auth.users (id) on delete cascade,
+  email text,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_app_user_email on public.app_user (email);
+
 -- ========= 写作核心 =========
 create table if not exists public.work (
   id uuid primary key default gen_random_uuid(),
@@ -161,11 +170,31 @@ create index if not exists idx_otp_email_created on public.email_otp_challenge (
 -- ========= 联调 =========
 create table if not exists public.test_content (
   id uuid primary key default gen_random_uuid(),
-  user_id uuid not null references auth.users (id) on delete cascade,
+  user_id uuid not null references public.app_user (id) on delete cascade,
   content text not null,
   created_at timestamptz not null default now()
 );
 create index if not exists idx_test_content_user_created on public.test_content (user_id, created_at desc);
+
+-- 新 Supabase 用户写入 auth.users 时同步一行 app_user（与 Gemini/常见做法一致）
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.app_user (id, email)
+  values (new.id, new.email)
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user();
 
 -- ========= RLS =========
 alter table public.work enable row level security;
@@ -180,8 +209,14 @@ alter table public.bible_timeline_event enable row level security;
 alter table public.bible_chapter_template enable row level security;
 alter table public.chapter_bible enable row level security;
 alter table public.bible_glossary_term enable row level security;
+alter table public.app_user enable row level security;
 alter table public.test_content enable row level security;
 alter table public.email_otp_challenge enable row level security;
+
+-- app_user（本人；插入由 trigger / 服务端完成）
+create policy app_user_self on public.app_user for all
+  using (auth.uid() = id)
+  with check (auth.uid() = id);
 
 -- work
 create policy work_select on public.work for select using (auth.uid() = user_id);

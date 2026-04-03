@@ -43,6 +43,21 @@ async function authUserExistsInSupabase(email) {
   }
 }
 
+/** test_content 等表若 FK 到 public.app_user，需在插入前保证存在一行（与 auth.users 同步） */
+async function ensureAppUserRow(userId, email) {
+  if (!userId) return;
+  try {
+    await pool.query(
+      `insert into public.app_user (id, email) values ($1, $2)
+       on conflict (id) do nothing`,
+      [userId, email ?? ""],
+    );
+  } catch (e) {
+    if (e?.code === "42P01") return;
+    throw e;
+  }
+}
+
 async function requireAuth(req, reply) {
   const h = req.headers.authorization ?? "";
   const token = h.startsWith("Bearer ") ? h.slice(7).trim() : "";
@@ -115,6 +130,8 @@ async function handleRegisterComplete(req, reply) {
     return reply.code(500).send({ error: "REGISTER_FAILED" });
   }
 
+  await ensureAppUserRow(created.id, created.email ?? email);
+
   await pool.query("update email_otp_challenge set consumed_at = now() where id = $1", [row.id]);
   reply.send({ user: { id: created.id, email: created.email ?? email } });
 }
@@ -132,6 +149,7 @@ export async function buildServer() {
   /** 联调：将当前用户 ID 与测试文本写入 test_content */
   app.post("/api/test-save", { preHandler: requireAuth }, async (req, reply) => {
     const text = String(req.body?.text ?? "").trim() || "sync test";
+    await ensureAppUserRow(req.user.id, req.user.email);
     const r = await pool.query(
       "insert into test_content (user_id, content) values ($1, $2) returning id, created_at as \"createdAt\"",
       [req.user.id, text],
