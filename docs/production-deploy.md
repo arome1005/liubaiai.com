@@ -43,7 +43,7 @@
    （**无末尾斜杠**；与 `src/api/base.ts` 一致。）
 
 3. 重新 build & deploy 前端。  
-4. 后端需允许跨域：本项目 `backend/server.js` 已注册 CORS（开发为宽松配置），若生产要收紧可再改 `origin`。
+4. 后端需允许跨域：`backend/server.js` 默认允许 `https://www.liubaiai.com`、`https://liubaiai.com` 及本地 Vite 端口；更多来源可设环境变量 **`CORS_ORIGINS`**（逗号分隔）。若 **Nginx/Caddy** 在 API 前拦截 **OPTIONS** 预检且未把请求转给 Node，浏览器仍会报无 `Access-Control-Allow-Origin`，需在网关放行 OPTIONS 或交给 Fastify 处理。
 
 ### 方案 B：同源反代（Nginx / Caddy / 云负载均衡）
 

@@ -32,6 +32,28 @@ const OTP_RESEND_MS = Number(process.env.OTP_RESEND_MS ?? String(60 * 1000));
 const OTP_MAX_PER_HOUR = Number(process.env.OTP_MAX_PER_HOUR ?? "5");
 const OTP_MAX_ATTEMPTS = Number(process.env.OTP_MAX_ATTEMPTS ?? "5");
 
+/** 带 credentials 的跨域必须回显具体 Origin，不能依赖模糊的 true。可加 CORS_ORIGINS=逗号分隔 */
+function loadCorsAllowedOrigins() {
+  const set = new Set([
+    "https://www.liubaiai.com",
+    "https://liubaiai.com",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
+    "http://localhost:5175",
+    "http://127.0.0.1:5175",
+  ]);
+  const extra = String(process.env.CORS_ORIGINS ?? "");
+  for (const part of extra.split(/[\s,]+/)) {
+    const o = part.trim().replace(/\/$/, "");
+    if (o) set.add(o);
+  }
+  return set;
+}
+
+const corsAllowedOrigins = loadCorsAllowedOrigins();
+
 /** 与 Supabase 同一 Postgres 时查询 auth.users；无权限或非 Supabase 库则返回 false */
 async function authUserExistsInSupabase(email) {
   const e = normalizeEmail(email);
@@ -140,8 +162,17 @@ export async function buildServer() {
   const app = Fastify({ logger: true });
 
   await app.register(cors, {
-    origin: (origin, cb) => cb(null, true),
     credentials: true,
+    origin(origin, cb) {
+      if (!origin) {
+        return cb(null, true);
+      }
+      const norm = origin.replace(/\/$/, "");
+      if (corsAllowedOrigins.has(norm)) {
+        return cb(null, origin);
+      }
+      cb(null, false);
+    },
   });
 
   app.get("/api/health", async () => ({ ok: true }));
