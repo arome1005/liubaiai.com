@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import "dotenv/config";
@@ -428,8 +430,10 @@ export async function buildServer() {
   return app;
 }
 
-// Run as standalone server when executed directly
-const isDirectRun = process.argv[1] && process.argv[1].endsWith("/backend/server.js");
+// Run as standalone server when executed directly (compare resolved paths so PM2 / relative argv[1] still works)
+const __filename = fileURLToPath(import.meta.url);
+const entryScript = process.argv[1] ? path.resolve(process.argv[1]) : "";
+const isDirectRun = Boolean(entryScript && path.resolve(__filename) === entryScript);
 if (isDirectRun) {
   const app = await buildServer();
   // Default to localhost to avoid networkInterfaces() issues in some sandboxed environments.
