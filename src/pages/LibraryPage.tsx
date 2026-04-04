@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { createWork, deleteWork, listWorks } from "../db/repo";
 import type { Work } from "../db/types";
 import { importWorkFromFile } from "../storage/import-work";
 
 export function LibraryPage() {
+  const navigate = useNavigate();
   const [works, setWorks] = useState<Work[]>([]);
   const [loading, setLoading] = useState(true);
   const [importBusy, setImportBusy] = useState(false);
@@ -43,11 +44,13 @@ export function LibraryPage() {
     setImportBusy(true);
     try {
       const w = await importWorkFromFile(file);
-      await refresh();
-      window.location.href = `/work/${w.id}`;
+      // 先结束「导入中」：refresh/listWorks 若较慢或挂起，不应一直锁按钮
+      setImportBusy(false);
+      setWorks((prev) => (prev.some((x) => x.id === w.id) ? prev : [w, ...prev]));
+      void refresh().catch(() => {});
+      navigate(`/work/${w.id}`);
     } catch (err) {
       window.alert(err instanceof Error ? err.message : "导入失败");
-    } finally {
       setImportBusy(false);
     }
   }
