@@ -1,7 +1,9 @@
-import { Link, Outlet } from "react-router-dom";
+import { Link, Outlet, useLocation } from "react-router-dom";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useAuthUserState } from "../hooks/useAuthUserState";
 import { RightRailContext, type RightRailTab, type RightRailTabId } from "./RightRailContext";
 import { TopbarContext } from "./TopbarContext";
+import { UserAccountMenu } from "./UserAccountMenu";
 
 const LS_RIGHT_OPEN = "liubai:rightRailOpen";
 const LS_RIGHT_TAB = "liubai:rightRailTab";
@@ -17,6 +19,8 @@ function safeBool(v: string | null, fallback: boolean): boolean {
  * 写作全屏壳：无顶栏七导航，保留编辑注入顶栏 + 右侧栏（与 AppShell 右栏行为一致）。
  */
 export function EditorShell() {
+  const { pathname } = useLocation();
+  const { authUser, refreshAuth } = useAuthUserState(pathname);
   const [rightOpen, setRightOpen] = useState<boolean>(() => safeBool(localStorage.getItem(LS_RIGHT_OPEN), false));
   const [rightWidthPx, setRightWidthPx] = useState<number>(() => {
     const n = Number(localStorage.getItem(LS_RIGHT_W_PX));
@@ -135,6 +139,7 @@ export function EditorShell() {
               </div>
               <div className="app-topbar-actions app-topbar-actions--editor">
                 {topbarActionsNode}
+                <UserAccountMenu authUser={authUser} onAuthUpdated={refreshAuth} />
                 <button
                   type="button"
                   className="btn small app-editor-rail-toggle"

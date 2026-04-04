@@ -3,14 +3,20 @@ import { getSessionStorageSupabase, getSupabase } from "../lib/supabase";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
-export type AuthUser = { id: string; email: string };
+export type AuthUser = { id: string; email: string; avatarUrl?: string | null };
 
 function normEmail(email: string) {
   return String(email ?? "").trim().toLowerCase();
 }
 
-function mapUser(u: { id: string; email?: string | null }): AuthUser {
-  return { id: u.id, email: u.email ?? "" };
+function mapUser(u: {
+  id: string;
+  email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+}): AuthUser {
+  const raw = u.user_metadata?.avatar_url;
+  const avatarUrl = typeof raw === "string" && raw.length > 0 ? raw : null;
+  return { id: u.id, email: u.email ?? "", avatarUrl: avatarUrl ?? undefined };
 }
 
 export async function authMe(): Promise<{ user: AuthUser | null }> {
@@ -67,7 +73,9 @@ export async function authRegisterComplete(
     password,
   });
   if (error) throw new Error("LOGIN_FAILED");
-  return { user: data.user };
+  const { data: fresh, error: gErr } = await client.auth.getUser();
+  if (gErr || !fresh.user) throw new Error("LOGIN_FAILED");
+  return { user: mapUser(fresh.user) };
 }
 
 export async function authLogin(email: string, password: string, rememberLogin = true): Promise<{ user: AuthUser }> {
@@ -87,7 +95,9 @@ export async function authLogin(email: string, password: string, rememberLogin =
     throw new Error("LOGIN_FAILED");
   }
   if (!data.user) throw new Error("INVALID_CREDENTIALS");
-  return { user: { id: data.user.id, email: data.user.email ?? "" } };
+  const { data: fresh, error: gErr } = await client.auth.getUser();
+  if (gErr || !fresh.user) throw new Error("INVALID_CREDENTIALS");
+  return { user: mapUser(fresh.user) };
 }
 
 export async function authLogout(): Promise<void> {

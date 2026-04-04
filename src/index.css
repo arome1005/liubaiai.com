@@ -610,6 +610,167 @@ body {
   color: var(--fg);
 }
 
+/* 顶栏账户头像 + 下拉 */
+.user-account-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.user-account-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  line-height: 0;
+  box-shadow: 0 0 0 1px var(--border);
+  transition: box-shadow 0.12s ease, transform 0.12s ease;
+}
+
+.user-account-trigger:hover {
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.user-account-trigger.is-open {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.user-account-trigger--loading {
+  cursor: default;
+  pointer-events: none;
+}
+
+.user-account-avatar {
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.user-account-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-account-avatar--placeholder {
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.user-account-avatar--guest {
+  color: var(--muted);
+}
+
+.user-account-avatar--guest svg {
+  opacity: 0.85;
+}
+
+.user-account-dropdown {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  min-width: 15rem;
+  max-width: min(20rem, calc(100vw - 1.5rem));
+  padding: 0.65rem 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--fg) 12%, transparent);
+  z-index: 200;
+}
+
+.user-account-dropdown-head {
+  display: flex;
+  gap: 0.65rem;
+  padding: 0 0.85rem 0.65rem;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 0.35rem;
+}
+
+.user-account-dropdown-avatar {
+  flex-shrink: 0;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.user-account-dropdown-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.user-account-dropdown-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.user-account-dropdown-email {
+  font-size: 0.82rem;
+  font-weight: 600;
+  word-break: break-all;
+}
+
+.user-account-dropdown-actions {
+  display: flex;
+  flex-direction: column;
+  padding: 0 0.35rem;
+}
+
+.user-account-dropdown-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.65rem;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  font-size: 0.86rem;
+  color: var(--fg);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.user-account-dropdown-item:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+
+.user-account-dropdown-item:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.user-account-dropdown-item.danger {
+  color: var(--danger, #c53030);
+}
+
+:root[data-theme="dark"] .user-account-dropdown-item.danger {
+  color: #f56565;
+}
+
 .app-masthead-auth {
   font-size: 0.82rem;
   color: var(--muted);
