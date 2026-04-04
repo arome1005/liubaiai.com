@@ -1,8 +1,8 @@
+import "./load-env.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
-import "dotenv/config";
 import { createPool } from "./db.js";
 import { getSupabaseAdmin } from "./supabase-admin.js";
 import { sendSignupOtpEmail } from "./mail.js";
