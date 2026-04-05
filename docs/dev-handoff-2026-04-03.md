@@ -9,16 +9,18 @@
 
 ### 1.1 已落地（代码在仓库里，且 `npm run build` 已通过）
 
-| 模块 | 说明 |
-|------|------|
-| **Supabase DDL** | `supabase/schema.sql`：`work` / `volume` / `chapter` / `chapter_snapshot` / `work_style_card` / 全部 `bible_*` / `chapter_bible` / `email_otp_challenge` / `test_content`；**不含** `reference_*`（藏经仅浏览器）。含 RLS；`email_otp_challenge` 无 policy，依赖 service_role。 |
-| **合并导入共用 remap** | `src/storage/backup-merge-remap.ts`：`remapImportMergePayload()`，IndexedDB 全量合并与 Hybrid「云写作 + 本地参考库」共用同一套 id 映射。 |
-| **导入归一化** | `src/storage/import-normalize.ts`：`normalizeImportRows` / `normalizeWorkRow`（从 `writing-store-indexeddb` 抽出）。 |
-| **行映射** | `src/storage/supabase-writing-rows.ts`：snake_case ↔ 业务类型；`mergeWritingRowsToInserts(uid, mergeResult)` 供合并导入批量插入。 |
-| **纯云存储实现** | `src/storage/writing-store-supabase.ts`：实现 `WritingStore` 中除参考库外的能力；参考库相关方法会 **抛错**（设计上只应通过 Hybrid 用远程）。 |
-| **Hybrid** | `src/storage/writing-store-hybrid.ts`：写作/圣经/风格卡 → Supabase；参考库 → IndexedDB；`deleteWork`/`deleteChapter` 后清本机 `referenceExcerpts` 的 `linkedWorkId`/`linkedChapterId`；`exportAllData` / `importAllData` / `importAllDataMerge` 按设计拆分。 |
-| **存储入口** | `src/storage/instance.ts`：同时存在 `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` 时用 `WritingStoreHybrid`，否则 **纯** `WritingStoreIndexedDB`。 |
-| **IndexedDB 增补** | `src/storage/writing-store-indexeddb.ts`：`importReferenceOnlyReplace`（全量导入时只替换参考库表）、`applyRemappedMergeReferenceOnly`（合并导入只追加参考库）；`importAllDataMerge` 改为 `remap` + `bulkAddFullMergeRemap`。 |
+
+| 模块               | 说明                                                                                                                                                                                                                                                        |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Supabase DDL** | `supabase/schema.sql`：`work` / `volume` / `chapter` / `chapter_snapshot` / `work_style_card` / 全部 `bible_`* / `chapter_bible` / `email_otp_challenge` / `test_content`；**不含** `reference_`*（藏经仅浏览器）。含 RLS；`email_otp_challenge` 无 policy，依赖 service_role。 |
+| **合并导入共用 remap** | `src/storage/backup-merge-remap.ts`：`remapImportMergePayload()`，IndexedDB 全量合并与 Hybrid「云写作 + 本地参考库」共用同一套 id 映射。                                                                                                                                           |
+| **导入归一化**        | `src/storage/import-normalize.ts`：`normalizeImportRows` / `normalizeWorkRow`（从 `writing-store-indexeddb` 抽出）。                                                                                                                                             |
+| **行映射**          | `src/storage/supabase-writing-rows.ts`：snake_case ↔ 业务类型；`mergeWritingRowsToInserts(uid, mergeResult)` 供合并导入批量插入。                                                                                                                                         |
+| **纯云存储实现**       | `src/storage/writing-store-supabase.ts`：实现 `WritingStore` 中除参考库外的能力；参考库相关方法会 **抛错**（设计上只应通过 Hybrid 用远程）。                                                                                                                                                  |
+| **Hybrid**       | `src/storage/writing-store-hybrid.ts`：写作/圣经/风格卡 → Supabase；参考库 → IndexedDB；`deleteWork`/`deleteChapter` 后清本机 `referenceExcerpts` 的 `linkedWorkId`/`linkedChapterId`；`exportAllData` / `importAllData` / `importAllDataMerge` 按设计拆分。                       |
+| **存储入口**         | `src/storage/instance.ts`：同时存在 `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` 时用 `WritingStoreHybrid`，否则 **纯** `WritingStoreIndexedDB`。                                                                                                                   |
+| **IndexedDB 增补** | `src/storage/writing-store-indexeddb.ts`：`importReferenceOnlyReplace`（全量导入时只替换参考库表）、`applyRemappedMergeReferenceOnly`（合并导入只追加参考库）；`importAllDataMerge` 改为 `remap` + `bulkAddFullMergeRemap`。                                                              |
+
 
 ### 1.2 很可能已在更早提交里完成（本机请 `git log` 核对）
 
@@ -26,7 +28,7 @@
 
 - 前端：`@supabase/supabase-js`、`src/lib/supabase.ts`、`src/api/auth.ts`（含 `authRegisterComplete` → 后端建号后再 `signInWithPassword`）。
 - 后端：`backend/server.js` 注册 OTP、`supabase-admin` + **Service Role** 建用户；受保护 API 的 `Authorization: Bearer`。
-- `vite.config.ts` 里 `/api` 代理、`.env.example` 中的 `VITE_SUPABASE_*` 说明。
+- `vite.config.ts` 里 `/api` 代理、`.env.example` 中的 `VITE_SUPABASE_`* 说明。
 
 ---
 
@@ -34,16 +36,18 @@
 
 以下为 **建议清单**，不是代码里 TODO 注释的精确计数；可按优先级做 **约 5～8 步** 闭环验证与收尾。
 
-| # | 项 | 要做什么 |
-|---|----|----------|
-| 1 | **在 Supabase 执行 DDL** | 在 SQL Editor **首次**执行 `supabase/schema.sql`。若曾执行过一半，注意 `CREATE POLICY` 重名需手动 `DROP POLICY` 或只对新表补语句。 |
-| 2 | **环境变量** | 前端：`.env` / `.env.local` 配 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`（勿提交真实 Key）。后端：Service Role、项目 URL 等与 OTP/建号一致。 |
-| 3 | **端到端：注册 → 登录 → 写作** | 邮箱验证码 → `register/complete` → 前端 `signInWithPassword` → 打开作品列表/编辑，确认请求带 session，RLS 下能读写 `work` 等表。 |
-| 4 | **忘记密码 / 重置页** | Supabase 控制台：SMTP、Redirect URLs、`/reset-password` 与 `authForgotPassword` 的 `redirectTo` 一致。 |
-| 5 | **备份导入压测** | 大 ZIP：`importAllData` / `importAllDataMerge` 在 Hybrid 下是否超时（Supabase 单次 insert 行数限制已用分块，极大备份仍可能需 RPC/边车）。 |
-| 6 | **旧数据迁移（产品级，未做）** | 仅 IndexedDB 里已有作品、未配云或新用户：**没有**一键「把本地作品推到云端」向导；需要可另做导出再导入或专用迁移脚本。 |
-| 7 | **双轨 DDL** | 若仍维护 `backend/migrate.js`（VPS Postgres），与 `supabase/schema.sql` 长期两套易分叉；需决定：仅 Supabase，或文档标明「仅本地/legacy」。 |
-| 8 | **纯 Supabase 模式下的坑** | 不要单独 `new WritingStoreSupabase()` 给 UI 用参考库功能；必须用 Hybrid 或继续纯 IndexedDB。 |
+
+| #   | 项                     | 要做什么                                                                                                                   |
+| --- | --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| 1   | **在 Supabase 执行 DDL** | 在 SQL Editor **首次**执行 `supabase/schema.sql`。若曾执行过一半，注意 `CREATE POLICY` 重名需手动 `DROP POLICY` 或只对新表补语句。                   |
+| 2   | **环境变量**              | 前端：`.env` / `.env.local` 配 `VITE_SUPABASE_URL`、`VITE_SUPABASE_ANON_KEY`（勿提交真实 Key）。后端：Service Role、项目 URL 等与 OTP/建号一致。 |
+| 3   | **端到端：注册 → 登录 → 写作**  | 邮箱验证码 → `register/complete` → 前端 `signInWithPassword` → 打开作品列表/编辑，确认请求带 session，RLS 下能读写 `work` 等表。                    |
+| 4   | **忘记密码 / 重置页**        | Supabase 控制台：SMTP、Redirect URLs、`/reset-password` 与 `authForgotPassword` 的 `redirectTo` 一致。                            |
+| 5   | **备份导入压测**            | 大 ZIP：`importAllData` / `importAllDataMerge` 在 Hybrid 下是否超时（Supabase 单次 insert 行数限制已用分块，极大备份仍可能需 RPC/边车）。              |
+| 6   | **旧数据迁移（产品级，未做）**     | 仅 IndexedDB 里已有作品、未配云或新用户：**没有**一键「把本地作品推到云端」向导；需要可另做导出再导入或专用迁移脚本。                                                     |
+| 7   | **双轨 DDL**            | 若仍维护 `backend/migrate.js`（VPS Postgres），与 `supabase/schema.sql` 长期两套易分叉；需决定：仅 Supabase，或文档标明「仅本地/legacy」。              |
+| 8   | **纯 Supabase 模式下的坑**  | 不要单独 `new WritingStoreSupabase()` 给 UI 用参考库功能；必须用 Hybrid 或继续纯 IndexedDB。                                               |
+
 
 **结论**：核心开发闭环在代码侧已接上；**未完成**主要是 **你方环境配置 + 真机联调 + 可选迁移与运维决策**。
 
@@ -74,7 +78,7 @@
 
 ### 3.2 行为变化（对用户/数据）
 
-- 配齐 `VITE_SUPABASE_*` 且已登录：**作品/章节/圣经/风格卡** 走 Postgres；**参考库（藏经）** 仍在 IndexedDB。
+- 配齐 `VITE_SUPABASE_`* 且已登录：**作品/章节/圣经/风格卡** 走 Postgres；**参考库（藏经）** 仍在 IndexedDB。
 - 未配或登出：行为与以前 **纯 IndexedDB** 一致（`instance` 仍用 `WritingStoreIndexedDB`）。
 - 全量备份恢复：云端写作由 `WritingStoreSupabase.importAllData` 替换当前用户云数据；本地参考库由 `importReferenceOnlyReplace` 替换。
 - 合并导入：同一 `remap` 结果，写作批量插入 Supabase，参考库批量插入 IndexedDB。
@@ -145,4 +149,4 @@ git revert <commit_sha>   # 或 git reset（按团队规范）
 
 **已完成**：写作相关持久化在配好环境时可上 Supabase（RLS），参考库仍在 IndexedDB，备份导入/合并导入已按此拆分；构建通过。  
 **未完成**：你在 Supabase 与 `.env` 的落地、全流程联调、大备份与迁移产品化、以及是否与 `backend/migrate.js` 双轨统一。  
-**恢复**：`git restore` + 删除未跟踪文件，或去掉 `VITE_SUPABASE_*` 即回退纯本地存储行为。
+**恢复**：`git restore` + 删除未跟踪文件，或去掉 `VITE_SUPABASE_`* 即回退纯本地存储行为。

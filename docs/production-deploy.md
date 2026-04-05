@@ -6,11 +6,13 @@
 
 ## 现象与原因对照
 
-| 现象 | 原因 |
-|------|------|
-| 登录提示 **「未配置 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY」** | 构建生产包时（如 Vercel `npm run build`）**没有**注入这两个变量。Vite 只在**构建时**读取 `VITE_*`，运行时改服务器环境变量无效。 |
-| 控制台 **POST …/api/auth/register/request-code → 405** | 浏览器请求的是 **网站同源** 的 `/api/...`（如 `https://www.liubaiai.com/api/...`），但 **CDN/静态服务器上没有 Node 接口**，POST 不被允许 → **405 Method Not Allowed**。本地正常是因为 `vite.config.ts` 里 dev/preview **proxy** 把 `/api` 转到了后端。 |
-| 邮件发不出 | 注册验证码依赖 **Node 后端**（`npm run api:dev` 同套逻辑）连数据库并发信；若 `/api` 没到后端，或后端未部署、未配置 `SMTP`/`MAIL_*`，都会失败。 |
+
+| 现象                                                        | 原因                                                                                                                                                                                                     |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 登录提示 **「未配置 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY」** | 构建生产包时（如 Vercel `npm run build`）**没有**注入这两个变量。Vite 只在**构建时**读取 `VITE_*`，运行时改服务器环境变量无效。                                                                                                                 |
+| 控制台 **POST …/api/auth/register/request-code → 405**       | 浏览器请求的是 **网站同源** 的 `/api/...`（如 `https://www.liubaiai.com/api/...`），但 **CDN/静态服务器上没有 Node 接口**，POST 不被允许 → **405 Method Not Allowed**。本地正常是因为 `vite.config.ts` 里 dev/preview **proxy** 把 `/api` 转到了后端。 |
+| 邮件发不出                                                     | 注册验证码依赖 **Node 后端**（`npm run api:dev` 同套逻辑）连数据库并发信；若 `/api` 没到后端，或后端未部署、未配置 `SMTP`/`MAIL_*`，都会失败。                                                                                                      |
+
 
 ---
 
@@ -18,10 +20,12 @@
 
 在 **Vercel**（或你实际用的 CI）：Project → **Settings → Environment Variables**，对 **Production**（及 Preview 若需要）添加：
 
-| 变量名 | 说明 |
-|--------|------|
-| `VITE_SUPABASE_URL` | Supabase Project URL，与本地一致 |
+
+| 变量名                      | 说明                                            |
+| ------------------------ | --------------------------------------------- |
+| `VITE_SUPABASE_URL`      | Supabase Project URL，与本地一致                    |
 | `VITE_SUPABASE_ANON_KEY` | Supabase **anon public** key（勿填 Service Role） |
+
 
 保存后必须 **Redeploy**（重新触发一次 build），否则线上仍是旧包。
 
@@ -37,13 +41,10 @@
 
 1. 把 Node 后端部署到公网，例如 `https://api.liubaiai.com`（监听路径仍为 `/api/...`）。
 2. 在构建环境增加：
-
-   `VITE_API_BASE=https://api.liubaiai.com`
-
+  `VITE_API_BASE=https://api.liubaiai.com`
    （**无末尾斜杠**；与 `src/api/base.ts` 一致。）
-
-3. 重新 build & deploy 前端。  
-4. 后端需允许跨域：`backend/server.js` 默认允许 `https://www.liubaiai.com`、`https://liubaiai.com` 及本地 Vite 端口；更多来源可设环境变量 **`CORS_ORIGINS`**（逗号分隔）。若 **Nginx/Caddy** 在 API 前拦截 **OPTIONS** 预检且未把请求转给 Node，浏览器仍会报无 `Access-Control-Allow-Origin`，需在网关放行 OPTIONS 或交给 Fastify 处理。
+3. 重新 build & deploy 前端。
+4. 后端需允许跨域：`backend/server.js` 默认允许 `https://www.liubaiai.com`、`https://liubaiai.com` 及本地 Vite 端口；更多来源可设环境变量 `**CORS_ORIGINS`**（逗号分隔）。若 **Nginx/Caddy** 在 API 前拦截 **OPTIONS** 预检且未把请求转给 Node，浏览器仍会报无 `Access-Control-Allow-Origin`，需在网关放行 OPTIONS 或交给 Fastify 处理。
 
 ### 方案 B：同源反代（Nginx / Caddy / 云负载均衡）
 
@@ -81,8 +82,8 @@ location /api/ {
 
 ## 自检顺序
 
-1. 打开线上站点，开发者工具 → Network：登录请求是否指向 Supabase（无「未配置」提示）。  
-2. 点击「发送验证码」：`request-code` 是否 **200** 且请求 URL 为你的 **API 基址**（同源 `/api` 或 `VITE_API_BASE`）。  
+1. 打开线上站点，开发者工具 → Network：登录请求是否指向 Supabase（无「未配置」提示）。
+2. 点击「发送验证码」：`request-code` 是否 **200** 且请求 URL 为你的 **API 基址**（同源 `/api` 或 `VITE_API_BASE`）。
 3. 后端日志是否收到 `POST /api/auth/register/request-code`。
 
 完成以上三项后，注册与登录应与本地联调行为一致（邮件仍取决于 SMTP 配置）。
@@ -91,10 +92,11 @@ location /api/ {
 
 ## 已配置 `VITE_API_BASE` 但线上仍请求 `www.xxx.com/api/...` 且 405？
 
-**不是**「代码里没拼 `VITE_API_BASE`」：注册与测试接口已在 `src/api/auth.ts`、`src/api/testSave.ts` 中通过 **`apiUrl()`**（`src/api/base.ts`）拼接基址。
+**不是**「代码里没拼 `VITE_API_BASE`」：注册与测试接口已在 `src/api/auth.ts`、`src/api/testSave.ts` 中通过 `**apiUrl()`**（`src/api/base.ts`）拼接基址。
 
 常见原因：
 
-1. **未重新构建**：`VITE_*` 在 **`npm run build` 时**写入产物。在 Vercel 加/改变量后，必须 **Redeploy**（Deployments → 某次部署 → Redeploy，或推新 commit），让 **Build** 步骤带着新变量跑完。只改 Runtime 环境变量、不重跑 build，前端包里的基址仍是空的 → 浏览器继续用**相对路径** `/api/...`（相对当前域名）。
+1. **未重新构建**：`VITE_*` 在 `**npm run build` 时**写入产物。在 Vercel 加/改变量后，必须 **Redeploy**（Deployments → 某次部署 → Redeploy，或推新 commit），让 **Build** 步骤带着新变量跑完。只改 Runtime 环境变量、不重跑 build，前端包里的基址仍是空的 → 浏览器继续用**相对路径** `/api/...`（相对当前域名）。
 2. **环境作用域**：变量是否勾选了 **Production**（若只在 Preview 里配，生产包仍为空）。
-3. **HTTPS 页面请求 HTTP API（混合内容）**：站点是 `https://www...`，若 `VITE_API_BASE=http://96.x.x.x:8788`，浏览器通常会**拦截**该请求（控制台 Mixed Content），或表现为失败。应对：给 API 配 **HTTPS**（域名 + 证书，或 Cloudflare 反代），并把 `VITE_API_BASE` 设为 **`https://...`**。
+3. **HTTPS 页面请求 HTTP API（混合内容）**：站点是 `https://www...`，若 `VITE_API_BASE=http://96.x.x.x:8788`，浏览器通常会**拦截**该请求（控制台 Mixed Content），或表现为失败。应对：给 API 配 **HTTPS**（域名 + 证书，或 Cloudflare 反代），并把 `VITE_API_BASE` 设为 `**https://...`**。
+

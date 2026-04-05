@@ -7,12 +7,14 @@
 
 ## 1. 正常时应该是什么样
 
-| 检查项 | 正常表现 |
-|--------|----------|
+
+| 检查项    | 正常表现                                                        |
+| ------ | ----------------------------------------------------------- |
 | VPS 本机 | `curl -s http://127.0.0.1:8788/api/health` 返回 `{"ok":true}` |
-| 公网域名 | `https://api.你的域名.com/api/health` 返回 `{"ok":true}` |
-| 网站注册 | 点「发送验证码」能收到邮件（或日志无 `[mail:dev]`） |
-| PM2 | `pm2 list` 中 `liubaiai-api` 为 **online**，**↺（重启次数）** 不会持续狂涨 |
+| 公网域名   | `https://api.你的域名.com/api/health` 返回 `{"ok":true}`          |
+| 网站注册   | 点「发送验证码」能收到邮件（或日志无 `[mail:dev]`）                            |
+| PM2    | `pm2 list` 中 `liubaiai-api` 为 **online**，**↺（重启次数）** 不会持续狂涨 |
+
 
 ---
 
@@ -27,7 +29,7 @@
 ### 2.2 只有「本机」连不上
 
 - 在 **VPS 的 SSH 里** 执行 `curl http://127.0.0.1:8788/api/health` **失败**  
-  → 问题在 **本机 Node / PM2 / 端口**，与 Cloudflare、浏览器缓存无关。
+→ 问题在 **本机 Node / PM2 / 端口**，与 Cloudflare、浏览器缓存无关。
 
 ### 2.3 在自己电脑上打开 `http://127.0.0.1:8788`
 
@@ -47,21 +49,23 @@
 ### 2.6 日志里出现 `[mail:dev]`
 
 - 表示 **没有走真实 SMTP**，只在控制台打印验证码。  
-- 常见原因：**`.env` 没被进程读到**（`MAIL_MODE=dev` 或缺少 `SMTP_HOST`）。  
+- 常见原因：`**.env` 没被进程读到**（`MAIL_MODE=dev` 或缺少 `SMTP_HOST`）。  
 - 见 **第 6 节「环境与邮件」**。
 
 ---
 
 ## 3. 部署文件清单（避免漏传、误点「跳过」）
 
-后端目录以你服务器为准，示例：**`/root/liubai-backend/backend/`**。
+后端目录以你服务器为准，示例：`**/root/liubai-backend/backend/`**。
 
-| 文件 | 作用 |
-|------|------|
-| `server.js` | 主程序；需包含 **从 `backend` 目录加载 `.env`**、**PM2 下也会 listen** 的逻辑（见仓库当前版本）。 |
-| `load-env.js` | 固定从 **本文件所在目录** 读取 `.env`，避免 PM2 工作目录不对时读不到环境变量。 |
-| `db.js` | 开头应 `import "./load-env.js"`，再创建数据库连接池。 |
-| `.env` | 与 `server.js` **同目录**；含 `API_PORT`、`SMTP_*`、`DB_*`、`SUPABASE_*` 等。 |
+
+| 文件            | 作用                                                                   |
+| ------------- | -------------------------------------------------------------------- |
+| `server.js`   | 主程序；需包含 **从 `backend` 目录加载 `.env`**、**PM2 下也会 listen** 的逻辑（见仓库当前版本）。 |
+| `load-env.js` | 固定从 **本文件所在目录** 读取 `.env`，避免 PM2 工作目录不对时读不到环境变量。                     |
+| `db.js`       | 开头应 `import "./load-env.js"`，再创建数据库连接池。                              |
+| `.env`        | 与 `server.js` **同目录**；含 `API_PORT`、`SMTP_`*、`DB_*`、`SUPABASE_*` 等。   |
+
 
 **面板上传同名文件时，必须选「覆盖」**；若选 **「跳过」**，服务器仍是旧代码，现象会和「修了但没生效」一样。
 
@@ -77,7 +81,7 @@ pm2 start /root/liubai-backend/backend/server.js --name liubaiai-api --cwd /root
 pm2 save
 ```
 
-- **`--cwd`**：保证相对路径、`dotenv` 等与「在 backend 目录里跑」一致。  
+- `**--cwd**`：保证相对路径、`dotenv` 等与「在 backend 目录里跑」一致。  
 - **脚本用绝对路径**：避免 PM2 记录的入口路径含糊。
 
 修改 `.env` 或 `server.js` 后：
@@ -92,16 +96,14 @@ pm2 restart liubaiai-api --update-env
 
 ### 5.1 原因说明（与本项目相关）
 
-1. **`isDirectRun` 为 false**  
-   仅当判定「当前是以 `server.js` 为入口直接运行」时，代码才会 `app.listen()`。  
+1. `**isDirectRun` 为 false**
+  仅当判定「当前是以 `server.js` 为入口直接运行」时，代码才会 `app.listen()`。  
    在部分环境下，`process.argv[1]` 与 `import.meta.url` 解析结果不一致，会导致 **不 listen**。
-
-2. **不 listen 时进程仍可能马上退出**  
-   使用了 `pg` 连接池但若尚未建立连接，**事件循环可能为空**，Node **正常退出**，PM2 再拉起 → **↺ 狂涨**，日志里反复出现 **一行 `injecting env`**，**没有** `Server listening`。
-
-3. **仓库中的修复思路**  
-   - 用 **`path.resolve` 比较入口路径** 判断是否直接运行。  
-   - **补充**：检测到 **PM2 注入的 `pm_id`** 时，**强制视为需要 listen**（避免上述退出循环）。
+2. **不 listen 时进程仍可能马上退出**
+  使用了 `pg` 连接池但若尚未建立连接，**事件循环可能为空**，Node **正常退出**，PM2 再拉起 → **↺ 狂涨**，日志里反复出现 **一行 `injecting env`**，**没有** `Server listening`。
+3. **仓库中的修复思路**
+  - 用 `**path.resolve` 比较入口路径** 判断是否直接运行。  
+  - **补充**：检测到 **PM2 注入的 `pm_id`** 时，**强制视为需要 listen**（避免上述退出循环）。
 
 若你使用 **已包含上述逻辑的 `server.js`**，PM2 下应能稳定监听。
 
@@ -140,8 +142,8 @@ node server.js
 
 ### 6.2 为何必须用 `load-env.js`
 
-默认 `import "dotenv/config"` 往往从 **`process.cwd()`** 找 `.env`。  
-PM2 的 **cwd** 若不是 `backend/`，就会 **读不到**，导致没有 `SMTP_HOST` → 行为等同开发模式 → **`[mail:dev]`**。
+默认 `import "dotenv/config"` 往往从 `**process.cwd()`** 找 `.env`。  
+PM2 的 **cwd** 若不是 `backend/`，就会 **读不到**，导致没有 `SMTP_HOST` → 行为等同开发模式 → `**[mail:dev]`**。
 
 ### 6.3 验证
 
@@ -175,8 +177,8 @@ curl -s http://127.0.0.1:8787/api/health
 
 本机 `curl 127.0.0.1:8788` **正常**，但 `https://api.域名` **502**：
 
-- 检查站点配置里 **`proxy_pass`** 是否指向 **`http://127.0.0.1:8788`**（或你实际端口）。  
-- 检查 **`api` 子域名** 是否绑的是这份配置，而不是默认站点。
+- 检查站点配置里 `**proxy_pass`** 是否指向 `**http://127.0.0.1:8788**`（或你实际端口）。  
+- 检查 `**api` 子域名** 是否绑的是这份配置，而不是默认站点。
 
 ---
 
@@ -214,7 +216,7 @@ curl -s http://127.0.0.1:8788/api/health
 
 ## 10. 与 Supabase / 头像存储的关系
 
-- **`supabase/avatars-storage.sql`** 只影响 **Storage 头像桶**，**不会**改注册接口或业务表。  
+- `**supabase/avatars-storage.sql**` 只影响 **Storage 头像桶**，**不会**改注册接口或业务表。  
 - 注册发码走 **自建 API** + **SMTP**；与是否执行头像 SQL **无直接关系**。  
 - 若注册失败且控制台是 **502**，仍按本文 **API / PM2** 排查。
 
@@ -224,19 +226,21 @@ curl -s http://127.0.0.1:8788/api/health
 
 - 重大变更后：**合并到实际部署分支**（如 `main`），让 **Vercel / 前端** 与 **VPS 后端** 都更新到对应提交。  
 - 用面板上传时：**同名文件务必覆盖**。  
-- 备一份 **`.env` 备份**（勿提交到 Git），改坏可回滚。
+- 备一份 `**.env` 备份**（勿提交到 Git），改坏可回滚。
 
 ---
 
 ## 12. 相关仓库路径（便于对照代码）
 
-| 说明 | 路径 |
-|------|------|
-| 主服务 | `backend/server.js` |
-| 环境加载 | `backend/load-env.js` |
-| 数据库池 | `backend/db.js` |
-| 邮件模式 | `backend/mail.js` |
+
+| 说明             | 路径                             |
+| -------------- | ------------------------------ |
+| 主服务            | `backend/server.js`            |
+| 环境加载           | `backend/load-env.js`          |
+| 数据库池           | `backend/db.js`                |
+| 邮件模式           | `backend/mail.js`              |
 | 头像 Storage SQL | `supabase/avatars-storage.sql` |
+
 
 ---
 
