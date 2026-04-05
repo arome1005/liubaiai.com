@@ -430,10 +430,14 @@ export async function buildServer() {
   return app;
 }
 
-// Run as standalone server when executed directly (compare resolved paths so PM2 / relative argv[1] still works)
+// Run as standalone server when executed directly (compare resolved paths so PM2 / relative argv[1] still works).
+// PM2 sets pm_id: if isDirectRun were false, we would skip listen(); pg Pool may hold no handles until first query,
+// so Node exits immediately → PM2 restart loop with only dotenv lines in logs.
 const __filename = fileURLToPath(import.meta.url);
 const entryScript = process.argv[1] ? path.resolve(process.argv[1]) : "";
-const isDirectRun = Boolean(entryScript && path.resolve(__filename) === entryScript);
+const pathMatchesEntry = Boolean(entryScript && path.resolve(__filename) === entryScript);
+const isPm2Managed = process.env.pm_id !== undefined && String(process.env.pm_id).length > 0;
+const isDirectRun = pathMatchesEntry || isPm2Managed;
 if (isDirectRun) {
   const app = await buildServer();
   // Default to localhost to avoid networkInterfaces() issues in some sandboxed environments.
