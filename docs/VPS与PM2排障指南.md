@@ -3,7 +3,7 @@
 面向「留白写作」后端：`backend/server.js`（Fastify）、OpenResty/Nginx 反代、`api.域名` 访问。  
 读完本文后，遇到 **502、注册发码失败、本机 curl 连不上 8788、PM2 显示 online 但服务不可用** 等问题，可按章节自检。
 
-**换一台全新 VPS、从零部署 API**（大白话步骤）：见 **`vps-new-machine-setup-guide.md`**。
+**换一台全新 VPS、从零部署 API**（大白话步骤）：见 **`VPS新机部署指南.md`**。
 
 ---
 

@@ -279,7 +279,7 @@ export function SettingsPage() {
         <p className="muted small">
           覆盖：清空当前库后写入备份。合并：追加备份中的作品（新 id），不删除当前数据。
         </p>
-        <p className="muted small">发布前自检可参考：`docs/release-checklist.md`</p>
+        <p className="muted small">发布前自检可参考：`docs/发布检查清单.md`</p>
       </section>
 
       <section className="settings-section">

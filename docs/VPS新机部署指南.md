@@ -13,7 +13,7 @@
 若旧 VPS **坏了、被封、想换商家**，你需要在新机器上 **重新装一遍「API 程序」**，并把 **域名指到新机器**。  
 本文就是 **重装说明书**。
 
-更细的 **故障排查**（502、PM2 狂重启等）见同目录：**`vps-pm2-api-troubleshooting.md`**。
+更细的 **故障排查**（502、PM2 狂重启等）见同目录：**`VPS与PM2排障指南.md`**。
 
 ---
 
@@ -212,7 +212,7 @@ curl -s http://127.0.0.1:8788/api/health
 
 **成功：** 屏幕显示 `{"ok":true}`；`pm2 list` 里 **status 是 online**，**↺ 不会一直涨**。  
 **失败：**  
-- `Connection refused` → 看 **`tail -40 /root/.pm2/logs/liubaiai-api-out.log`** 有没有 `API listening`；没有则对照 **`vps-pm2-api-troubleshooting.md`**。  
+- `Connection refused` → 看 **`tail -40 /root/.pm2/logs/liubaiai-api-out.log`** 有没有 `API listening`；没有则对照 **`VPS与PM2排障指南.md`**。  
 - 确认 **`server.js` 已是最新版**（含 PM2 检测、`load-env.js` 等），面板上传时要点 **覆盖**。
 
 ---
@@ -259,7 +259,7 @@ location / {
 - 若你一直用 **独立 API 域名**（例如 `VITE_API_BASE=https://api.xxx.com`），且 **子域名没变**，一般 **不用改**，只要 DNS 指到新机器。  
 - 若 **换了 API 域名**，要在 Vercel **环境变量** 里改 `VITE_API_BASE`，并 **重新 Deploy**。  
 
-详情见 **`production-deploy.md`**。
+详情见 **`生产环境部署.md`**。
 
 ---
 
@@ -307,7 +307,7 @@ location / {
 | `npm install` 失败 | 网络、权限 | 重试；不要用 `sudo npm` 除非你知道后果 |
 | 本机 curl 不通 | PM2 没起来、端口错、旧代码 | 第五节、排障文档 |
 | 域名 health 502 | 反代、DNS 未指向新机、Node 未监听 | 本机 curl → 反代配置 → DNS |
-| 能 health 但不能注册 | SMTP、`.env`、前端 `VITE_API_BASE` | 排障文档 + `production-deploy.md` |
+| 能 health 但不能注册 | SMTP、`.env`、前端 `VITE_API_BASE` | 排障文档 + `生产环境部署.md` |
 | 上传文件后没变化 | 点了「跳过」未覆盖 | 重新上传并选 **覆盖** |
 
 ---
@@ -325,8 +325,8 @@ location / {
 
 | 文档 | 内容 |
 |------|------|
-| `vps-pm2-api-troubleshooting.md` | PM2、端口、502、`[mail:dev]`、重启循环等 **排障** |
-| `production-deploy.md` | 前端 Vercel、`VITE_API_BASE`、同源反代等 |
+| `VPS与PM2排障指南.md` | PM2、端口、502、`[mail:dev]`、重启循环等 **排障** |
+| `生产环境部署.md` | 前端 Vercel、`VITE_API_BASE`、同源反代等 |
 | `backend/.env.example` | 后端需要哪些环境变量 **名称**（无真实密钥） |
 
 ---
