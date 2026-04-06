@@ -11,6 +11,7 @@ import type {
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  InspirationFragment,
   ReferenceChapterHead,
   ReferenceChunk,
   ReferenceExcerpt,
@@ -22,10 +23,14 @@ import type {
   Volume,
   Work,
   WorkStyleCard,
+  WritingPromptTemplate,
+  WritingStyleSample,
 } from "../db/types";
 import { SNAPSHOT_CAP_PER_CHAPTER, SNAPSHOT_MAX_AGE_MS } from "../db/types";
+import { normalizeWorkTagList } from "../util/work-tags";
 import { wordCount } from "../util/wordCount";
-import type { WritingStore } from "./writing-store";
+import { ChapterSaveConflictError } from "./chapter-save-conflict";
+import type { UpdateChapterOptions, WritingStore } from "./writing-store";
 import { remapImportMergePayload, type MergeRemapResult } from "./backup-merge-remap";
 import { normalizeImportRows } from "./import-normalize";
 import {
@@ -35,6 +40,7 @@ import {
   parseBibleTplRow,
   parseBibleTimelineRow,
   parseBibleWorldRow,
+  parseInspirationFragmentRow,
   parseChapterBibleRow,
   parseChapterRow,
   parseGlossaryRow,
@@ -42,6 +48,8 @@ import {
   parseStyleCardRow,
   parseVolumeRow,
   parseWorkRow,
+  parseWritingPromptTemplateRow,
+  parseWritingStyleSampleRow,
   toChapterInsert,
   toSnapshotInsert,
   toStyleCardUpsert,
@@ -107,6 +115,9 @@ export class WritingStoreSupabase implements WritingStore {
     await chunkedInsert("chapter_bible", rows.chapterBible);
     await chunkedInsert("bible_glossary_term", rows.bibleGloss);
     await chunkedInsert("work_style_card", rows.styleCards);
+    await chunkedInsert("inspiration_fragment", rows.inspirationFrags);
+    await chunkedInsert("writing_prompt_template", rows.writingPromptTpl);
+    await chunkedInsert("writing_style_sample", rows.writingStyleSamples);
   }
 
   async listWorks(): Promise<Work[]> {
@@ -137,17 +148,19 @@ export class WritingStoreSupabase implements WritingStore {
     return parseWorkRow(data as Json);
   }
 
-  async createWork(title: string): Promise<Work> {
+  async createWork(title: string, opts?: { tags?: string[] }): Promise<Work> {
     const uid = await requireUid();
     const sb = getSupabase();
     const id = crypto.randomUUID();
     const t = now();
+    const tags = normalizeWorkTagList(opts?.tags);
     const work: Work = {
       id,
       title: title.trim() || "未命名作品",
       createdAt: t,
       updatedAt: t,
       progressCursor: null,
+      ...(tags?.length ? { tags } : {}),
     };
     const { error: e1 } = await sb.from("work").insert(toWorkInsert(uid, work) as never);
     if (e1) throw new Error(e1.message);
@@ -158,18 +171,24 @@ export class WritingStoreSupabase implements WritingStore {
       title: "正文",
       order: 0,
       createdAt: t,
+      summary: "",
     };
     const { error: e2 } = await sb.from("volume").insert(toVolumeInsert(vol) as never);
     if (e2) throw new Error(e2.message);
     return work;
   }
 
-  async updateWork(id: string, patch: Partial<Pick<Work, "title" | "progressCursor">>): Promise<void> {
+  async updateWork(
+    id: string,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags">>,
+  ): Promise<void> {
     const uid = await requireUid();
     const sb = getSupabase();
     const row: Json = { updated_at: now() };
     if (patch.title !== undefined) row.title = patch.title;
     if (patch.progressCursor !== undefined) row.progress_cursor = patch.progressCursor;
+    if (patch.coverImage !== undefined) row.cover_image = patch.coverImage === "" ? null : patch.coverImage;
+    if (patch.tags !== undefined) row.tags = normalizeWorkTagList(patch.tags) ?? [];
     const { error } = await sb.from("work").update(row as never).eq("id", id).eq("user_id", uid);
     if (error) throw new Error(error.message);
   }
@@ -206,6 +225,7 @@ export class WritingStoreSupabase implements WritingStore {
       title: title?.trim() || `第 ${existing.length + 1} 卷`,
       order: maxOrder + 1,
       createdAt: t,
+      summary: "",
     };
     const { error: e1 } = await sb.from("volume").insert(toVolumeInsert(vol) as never);
     if (e1) throw new Error(e1.message);
@@ -214,12 +234,13 @@ export class WritingStoreSupabase implements WritingStore {
     return vol;
   }
 
-  async updateVolume(id: string, patch: Partial<Pick<Volume, "title" | "order">>): Promise<void> {
+  async updateVolume(id: string, patch: Partial<Pick<Volume, "title" | "order" | "summary">>): Promise<void> {
     await requireUid();
     const sb = getSupabase();
     const row: Json = {};
     if (patch.title !== undefined) row.title = patch.title;
     if (patch.order !== undefined) row.order = patch.order;
+    if (patch.summary !== undefined) row.summary = patch.summary === "" ? null : patch.summary;
     const { error } = await sb.from("volume").update(row as never).eq("id", id);
     if (error) throw new Error(error.message);
   }
@@ -290,20 +311,34 @@ export class WritingStoreSupabase implements WritingStore {
 
   async updateChapter(
     id: string,
-    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary">>,
+    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt">>,
+    options?: UpdateChapterOptions,
   ): Promise<void> {
     await requireUid();
     const sb = getSupabase();
-    const row: Json = { updated_at: now() };
+    const t = now();
+    const row: Json = { updated_at: t };
     if (patch.title !== undefined) row.title = patch.title;
     if (patch.volumeId !== undefined) row.volume_id = patch.volumeId;
-    if (patch.summary !== undefined) row.summary = patch.summary === "" ? null : patch.summary;
+    if (patch.summary !== undefined) {
+      row.summary = patch.summary === "" ? null : patch.summary;
+      row.summary_updated_at = patch.summaryUpdatedAt ?? t;
+    } else if (patch.summaryUpdatedAt !== undefined) {
+      row.summary_updated_at = patch.summaryUpdatedAt;
+    }
     if (patch.content !== undefined) {
       row.content = patch.content;
       row.word_count_cache = wordCount(patch.content);
     }
-    const { error } = await sb.from("chapter").update(row as never).eq("id", id);
+    let qb = sb.from("chapter").update(row as never).eq("id", id);
+    if (options?.expectedUpdatedAt !== undefined) {
+      qb = qb.eq("updated_at", options.expectedUpdatedAt);
+    }
+    const { data, error } = await qb.select("updated_at");
     if (error) throw new Error(error.message);
+    if (options?.expectedUpdatedAt !== undefined && (!data || data.length === 0)) {
+      throw new ChapterSaveConflictError();
+    }
   }
 
   async deleteChapter(id: string): Promise<void> {
@@ -887,6 +922,7 @@ export class WritingStoreSupabase implements WritingStore {
           forbid_text: input.forbidText,
           pov_text: input.povText,
           scene_stance: input.sceneStance,
+          character_state: input.characterStateText ?? "",
           updated_at: t,
         } as never)
         .eq("id", existing.id);
@@ -897,6 +933,7 @@ export class WritingStoreSupabase implements WritingStore {
         forbidText: input.forbidText,
         povText: input.povText,
         sceneStance: input.sceneStance,
+        characterStateText: input.characterStateText ?? "",
         updatedAt: t,
       };
     }
@@ -908,6 +945,7 @@ export class WritingStoreSupabase implements WritingStore {
       forbidText: input.forbidText ?? "",
       povText: input.povText ?? "",
       sceneStance: input.sceneStance ?? "",
+      characterStateText: input.characterStateText ?? "",
       updatedAt: t,
     };
     const { error } = await sb.from("chapter_bible").insert({
@@ -918,6 +956,7 @@ export class WritingStoreSupabase implements WritingStore {
       forbid_text: row.forbidText,
       pov_text: row.povText,
       scene_stance: row.sceneStance,
+      character_state: row.characterStateText,
       updated_at: row.updatedAt,
     } as never);
     if (error) throw new Error(error.message);
@@ -976,6 +1015,155 @@ export class WritingStoreSupabase implements WritingStore {
     if (error) throw new Error(error.message);
   }
 
+  async listWritingPromptTemplates(workId: string): Promise<WritingPromptTemplate[]> {
+    await requireUid();
+    const { data, error } = await getSupabase()
+      .from("writing_prompt_template")
+      .select("*")
+      .eq("work_id", workId)
+      .order("sort_order", { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data as Json[]).map(parseWritingPromptTemplateRow);
+  }
+
+  async addWritingPromptTemplate(
+    workId: string,
+    input: Partial<Omit<WritingPromptTemplate, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
+  ): Promise<WritingPromptTemplate> {
+    await requireUid();
+    const list = await this.listWritingPromptTemplates(workId);
+    const maxOrder = list.length === 0 ? -1 : Math.max(...list.map((c) => c.sortOrder));
+    const t = now();
+    const row: WritingPromptTemplate = {
+      id: crypto.randomUUID(),
+      workId,
+      category: (input.category ?? "").trim(),
+      title: (input.title ?? "").trim() || "未命名模板",
+      body: input.body ?? "",
+      sortOrder: maxOrder + 1,
+      createdAt: t,
+      updatedAt: t,
+    };
+    const { error } = await getSupabase().from("writing_prompt_template").insert({
+      id: row.id,
+      work_id: row.workId,
+      category: row.category,
+      title: row.title,
+      body: row.body,
+      sort_order: row.sortOrder,
+      created_at: row.createdAt,
+      updated_at: row.updatedAt,
+    } as never);
+    if (error) throw new Error(error.message);
+    return row;
+  }
+
+  async updateWritingPromptTemplate(
+    id: string,
+    patch: Partial<Omit<WritingPromptTemplate, "id" | "workId">>,
+  ): Promise<void> {
+    await requireUid();
+    const row: Json = { updated_at: now() };
+    if (patch.category !== undefined) row.category = patch.category.trim();
+    if (patch.title !== undefined) row.title = patch.title.trim() || "未命名模板";
+    if (patch.body !== undefined) row.body = patch.body;
+    if (patch.sortOrder !== undefined) row.sort_order = patch.sortOrder;
+    const { error } = await getSupabase().from("writing_prompt_template").update(row as never).eq("id", id);
+    if (error) throw new Error(error.message);
+  }
+
+  async deleteWritingPromptTemplate(id: string): Promise<void> {
+    const { error } = await getSupabase().from("writing_prompt_template").delete().eq("id", id);
+    if (error) throw new Error(error.message);
+  }
+
+  async reorderWritingPromptTemplates(workId: string, orderedIds: string[]): Promise<void> {
+    void workId;
+    await requireUid();
+    const t = now();
+    const sb = getSupabase();
+    for (let i = 0; i < orderedIds.length; i++) {
+      const { error } = await sb
+        .from("writing_prompt_template")
+        .update({ sort_order: i, updated_at: t } as never)
+        .eq("id", orderedIds[i]);
+      if (error) throw new Error(error.message);
+    }
+  }
+
+  async listWritingStyleSamples(workId: string): Promise<WritingStyleSample[]> {
+    await requireUid();
+    const { data, error } = await getSupabase()
+      .from("writing_style_sample")
+      .select("*")
+      .eq("work_id", workId)
+      .order("sort_order", { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data as Json[]).map(parseWritingStyleSampleRow);
+  }
+
+  async addWritingStyleSample(
+    workId: string,
+    input: Partial<Omit<WritingStyleSample, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
+  ): Promise<WritingStyleSample> {
+    await requireUid();
+    const list = await this.listWritingStyleSamples(workId);
+    const maxOrder = list.length === 0 ? -1 : Math.max(...list.map((c) => c.sortOrder));
+    const t = now();
+    const row: WritingStyleSample = {
+      id: crypto.randomUUID(),
+      workId,
+      title: (input.title ?? "").trim() || "未命名样本",
+      body: input.body ?? "",
+      sortOrder: maxOrder + 1,
+      createdAt: t,
+      updatedAt: t,
+    };
+    const { error } = await getSupabase().from("writing_style_sample").insert({
+      id: row.id,
+      work_id: row.workId,
+      title: row.title,
+      body: row.body,
+      sort_order: row.sortOrder,
+      created_at: row.createdAt,
+      updated_at: row.updatedAt,
+    } as never);
+    if (error) throw new Error(error.message);
+    return row;
+  }
+
+  async updateWritingStyleSample(
+    id: string,
+    patch: Partial<Omit<WritingStyleSample, "id" | "workId">>,
+  ): Promise<void> {
+    await requireUid();
+    const row: Json = { updated_at: now() };
+    if (patch.title !== undefined) row.title = patch.title.trim() || "未命名样本";
+    if (patch.body !== undefined) row.body = patch.body;
+    if (patch.sortOrder !== undefined) row.sort_order = patch.sortOrder;
+    const { error } = await getSupabase().from("writing_style_sample").update(row as never).eq("id", id);
+    if (error) throw new Error(error.message);
+  }
+
+  async deleteWritingStyleSample(id: string): Promise<void> {
+    const { error } = await getSupabase().from("writing_style_sample").delete().eq("id", id);
+    if (error) throw new Error(error.message);
+  }
+
+  async reorderWritingStyleSamples(workId: string, orderedIds: string[]): Promise<void> {
+    void workId;
+    await requireUid();
+    const t = now();
+    const sb = getSupabase();
+    for (let i = 0; i < orderedIds.length; i++) {
+      const { error } = await sb
+        .from("writing_style_sample")
+        .update({ sort_order: i, updated_at: t } as never)
+        .eq("id", orderedIds[i]);
+      if (error) throw new Error(error.message);
+    }
+  }
+
   async getWorkStyleCard(workId: string): Promise<WorkStyleCard | undefined> {
     await requireUid();
     const { data, error } = await getSupabase()
@@ -1012,6 +1200,84 @@ export class WritingStoreSupabase implements WritingStore {
     return next;
   }
 
+  async listInspirationFragments(): Promise<InspirationFragment[]> {
+    const uid = await maybeUid();
+    if (!uid) return [];
+    const { data, error } = await getSupabase()
+      .from("inspiration_fragment")
+      .select("*")
+      .eq("user_id", uid)
+      .order("created_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data as Json[]).map(parseInspirationFragmentRow);
+  }
+
+  async addInspirationFragment(
+    input: Partial<Omit<InspirationFragment, "id" | "createdAt" | "updatedAt">> & { body: string },
+  ): Promise<InspirationFragment> {
+    const uid = await requireUid();
+    const wid = input.workId ?? null;
+    if (wid) {
+      const w = await this.getWork(wid);
+      if (!w) throw new Error("作品不存在或无权访问");
+    }
+    const t = now();
+    const row: InspirationFragment = {
+      id: crypto.randomUUID(),
+      workId: wid,
+      body: input.body.trim() || "（空碎片）",
+      tags: normalizeWorkTagList(input.tags) ?? [],
+      createdAt: t,
+      updatedAt: t,
+    };
+    const { error } = await getSupabase().from("inspiration_fragment").insert({
+      id: row.id,
+      user_id: uid,
+      work_id: row.workId,
+      body: row.body,
+      tags: row.tags,
+      created_at: row.createdAt,
+      updated_at: row.updatedAt,
+    } as never);
+    if (error) throw new Error(error.message);
+    return row;
+  }
+
+  async updateInspirationFragment(
+    id: string,
+    patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId">>,
+  ): Promise<void> {
+    const uid = await requireUid();
+    if (patch.workId !== undefined && patch.workId !== null) {
+      const w = await this.getWork(patch.workId);
+      if (!w) throw new Error("作品不存在或无权访问");
+    }
+    const row: Json = { updated_at: now() };
+    if (patch.body !== undefined) row.body = patch.body.trim() || "（空碎片）";
+    if (patch.tags !== undefined) row.tags = normalizeWorkTagList(patch.tags) ?? [];
+    if (patch.workId !== undefined) row.work_id = patch.workId;
+    const { error, data } = await getSupabase()
+      .from("inspiration_fragment")
+      .update(row as never)
+      .eq("id", id)
+      .eq("user_id", uid)
+      .select("id");
+    if (error) throw new Error(error.message);
+    if (!data?.length) throw new Error("碎片不存在或无权修改");
+  }
+
+  async deleteInspirationFragment(id: string): Promise<void> {
+    const uid = await requireUid();
+    const { error, data } = await getSupabase()
+      .from("inspiration_fragment")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", uid)
+      .select("id");
+    if (error) throw new Error(error.message);
+    if (!data?.length) throw new Error("碎片不存在或无权删除");
+  }
+
   async exportAllData(): ReturnType<WritingStore["exportAllData"]> {
     const uid = await maybeUid();
     const emptyRef = {
@@ -1037,10 +1303,20 @@ export class WritingStoreSupabase implements WritingStore {
         chapterBible: [],
         bibleGlossaryTerms: [],
         workStyleCards: [],
+        inspirationFragments: [],
+        writingPromptTemplates: [],
+        writingStyleSamples: [],
         ...emptyRef,
       };
     }
     const sb = getSupabase();
+    const { data: fragRows, error: ef } = await sb
+      .from("inspiration_fragment")
+      .select("*")
+      .eq("user_id", uid)
+      .order("created_at", { ascending: false });
+    if (ef) throw new Error(ef.message);
+    const inspirationFragments = (fragRows as Json[]).map(parseInspirationFragmentRow);
     const { data: workRows, error: ew } = await sb
       .from("work")
       .select("*")
@@ -1063,6 +1339,9 @@ export class WritingStoreSupabase implements WritingStore {
         chapterBible: [],
         bibleGlossaryTerms: [],
         workStyleCards: [],
+        inspirationFragments,
+        writingPromptTemplates: [],
+        writingStyleSamples: [],
         ...emptyRef,
       };
     }
@@ -1077,6 +1356,8 @@ export class WritingStoreSupabase implements WritingStore {
       { data: cb },
       { data: gloss },
       { data: cards },
+      { data: promptTpl },
+      { data: styleSamples },
     ] = await Promise.all([
       sb.from("volume").select("*").in("work_id", workIds),
       sb.from("chapter").select("*").in("work_id", workIds),
@@ -1088,6 +1369,8 @@ export class WritingStoreSupabase implements WritingStore {
       sb.from("chapter_bible").select("*").in("work_id", workIds),
       sb.from("bible_glossary_term").select("*").in("work_id", workIds),
       sb.from("work_style_card").select("*").in("work_id", workIds),
+      sb.from("writing_prompt_template").select("*").in("work_id", workIds),
+      sb.from("writing_style_sample").select("*").in("work_id", workIds),
     ]);
     const chapters = (chs as Json[]).map(parseChapterRow);
     const chapterIds = chapters.map((c) => c.id);
@@ -1109,12 +1392,17 @@ export class WritingStoreSupabase implements WritingStore {
       chapterBible: (cb as Json[]).map(parseChapterBibleRow),
       bibleGlossaryTerms: (gloss as Json[]).map(parseGlossaryRow),
       workStyleCards: (cards as Json[]).map(parseStyleCardRow),
+      inspirationFragments,
+      writingPromptTemplates: (promptTpl as Json[]).map(parseWritingPromptTemplateRow),
+      writingStyleSamples: (styleSamples as Json[]).map(parseWritingStyleSampleRow),
     };
   }
 
   async importAllData(data: Parameters<WritingStore["importAllData"]>[0]): Promise<void> {
     const uid = await requireUid();
     const sb = getSupabase();
+    const { error: delFrag } = await sb.from("inspiration_fragment").delete().eq("user_id", uid);
+    if (delFrag) throw new Error(delFrag.message);
     const { error: delErr } = await sb.from("work").delete().eq("user_id", uid);
     if (delErr) throw new Error(delErr.message);
     const normalized = normalizeImportRows(data);
@@ -1141,6 +1429,31 @@ export class WritingStoreSupabase implements WritingStore {
         styleAnchor: s.styleAnchor ?? "",
         extraRules: s.extraRules ?? "",
       })),
+      newInspirationFragments: (data.inspirationFragments ?? []).map((f) => ({
+        ...f,
+        workId: f.workId ?? null,
+        tags: normalizeWorkTagList(f.tags) ?? [],
+        body: (f.body ?? "").trim() || "（空碎片）",
+        createdAt: f.createdAt ?? now(),
+        updatedAt: f.updatedAt ?? now(),
+      })),
+      newWritingPromptTemplates: (data.writingPromptTemplates ?? []).map((p) => ({
+        ...p,
+        category: (p.category ?? "").trim(),
+        title: (p.title ?? "").trim() || "未命名模板",
+        body: p.body ?? "",
+        sortOrder: p.sortOrder ?? 0,
+        createdAt: p.createdAt ?? now(),
+        updatedAt: p.updatedAt ?? now(),
+      })),
+      newWritingStyleSamples: (data.writingStyleSamples ?? []).map((s) => ({
+        ...s,
+        title: (s.title ?? "").trim() || "未命名样本",
+        body: s.body ?? "",
+        sortOrder: s.sortOrder ?? 0,
+        createdAt: s.createdAt ?? now(),
+        updatedAt: s.updatedAt ?? now(),
+      })),
       newRefLib: [],
       newRefChunks: [],
       newRefChapterHeads: [],
@@ -1160,6 +1473,9 @@ export class WritingStoreSupabase implements WritingStore {
     await chunkedInsert("chapter_bible", rows.chapterBible);
     await chunkedInsert("bible_glossary_term", rows.bibleGloss);
     await chunkedInsert("work_style_card", rows.styleCards);
+    await chunkedInsert("inspiration_fragment", rows.inspirationFrags);
+    await chunkedInsert("writing_prompt_template", rows.writingPromptTpl);
+    await chunkedInsert("writing_style_sample", rows.writingStyleSamples);
   }
 
   async importAllDataMerge(data: Parameters<WritingStore["importAllDataMerge"]>[0]): Promise<void> {

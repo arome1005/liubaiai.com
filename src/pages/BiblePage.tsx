@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { Button } from "../components/ui/button";
+import { cn } from "../lib/utils";
 import {
   addBibleChapterTemplate,
   addBibleCharacter,
@@ -13,6 +15,8 @@ import {
   deleteBibleTimelineEvent,
   deleteBibleGlossaryTerm,
   deleteBibleWorldEntry,
+  deleteWritingPromptTemplate,
+  deleteWritingStyleSample,
   exportBibleMarkdown,
   getWork,
   listBibleChapterTemplates,
@@ -22,16 +26,24 @@ import {
   listBibleTimelineEvents,
   listBibleWorldEntries,
   listChapters,
+  listWritingPromptTemplates,
+  listWritingStyleSamples,
   reorderBibleCharacters,
   reorderBibleForeshadowing,
   reorderBibleTimelineEvents,
   reorderBibleWorldEntries,
+  reorderWritingPromptTemplates,
+  reorderWritingStyleSamples,
+  addWritingPromptTemplate,
+  addWritingStyleSample,
   updateBibleChapterTemplate,
   updateBibleCharacter,
   updateBibleForeshadow,
   updateBibleGlossaryTerm,
   updateBibleTimelineEvent,
   updateBibleWorldEntry,
+  updateWritingPromptTemplate,
+  updateWritingStyleSample,
 } from "../db/repo";
 import type {
   BibleChapterTemplate,
@@ -43,9 +55,30 @@ import type {
   BibleWorldEntry,
   Chapter,
   Work,
+  WritingPromptTemplate,
+  WritingStyleSample,
 } from "../db/types";
 
-type Tab = "characters" | "world" | "foreshadow" | "timeline" | "templates" | "glossary";
+type Tab =
+  | "characters"
+  | "world"
+  | "foreshadow"
+  | "timeline"
+  | "templates"
+  | "glossary"
+  | "prompts"
+  | "penfeel";
+
+const BIBLE_TAB_DEF: readonly { id: Tab; label: string }[] = [
+  { id: "characters", label: "人物卡" },
+  { id: "world", label: "世界观" },
+  { id: "foreshadow", label: "伏笔" },
+  { id: "timeline", label: "时间线" },
+  { id: "templates", label: "章模板" },
+  { id: "glossary", label: "术语表" },
+  { id: "prompts", label: "提示词" },
+  { id: "penfeel", label: "笔感" },
+] as const;
 
 function swapOrderIds<T extends { id: string }>(list: T[], id: string, dir: -1 | 1): string[] | null {
   const ix = list.findIndex((x) => x.id === id);
@@ -60,6 +93,7 @@ function swapOrderIds<T extends { id: string }>(list: T[], id: string, dir: -1 |
 
 export function BiblePage() {
   const { workId } = useParams<{ workId: string }>();
+  const navigate = useNavigate();
   const [work, setWork] = useState<Work | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [tab, setTab] = useState<Tab>("characters");
@@ -69,6 +103,8 @@ export function BiblePage() {
   const [timeline, setTimeline] = useState<BibleTimelineEvent[]>([]);
   const [templates, setTemplates] = useState<BibleChapterTemplate[]>([]);
   const [glossary, setGlossary] = useState<BibleGlossaryTerm[]>([]);
+  const [promptTemplates, setPromptTemplates] = useState<WritingPromptTemplate[]>([]);
+  const [styleSamples, setStyleSamples] = useState<WritingStyleSample[]>([]);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
@@ -77,13 +113,15 @@ export function BiblePage() {
     setWork(w ?? null);
     const chs = await listChapters(workId);
     setChapters(chs);
-    const [c, wo, fo, ti, te, g] = await Promise.all([
+    const [c, wo, fo, ti, te, g, pt, ss] = await Promise.all([
       listBibleCharacters(workId),
       listBibleWorldEntries(workId),
       listBibleForeshadowing(workId),
       listBibleTimelineEvents(workId),
       listBibleChapterTemplates(workId),
       listBibleGlossaryTerms(workId),
+      listWritingPromptTemplates(workId),
+      listWritingStyleSamples(workId),
     ]);
     setCharacters(c);
     setWorld(wo);
@@ -91,6 +129,8 @@ export function BiblePage() {
     setTimeline(ti);
     setTemplates(te);
     setGlossary(g);
+    setPromptTemplates(pt);
+    setStyleSamples(ss);
   }, [workId]);
 
   useEffect(() => {
@@ -104,6 +144,20 @@ export function BiblePage() {
       }
     })();
   }, [workId, refresh]);
+
+  const tabCounts = useMemo(
+    () => ({
+      characters: characters.length,
+      world: world.length,
+      foreshadow: foreshadow.length,
+      timeline: timeline.length,
+      templates: templates.length,
+      glossary: glossary.length,
+      prompts: promptTemplates.length,
+      penfeel: styleSamples.length,
+    }),
+    [characters, world, foreshadow, timeline, templates, glossary, promptTemplates, styleSamples],
+  );
 
   async function handleExportMd() {
     if (!workId || !work) return;
@@ -136,52 +190,72 @@ export function BiblePage() {
   }
 
   return (
-    <div className="page bible-page">
-      <header className="page-header">
-        <div>
-          <Link to={`/work/${workId}`} className="back-link">
-            ← 返回编辑
+    <div className={cn("page bible-page flex flex-col gap-4")}>
+      <header
+        className={cn(
+          "bible-page-header rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6 shadow-sm",
+        )}
+      >
+        <div className="bible-header-text">
+          <Link to={`/work/${workId}`} className="back-link bible-back">
+            ← 返回写作
           </Link>
-          <h1>创作圣经 · {work.title}</h1>
-          <p className="muted small">人物、世界观、伏笔、时间线、章模板与术语表；与章节侧栏「本章约束」联动。</p>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">创作圣经</h1>
+          <p className="bible-work-title muted">{work.title}</p>
+          <p className="bible-stats muted small">
+            人物 <strong>{tabCounts.characters}</strong> · 世界观 <strong>{tabCounts.world}</strong> · 伏笔{" "}
+            <strong>{tabCounts.foreshadow}</strong> · 时间线 <strong>{tabCounts.timeline}</strong> · 章模板{" "}
+            <strong>{tabCounts.templates}</strong> · 术语 <strong>{tabCounts.glossary}</strong> · 提示词{" "}
+            <strong>{tabCounts.prompts}</strong> · 笔感 <strong>{tabCounts.penfeel}</strong>
+          </p>
+          <p className="muted small bible-lead">
+            与章节侧栏「本章约束」联动；以下为全书级设定，可按分区维护。提示词可一键填入写作页「额外要求」；笔感样本会进入 AI
+            侧栏请求的 user 上下文（与「文风锚点」相邻）。
+          </p>
         </div>
-        <div className="header-actions">
-          <button type="button" className="btn ghost" onClick={() => void handleExportMd()}>
+        <div className="header-actions flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link to={`/work/${workId}`}>写作</Link>
+          </Button>
+          <Button variant="outline" size="sm" asChild>
+            <Link to={`/work/${workId}/summary`}>概要</Link>
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => void handleExportMd()}>
             导出 Markdown
-          </button>
+          </Button>
         </div>
       </header>
 
-      <nav className="bible-tabs" aria-label="圣经分区">
-        {(
-          [
-            ["characters", "人物卡"],
-            ["world", "世界观"],
-            ["foreshadow", "伏笔"],
-            ["timeline", "时间线"],
-            ["templates", "章模板"],
-            ["glossary", "术语表"],
-          ] as const
-        ).map(([k, label]) => (
-          <button
-            key={k}
-            type="button"
-            className={`btn small ${tab === k ? "primary" : "ghost"}`}
-            onClick={() => setTab(k)}
-          >
-            {label}
-          </button>
-        ))}
+      <nav className="bible-tab-bar" role="tablist" aria-label="圣经分区">
+        <div className="bible-tab-seg">
+          {BIBLE_TAB_DEF.map(({ id: k, label }) => (
+            <Button
+              key={k}
+              type="button"
+              role="tab"
+              variant="ghost"
+              size="sm"
+              aria-selected={tab === k}
+              className={cn("bible-tab-btn", tab === k && "is-on")}
+              onClick={() => setTab(k)}
+            >
+              <span className="bible-tab-label">{label}</span>
+              <span className="bible-tab-badge" aria-hidden>
+                {tabCounts[k]}
+              </span>
+            </Button>
+          ))}
+        </div>
       </nav>
 
       {tab === "characters" ? (
-        <section className="bible-section" aria-labelledby="bible-char-h">
+        <section className="bible-section bible-section-panel" aria-labelledby="bible-char-h">
           <h2 id="bible-char-h" className="bible-section-title">
             人物卡
           </h2>
-          <button
+          <Button
             type="button"
-            className="btn primary small"
+            size="sm"
             onClick={() =>
               void (async () => {
                 await addBibleCharacter(workId, { name: "新人物" });
@@ -190,7 +264,7 @@ export function BiblePage() {
             }
           >
             + 添加人物
-          </button>
+          </Button>
           <ul className="bible-card-list">
             {characters.map((c) => (
               <li key={c.id} className="bible-card">
@@ -204,10 +278,10 @@ export function BiblePage() {
                     }
                   />
                   <div className="bible-card-actions">
-                    <button
+                    <Button
                       type="button"
                       title="上移"
-                      className="btn ghost small"
+                      variant="ghost" size="sm"
                       onClick={() =>
                         void (async () => {
                           const ids = swapOrderIds(characters, c.id, -1);
@@ -219,11 +293,11 @@ export function BiblePage() {
                       }
                     >
                       ↑
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
                       title="下移"
-                      className="btn ghost small"
+                      variant="ghost" size="sm"
                       onClick={() =>
                         void (async () => {
                           const ids = swapOrderIds(characters, c.id, 1);
@@ -235,17 +309,17 @@ export function BiblePage() {
                       }
                     >
                       ↓
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="btn danger small"
+                      variant="destructive" size="sm"
                       onClick={() => {
                         if (!window.confirm("删除该人物卡？")) return;
                         void deleteBibleCharacter(c.id).then(refresh);
                       }}
                     >
                       删除
-                    </button>
+                    </Button>
                   </div>
                 </div>
                 <label className="bible-field">
@@ -300,11 +374,11 @@ export function BiblePage() {
       ) : null}
 
       {tab === "world" ? (
-        <section className="bible-section">
+        <section className="bible-section bible-section-panel">
           <h2 className="bible-section-title">世界观条目</h2>
-          <button
+          <Button
             type="button"
-            className="btn primary small"
+            size="sm"
             onClick={() =>
               void (async () => {
                 await addBibleWorldEntry(workId, { entryKind: "分类", title: "新条目", body: "" });
@@ -313,7 +387,7 @@ export function BiblePage() {
             }
           >
             + 添加条目
-          </button>
+          </Button>
           <ul className="bible-card-list">
             {world.map((w) => (
               <li key={w.id} className="bible-card">
@@ -336,9 +410,9 @@ export function BiblePage() {
                     }
                   />
                   <div className="bible-card-actions">
-                    <button
+                    <Button
                       type="button"
-                      className="btn ghost small"
+                      variant="ghost" size="sm"
                       onClick={() =>
                         void (async () => {
                           const ids = swapOrderIds(world, w.id, -1);
@@ -350,10 +424,10 @@ export function BiblePage() {
                       }
                     >
                       ↑
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="btn ghost small"
+                      variant="ghost" size="sm"
                       onClick={() =>
                         void (async () => {
                           const ids = swapOrderIds(world, w.id, 1);
@@ -365,17 +439,17 @@ export function BiblePage() {
                       }
                     >
                       ↓
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="btn danger small"
+                      variant="destructive" size="sm"
                       onClick={() => {
                         if (!window.confirm("删除该条目？")) return;
                         void deleteBibleWorldEntry(w.id).then(refresh);
                       }}
                     >
                       删除
-                    </button>
+                    </Button>
                   </div>
                 </div>
                 <label className="bible-field">
@@ -397,11 +471,11 @@ export function BiblePage() {
       ) : null}
 
       {tab === "foreshadow" ? (
-        <section className="bible-section">
+        <section className="bible-section bible-section-panel">
           <h2 className="bible-section-title">伏笔</h2>
-          <button
+          <Button
             type="button"
-            className="btn primary small"
+            size="sm"
             onClick={() =>
               void (async () => {
                 await addBibleForeshadow(workId, {
@@ -417,7 +491,7 @@ export function BiblePage() {
             }
           >
             + 添加伏笔
-          </button>
+          </Button>
           <ul className="bible-card-list">
             {foreshadow.map((f) => (
               <li key={f.id} className="bible-card">
@@ -458,9 +532,9 @@ export function BiblePage() {
                     ))}
                   </select>
                   <div className="bible-card-actions">
-                    <button
+                    <Button
                       type="button"
-                      className="btn ghost small"
+                      variant="ghost" size="sm"
                       onClick={() =>
                         void (async () => {
                           const ids = swapOrderIds(foreshadow, f.id, -1);
@@ -472,10 +546,10 @@ export function BiblePage() {
                       }
                     >
                       ↑
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="btn ghost small"
+                      variant="ghost" size="sm"
                       onClick={() =>
                         void (async () => {
                           const ids = swapOrderIds(foreshadow, f.id, 1);
@@ -487,17 +561,17 @@ export function BiblePage() {
                       }
                     >
                       ↓
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="btn danger small"
+                      variant="destructive" size="sm"
                       onClick={() => {
                         if (!window.confirm("删除？")) return;
                         void deleteBibleForeshadow(f.id).then(refresh);
                       }}
                     >
                       删除
-                    </button>
+                    </Button>
                   </div>
                 </div>
                 <label className="bible-field">
@@ -541,11 +615,11 @@ export function BiblePage() {
       ) : null}
 
       {tab === "timeline" ? (
-        <section className="bible-section">
+        <section className="bible-section bible-section-panel">
           <h2 className="bible-section-title">时间线</h2>
-          <button
+          <Button
             type="button"
-            className="btn primary small"
+            size="sm"
             onClick={() =>
               void (async () => {
                 await addBibleTimelineEvent(workId, { label: "事件", note: "", chapterId: null });
@@ -554,7 +628,7 @@ export function BiblePage() {
             }
           >
             + 添加事件
-          </button>
+          </Button>
           <ul className="bible-card-list">
             {timeline.map((ev) => (
               <li key={ev.id} className="bible-card">
@@ -583,9 +657,9 @@ export function BiblePage() {
                     ))}
                   </select>
                   <div className="bible-card-actions">
-                    <button
+                    <Button
                       type="button"
-                      className="btn ghost small"
+                      variant="ghost" size="sm"
                       onClick={() =>
                         void (async () => {
                           const ids = swapOrderIds(timeline, ev.id, -1);
@@ -597,10 +671,10 @@ export function BiblePage() {
                       }
                     >
                       ↑
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="btn ghost small"
+                      variant="ghost" size="sm"
                       onClick={() =>
                         void (async () => {
                           const ids = swapOrderIds(timeline, ev.id, 1);
@@ -612,17 +686,17 @@ export function BiblePage() {
                       }
                     >
                       ↓
-                    </button>
-                    <button
+                    </Button>
+                    <Button
                       type="button"
-                      className="btn danger small"
+                      variant="destructive" size="sm"
                       onClick={() => {
                         if (!window.confirm("删除？")) return;
                         void deleteBibleTimelineEvent(ev.id).then(refresh);
                       }}
                     >
                       删除
-                    </button>
+                    </Button>
                   </div>
                 </div>
                 <label className="bible-field">
@@ -644,11 +718,11 @@ export function BiblePage() {
       ) : null}
 
       {tab === "templates" ? (
-        <section className="bible-section">
+        <section className="bible-section bible-section-panel">
           <h2 className="bible-section-title">章头 / 章尾模板</h2>
-          <button
+          <Button
             type="button"
-            className="btn primary small"
+            size="sm"
             onClick={() =>
               void (async () => {
                 await addBibleChapterTemplate(workId, {
@@ -662,7 +736,7 @@ export function BiblePage() {
             }
           >
             + 添加模板
-          </button>
+          </Button>
           <ul className="bible-card-list">
             {templates.map((t) => (
               <li key={t.id} className="bible-card">
@@ -675,16 +749,16 @@ export function BiblePage() {
                       void updateBibleChapterTemplate(t.id, { name: e.target.value }).then(refresh)
                     }
                   />
-                  <button
+                  <Button
                     type="button"
-                    className="btn danger small"
+                    variant="destructive" size="sm"
                     onClick={() => {
                       if (!window.confirm("删除该模板？")) return;
                       void deleteBibleChapterTemplate(t.id).then(refresh);
                     }}
                   >
                     删除
-                  </button>
+                  </Button>
                 </div>
                 <label className="bible-field">
                   <span>本章目标</span>
@@ -727,12 +801,14 @@ export function BiblePage() {
       ) : null}
 
       {tab === "glossary" ? (
-        <section className="bible-section">
+        <section className="bible-section bible-section-panel">
           <h2 className="bible-section-title">术语 / 人名表</h2>
-          <p className="muted small">编辑器侧栏会提示正文中出现的术语（字面匹配）。</p>
-          <button
+          <p className="muted small">
+            编辑器侧栏会提示正文中出现的术语（字面匹配）；生成请求时也会把本表注入 AI 上下文（云端需打开「元数据」上传许可）。
+          </p>
+          <Button
             type="button"
-            className="btn primary small"
+            size="sm"
             onClick={() =>
               void (async () => {
                 await addBibleGlossaryTerm(workId, { term: "新术语", category: "term", note: "" });
@@ -741,7 +817,7 @@ export function BiblePage() {
             }
           >
             + 添加术语
-          </button>
+          </Button>
           <ul className="bible-card-list">
             {glossary.map((g) => (
               <li key={g.id} className="bible-card">
@@ -766,16 +842,16 @@ export function BiblePage() {
                     <option value="term">术语</option>
                     <option value="dead">已死</option>
                   </select>
-                  <button
+                  <Button
                     type="button"
-                    className="btn danger small"
+                    variant="destructive" size="sm"
                     onClick={() => {
                       if (!window.confirm("删除？")) return;
                       void deleteBibleGlossaryTerm(g.id).then(refresh);
                     }}
                   >
                     删除
-                  </button>
+                  </Button>
                 </div>
                 <label className="bible-field">
                   <span>备注</span>
@@ -792,6 +868,213 @@ export function BiblePage() {
             ))}
           </ul>
           {glossary.length === 0 ? <p className="muted small">暂无术语。</p> : null}
+        </section>
+      ) : null}
+
+      {tab === "prompts" ? (
+        <section className="bible-section bible-section-panel">
+          <h2 className="bible-section-title">Prompt 模板</h2>
+          <p className="muted small">
+            维护可复用的「额外要求」类片段；在写作页打开 AI 侧栏后，内容会写入「额外要求」文本框（覆盖当前框内文字）。
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() =>
+              void (async () => {
+                await addWritingPromptTemplate(workId, {
+                  category: "通用",
+                  title: "新模板",
+                  body: "",
+                });
+                await refresh();
+              })()
+            }
+          >
+            + 添加模板
+          </Button>
+          <ul className="bible-card-list">
+            {promptTemplates.map((p) => (
+              <li key={p.id} className="bible-card">
+                <div className="bible-card-head">
+                  <input
+                    className="bible-input-title"
+                    defaultValue={p.title}
+                    key={`ptt-${p.id}-${p.updatedAt}`}
+                    onBlur={(e) =>
+                      void updateWritingPromptTemplate(p.id, { title: e.target.value }).then(refresh)
+                    }
+                    placeholder="标题"
+                  />
+                  <input
+                    className="bible-input-title"
+                    style={{ maxWidth: "8rem" }}
+                    defaultValue={p.category}
+                    key={`ptc-${p.id}-${p.updatedAt}`}
+                    onBlur={(e) =>
+                      void updateWritingPromptTemplate(p.id, { category: e.target.value }).then(refresh)
+                    }
+                    placeholder="分类"
+                  />
+                  <div className="bible-card-actions">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() =>
+                        navigate(`/work/${workId}`, { state: { applyUserHint: p.body } })
+                      }
+                    >
+                      去写作装配
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost" size="sm"
+                      onClick={() =>
+                        void (async () => {
+                          const ids = swapOrderIds(promptTemplates, p.id, -1);
+                          if (ids) {
+                            await reorderWritingPromptTemplates(workId, ids);
+                            await refresh();
+                          }
+                        })()
+                      }
+                    >
+                      ↑
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost" size="sm"
+                      onClick={() =>
+                        void (async () => {
+                          const ids = swapOrderIds(promptTemplates, p.id, 1);
+                          if (ids) {
+                            await reorderWritingPromptTemplates(workId, ids);
+                            await refresh();
+                          }
+                        })()
+                      }
+                    >
+                      ↓
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive" size="sm"
+                      onClick={() => {
+                        if (!window.confirm("删除该模板？")) return;
+                        void deleteWritingPromptTemplate(p.id).then(refresh);
+                      }}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                </div>
+                <label className="bible-field">
+                  <span>正文（写入侧栏「额外要求」）</span>
+                  <textarea
+                    defaultValue={p.body}
+                    key={`ptb-${p.id}-${p.updatedAt}`}
+                    onBlur={(e) =>
+                      void updateWritingPromptTemplate(p.id, { body: e.target.value }).then(refresh)
+                    }
+                    rows={5}
+                  />
+                </label>
+              </li>
+            ))}
+          </ul>
+          {promptTemplates.length === 0 ? <p className="muted small">暂无模板。</p> : null}
+        </section>
+      ) : null}
+
+      {tab === "penfeel" ? (
+        <section className="bible-section bible-section-panel">
+          <h2 className="bible-section-title">笔感样本</h2>
+          <p className="muted small">
+            粘贴或摘抄参考段落（可为名家片段或自己喜欢的章节）。保存后，写作页 AI 侧栏组装请求时会附带这些文本，用于模仿语气与节奏；请勿依赖其中的具体情节当作本书设定。
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() =>
+              void (async () => {
+                await addWritingStyleSample(workId, { title: "新样本", body: "" });
+                await refresh();
+              })()
+            }
+          >
+            + 添加样本
+          </Button>
+          <ul className="bible-card-list">
+            {styleSamples.map((s) => (
+              <li key={s.id} className="bible-card">
+                <div className="bible-card-head">
+                  <input
+                    className="bible-input-title"
+                    defaultValue={s.title}
+                    key={`sst-${s.id}-${s.updatedAt}`}
+                    onBlur={(e) =>
+                      void updateWritingStyleSample(s.id, { title: e.target.value }).then(refresh)
+                    }
+                    placeholder="标题"
+                  />
+                  <div className="bible-card-actions">
+                    <Button
+                      type="button"
+                      variant="ghost" size="sm"
+                      onClick={() =>
+                        void (async () => {
+                          const ids = swapOrderIds(styleSamples, s.id, -1);
+                          if (ids) {
+                            await reorderWritingStyleSamples(workId, ids);
+                            await refresh();
+                          }
+                        })()
+                      }
+                    >
+                      ↑
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost" size="sm"
+                      onClick={() =>
+                        void (async () => {
+                          const ids = swapOrderIds(styleSamples, s.id, 1);
+                          if (ids) {
+                            await reorderWritingStyleSamples(workId, ids);
+                            await refresh();
+                          }
+                        })()
+                      }
+                    >
+                      ↓
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive" size="sm"
+                      onClick={() => {
+                        if (!window.confirm("删除该样本？")) return;
+                        void deleteWritingStyleSample(s.id).then(refresh);
+                      }}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                </div>
+                <label className="bible-field">
+                  <span>正文</span>
+                  <textarea
+                    defaultValue={s.body}
+                    key={`ssb-${s.id}-${s.updatedAt}`}
+                    onBlur={(e) =>
+                      void updateWritingStyleSample(s.id, { body: e.target.value }).then(refresh)
+                    }
+                    rows={8}
+                  />
+                </label>
+              </li>
+            ))}
+          </ul>
+          {styleSamples.length === 0 ? <p className="muted small">暂无笔感样本。</p> : null}
         </section>
       ) : null}
     </div>

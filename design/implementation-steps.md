@@ -18,14 +18,15 @@
 ### 0.2 建议的仓库落点（实现时对齐，非强制）
 
 
-| 领域      | 现有或预期路径                                                     |
-| ------- | ----------------------------------------------------------- |
-| 作品/章/圣经 | `src/db/`、`src/storage/writing-store*.ts`                   |
-| UI 壳与路由 | `src/App.tsx`、`src/components/AppShell.tsx`                 |
-| 留白      | `src/pages/LibraryPage.tsx`、`src/pages/HomePage.tsx`        |
-| 设置      | `src/pages/SettingsPage.tsx`                                |
-| AI 调用   | `src/ai/`（扩展 providers、统一 client）                           |
-| 类型      | `src/db/types.ts`、云侧 `src/storage/supabase-writing-rows.ts` |
+| 领域                | 现有或预期路径                                                                                                 |
+| ----------------- | ------------------------------------------------------------------------------------------------------- |
+| 作品/章/圣经           | `src/db/`、`src/storage/writing-store*.ts`                                                               |
+| UI 壳与路由           | `src/App.tsx`、`src/components/AppShell.tsx`                                                             |
+| 留白                | `src/pages/LibraryPage.tsx`、`src/pages/HomePage.tsx`                                                    |
+| 设置                | `src/pages/SettingsPage.tsx`                                                                            |
+| AI 调用             | `src/ai/`（扩展 providers、统一 client）                                                                       |
+| 类型                | `src/db/types.ts`、云侧 `src/storage/supabase-writing-rows.ts`                                             |
+| **UI 视觉参考（v2.0）** | `design/v0-ui-reference/`（Next 子工程）；规范 `docs/ui-design-specification.md`；**渐进迁入 `src/`**，见总体规划 **§2.4** |
 
 
 ### 0.3 全局验收口径（每条大功能都应满足）
@@ -35,11 +36,19 @@
 - **虚构创作**：首次开 AI 或设置内有声明入口（总体规划 §5.6）。  
 - **备份心智**：云用户仍能看到导出/备份入口（总体规划 §5.4）。
 
+### 0.4 UI 参考 v2.0 → 主工程（渐进迁移）
+
+1. **独立运行参考**：`cd design/v0-ui-reference && npm install && npm run dev`，对照 `docs/ui-design-specification.md` 走查模块。
+2. **迁移单位**：单模块或单壳层（顶栏、作品卡片、设置分区、模型选择弹层等），每 PR 可构建、可回滚。
+3. **技术选择**：主应用可继续 **纯 CSS + 现有组件**；仅在团队接受维护成本时，再考虑引入 Tailwind/shadcn 与参考工程对齐。
+4. **路由映射**：以 `design/v0-ui-reference/README.md` 中的「参考组件 ↔ 主应用落点」表为索引，与 `seven-modules-ui-spec.md` 交叉核对。
+5. **排期真源**：UI 与功能交织时的 **建议波次与顺序** 以 `design/master-checklist.md` **§D** 为准。
+
 ---
 
 ## 1. 阶段 A — 决策收口（总体规划 §11 步 1）
 
-**目标**：减少返工；输出一页《决策记录》可放进 `docs/`。
+**目标**：减少返工；产出见 `**docs/决策记录.md`**（总体规划 §11 步 1）。
 
 ### A.1 文档与范围
 

@@ -9,21 +9,34 @@ import type {
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  InspirationFragment,
   Volume,
   Work,
   WorkStyleCard,
+  WritingPromptTemplate,
+  WritingStyleSample,
 } from "../db/types";
+import { normalizeWorkTagList } from "../util/work-tags";
 import type { MergeRemapResult } from "./backup-merge-remap";
 
 type Json = Record<string, unknown>;
 
 export function parseWorkRow(r: Json): Work {
+  const cov = r.cover_image;
+  const tg = r.tags;
+  let tags: string[] | undefined;
+  if (Array.isArray(tg)) {
+    const t = tg.filter((x): x is string => typeof x === "string");
+    tags = normalizeWorkTagList(t);
+  }
   return {
     id: r.id as string,
     title: r.title as string,
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
     progressCursor: (r.progress_cursor as string | null) ?? null,
+    coverImage: typeof cov === "string" && cov.length > 0 ? cov : undefined,
+    tags,
   };
 }
 
@@ -34,6 +47,7 @@ export function parseVolumeRow(r: Json): Volume {
     title: r.title as string,
     order: Number(r.order),
     createdAt: Number(r.created_at),
+    summary: (r.summary as string | null) ?? "",
   };
 }
 
@@ -45,6 +59,8 @@ export function parseChapterRow(r: Json): Chapter {
     title: r.title as string,
     content: (r.content as string) ?? "",
     summary: (r.summary as string | null) ?? "",
+    summaryUpdatedAt:
+      r.summary_updated_at != null ? Number(r.summary_updated_at as number | string) : undefined,
     order: Number(r.order),
     updatedAt: Number(r.updated_at),
     wordCountCache: r.word_count_cache != null ? Number(r.word_count_cache) : undefined,
@@ -57,6 +73,22 @@ export function parseSnapshotRow(r: Json): ChapterSnapshot {
     chapterId: r.chapter_id as string,
     content: r.content as string,
     createdAt: Number(r.created_at),
+  };
+}
+
+export function parseInspirationFragmentRow(r: Json): InspirationFragment {
+  const tg = r.tags;
+  const tags =
+    (Array.isArray(tg)
+      ? normalizeWorkTagList(tg.filter((x): x is string => typeof x === "string"))
+      : undefined) ?? [];
+  return {
+    id: r.id as string,
+    workId: (r.work_id as string | null) ?? null,
+    body: (r.body as string) ?? "",
+    tags,
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
   };
 }
 
@@ -153,6 +185,7 @@ export function parseChapterBibleRow(r: Json): ChapterBible {
     forbidText: (r.forbid_text as string) ?? "",
     povText: (r.pov_text as string) ?? "",
     sceneStance: (r.scene_stance as string) ?? "",
+    characterStateText: (r.character_state as string) ?? "",
     updatedAt: Number(r.updated_at),
   };
 }
@@ -169,7 +202,33 @@ export function parseGlossaryRow(r: Json): BibleGlossaryTerm {
   };
 }
 
+export function parseWritingPromptTemplateRow(r: Json): WritingPromptTemplate {
+  return {
+    id: r.id as string,
+    workId: r.work_id as string,
+    category: (r.category as string) ?? "",
+    title: (r.title as string) ?? "",
+    body: (r.body as string) ?? "",
+    sortOrder: Number(r.sort_order),
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
+  };
+}
+
+export function parseWritingStyleSampleRow(r: Json): WritingStyleSample {
+  return {
+    id: r.id as string,
+    workId: r.work_id as string,
+    title: (r.title as string) ?? "",
+    body: (r.body as string) ?? "",
+    sortOrder: Number(r.sort_order),
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
+  };
+}
+
 export function toWorkInsert(uid: string, w: Work): Json {
+  const tagRow = normalizeWorkTagList(w.tags) ?? [];
   return {
     id: w.id,
     user_id: uid,
@@ -177,6 +236,8 @@ export function toWorkInsert(uid: string, w: Work): Json {
     created_at: w.createdAt,
     updated_at: w.updatedAt,
     progress_cursor: w.progressCursor,
+    cover_image: w.coverImage && w.coverImage.length > 0 ? w.coverImage : null,
+    tags: tagRow,
   };
 }
 
@@ -187,6 +248,7 @@ export function toVolumeInsert(v: Volume): Json {
     title: v.title,
     order: v.order,
     created_at: v.createdAt,
+    summary: v.summary === "" || v.summary === undefined ? null : v.summary,
   };
 }
 
@@ -197,10 +259,11 @@ export function toChapterInsert(c: Chapter): Json {
     volume_id: c.volumeId,
     title: c.title,
     content: c.content,
-    summary: c.summary === "" ? null : c.summary,
+    summary: c.summary === "" || c.summary === undefined ? null : c.summary,
     order: c.order,
     updated_at: c.updatedAt,
     word_count_cache: c.wordCountCache ?? null,
+    summary_updated_at: c.summaryUpdatedAt ?? null,
   };
 }
 
@@ -251,6 +314,9 @@ export function mergeWritingRowsToInserts(uid: string, m: MergeRemapResult): {
   chapterBible: Json[];
   bibleGloss: Json[];
   styleCards: Json[];
+  inspirationFrags: Json[];
+  writingPromptTpl: Json[];
+  writingStyleSamples: Json[];
 } {
   const works = m.newWorks.map((w) => toWorkInsert(uid, w));
   const volumes = m.newVolumes.map(toVolumeInsert);
@@ -319,6 +385,7 @@ export function mergeWritingRowsToInserts(uid: string, m: MergeRemapResult): {
     forbid_text: c.forbidText,
     pov_text: c.povText,
     scene_stance: c.sceneStance,
+    character_state: c.characterStateText ?? "",
     updated_at: c.updatedAt,
   }));
   const bibleGloss = m.newBibleGloss.map((c) => ({
@@ -340,6 +407,34 @@ export function mergeWritingRowsToInserts(uid: string, m: MergeRemapResult): {
     extra_rules: s.extraRules,
     updated_at: s.updatedAt,
   }));
+  const inspirationFrags = m.newInspirationFragments.map((f) => ({
+    id: f.id,
+    user_id: uid,
+    work_id: f.workId,
+    body: f.body,
+    tags: normalizeWorkTagList(f.tags) ?? [],
+    created_at: f.createdAt,
+    updated_at: f.updatedAt,
+  }));
+  const writingPromptTpl = m.newWritingPromptTemplates.map((p) => ({
+    id: p.id,
+    work_id: p.workId,
+    category: p.category,
+    title: p.title,
+    body: p.body,
+    sort_order: p.sortOrder,
+    created_at: p.createdAt,
+    updated_at: p.updatedAt,
+  }));
+  const writingStyleSamples = m.newWritingStyleSamples.map((s) => ({
+    id: s.id,
+    work_id: s.workId,
+    title: s.title,
+    body: s.body,
+    sort_order: s.sortOrder,
+    created_at: s.createdAt,
+    updated_at: s.updatedAt,
+  }));
   return {
     works,
     volumes,
@@ -353,5 +448,8 @@ export function mergeWritingRowsToInserts(uid: string, m: MergeRemapResult): {
     chapterBible,
     bibleGloss,
     styleCards,
+    inspirationFrags,
+    writingPromptTpl,
+    writingStyleSamples,
   };
 }

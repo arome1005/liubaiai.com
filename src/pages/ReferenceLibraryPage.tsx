@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
+import { cn } from "../lib/utils";
 import {
   addReferenceExcerpt,
   clearAllReferenceLibraryData,
@@ -32,6 +35,8 @@ import type {
   Work,
 } from "../db/types";
 import { REFERENCE_CHUNK_CHAR_TARGET, REFERENCE_IMPORT_HEAVY_BYTES } from "../db/types";
+import { extractPlainTextFromDocx } from "../util/extract-docx-text";
+import { extractPlainTextFromPdf } from "../util/extract-pdf-text";
 import { readUtf8TextFileWithCheck } from "../util/readUtf8TextFile";
 
 const CONTEXT_TAIL = 280;
@@ -40,6 +45,19 @@ const CONTEXT_HEAD = 280;
 const LS_REF_PROGRESS_FILTER = "liubai-ref3_8-progress-filter";
 const LS_REF_PROGRESS_WORK = "liubai-ref3_8-progress-work";
 const LS_REF_READER_POS_PREFIX = "liubai-ref:readerPos:";
+const LS_REF_VIEW_MODE = "liubai:referenceViewMode";
+const LS_REF_SEARCH_MODE = "liubai:referenceSearchMode";
+
+type ReferenceViewMode = "grid" | "list";
+type ReferenceSearchMode = "strict" | "hybrid";
+
+function loadReferenceSearchMode(): ReferenceSearchMode {
+  try {
+    return localStorage.getItem(LS_REF_SEARCH_MODE) === "hybrid" ? "hybrid" : "strict";
+  } catch {
+    return "strict";
+  }
+}
 
 function loadProgressFilterEnabled(): boolean {
   try {
@@ -68,6 +86,12 @@ function isLinkedChapterBeforeProgress(
   const linkCh = chapters.find((c) => c.id === linkedChapterId);
   if (!cur || !linkCh) return true;
   return linkCh.order < cur.order;
+}
+
+function refCoverHue(refId: string): number {
+  let h = 0;
+  for (let i = 0; i < refId.length; i++) h = (h * 31 + refId.charCodeAt(i)) >>> 0;
+  return h % 360;
 }
 
 function highlightChunkText(text: string, start: number, end: number) {
@@ -107,6 +131,7 @@ export function ReferenceLibraryPage() {
   const [searchQ, setSearchQ] = useState("");
   const [searchHits, setSearchHits] = useState<ReferenceSearchHit[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [refSearchMode, setRefSearchMode] = useState<ReferenceSearchMode>(loadReferenceSearchMode);
   /** 仅搜当前打开的书；null = 全库 */
   const [searchScopeRefId, setSearchScopeRefId] = useState<string | null>(null);
 
@@ -142,6 +167,14 @@ export function ReferenceLibraryPage() {
   /** 书目 id → 检测到的章节标题行（展开时懒加载） */
   const [refChapterHeadsById, setRefChapterHeadsById] = useState<Record<string, ReferenceChapterHead[]>>({});
   const [refHeadsForHits, setRefHeadsForHits] = useState<Record<string, ReferenceChapterHead[]>>({});
+  const [viewMode, setViewMode] = useState<ReferenceViewMode>(() => {
+    try {
+      const v = localStorage.getItem(LS_REF_VIEW_MODE);
+      return v === "list" ? "list" : "grid";
+    } catch {
+      return "grid";
+    }
+  });
 
   const fileRef = useRef<HTMLInputElement>(null);
   const chunkAnchorRef = useRef<HTMLDivElement>(null);
@@ -185,6 +218,28 @@ export function ReferenceLibraryPage() {
     if (!categoryFilter) return items;
     return items.filter((it) => (it.category ?? "").trim() === categoryFilter);
   }, [items, categoryFilter]);
+
+  const libraryTotals = useMemo(() => {
+    let chars = 0;
+    for (const it of items) chars += it.totalChars;
+    return { count: items.length, chars };
+  }, [items]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_REF_VIEW_MODE, viewMode);
+    } catch {
+      /* ignore */
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_REF_SEARCH_MODE, refSearchMode);
+    } catch {
+      /* ignore */
+    }
+  }, [refSearchMode]);
 
   useEffect(() => {
     void (async () => {
@@ -351,7 +406,7 @@ export function ReferenceLibraryPage() {
     if (searchScopeRefId !== null && activeRefId) {
       setSearchScopeRefId(activeRefId);
     }
-  }, [activeRefId]);
+  }, [activeRefId, searchScopeRefId]);
 
   useEffect(() => {
     if (searchScopeRefId && !activeRefId) setSearchScopeRefId(null);
@@ -368,6 +423,24 @@ export function ReferenceLibraryPage() {
       const hits = await searchReferenceLibrary(q, {
         refWorkId: searchScopeRefId ?? undefined,
         limit: 80,
+        mode: refSearchMode,
+      });
+      setSearchHits(hits);
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
+  async function switchRefSearchMode(next: ReferenceSearchMode) {
+    setRefSearchMode(next);
+    const q = searchQ.trim();
+    if (!q) return;
+    setSearchLoading(true);
+    try {
+      const hits = await searchReferenceLibrary(q, {
+        refWorkId: searchScopeRefId ?? undefined,
+        limit: 80,
+        mode: next,
       });
       setSearchHits(hits);
     } finally {
@@ -417,16 +490,42 @@ export function ReferenceLibraryPage() {
     if (picked.length === 0) return;
 
     const txtFiles = picked.filter((f) => f.name.toLowerCase().endsWith(".txt"));
-    if (txtFiles.length === 0) {
-      window.alert("仅支持 .txt 原著导入（分块存储，可支持百万字级）。可多选文件。");
+    const pdfFiles = picked.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+    const docxFiles = picked.filter((f) => f.name.toLowerCase().endsWith(".docx"));
+
+    const formatCount =
+      (txtFiles.length > 0 ? 1 : 0) + (pdfFiles.length > 0 ? 1 : 0) + (docxFiles.length > 0 ? 1 : 0);
+    if (formatCount > 1) {
+      window.alert("请勿在同一批选择中混合 .txt、.pdf 与 .docx，请按格式分开导入。");
       return;
     }
-    if (txtFiles.length < picked.length) {
+
+    if (formatCount === 0) {
       window.alert(
-        `已忽略 ${picked.length - txtFiles.length} 个非 .txt 文件，将导入 ${txtFiles.length} 个 .txt。`,
+        "支持 UTF-8 的 .txt、带文本层的 .pdf、以及 Word 的 .docx（均在浏览器内本地解析，不上传）。旧版 .doc 请先用 Word 另存为 .docx。可多选同类型文件。",
+      );
+      return;
+    }
+
+    if (txtFiles.length > 0) {
+      if (txtFiles.length < picked.length) {
+        window.alert(
+          `已忽略 ${picked.length - txtFiles.length} 个非 .txt 文件，将导入 ${txtFiles.length} 个 .txt。`,
+        );
+      }
+    } else if (pdfFiles.length > 0) {
+      if (pdfFiles.length < picked.length) {
+        window.alert(
+          `已忽略 ${picked.length - pdfFiles.length} 个非 .pdf 文件，将导入 ${pdfFiles.length} 个 .pdf。`,
+        );
+      }
+    } else if (docxFiles.length < picked.length) {
+      window.alert(
+        `已忽略 ${picked.length - docxFiles.length} 个非 .docx 文件，将导入 ${docxFiles.length} 个 .docx。`,
       );
     }
 
+    if (txtFiles.length > 0) {
     if (txtFiles.length === 1) {
       const file = txtFiles[0]!;
       setBusy(true);
@@ -478,32 +577,167 @@ export function ReferenceLibraryPage() {
       return;
     }
 
-    const batchCat =
+      const batchCat =
+        window.prompt("批量导入默认分类（可空；留空则仅按书名管理）", "") ?? "";
+
+      setBusy(true);
+      setImportProgress({ current: 0, total: txtFiles.length, fileName: "" });
+      const errors: string[] = [];
+      let ok = 0;
+      try {
+        for (let i = 0; i < txtFiles.length; i++) {
+          const file = txtFiles[i]!;
+          setImportProgress({ current: i + 1, total: txtFiles.length, fileName: file.name });
+          try {
+            const { text, suspiciousEncoding } = await readUtf8TextFileWithCheck(file);
+            if (suspiciousEncoding) {
+              const go = window.confirm(
+                `${file.name}：疑似非 UTF-8 或无法解码字符较多，继续导入可能乱码。仍要继续？`,
+              );
+              if (!go) continue;
+            }
+            const stem = file.name.replace(/\.txt$/i, "").trim() || "未命名";
+            const large = new Blob([text]).size >= REFERENCE_IMPORT_HEAVY_BYTES;
+            if (large) {
+              setHeavyJob({
+                phase: "chunks",
+                percent: 0,
+                label: `批量 ${i + 1}/${txtFiles.length}`,
+                fileName: file.name,
+              });
+            }
+            await createReferenceFromPlainText(
+              {
+                title: stem,
+                sourceName: file.name,
+                fullText: text,
+                category: batchCat.trim(),
+              },
+              large
+                ? {
+                    onProgress: (p) =>
+                      setHeavyJob({
+                        phase: p.phase,
+                        percent: p.percent,
+                        label: `${p.label ?? ""}（${i + 1}/${txtFiles.length}）`,
+                        fileName: file.name,
+                      }),
+                  }
+                : undefined,
+            );
+            setHeavyJob(null);
+            ok++;
+            await refresh();
+          } catch (err) {
+            setHeavyJob(null);
+            errors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
+          }
+          await new Promise<void>((r) => requestAnimationFrame(() => r()));
+        }
+      } finally {
+        setImportProgress(null);
+        setHeavyJob(null);
+        setBusy(false);
+      }
+
+      if (errors.length > 0) {
+        const head = errors.slice(0, 8);
+        const more = errors.length > 8 ? `\n… 共 ${errors.length} 条失败` : "";
+        window.alert(`批量导入完成：成功 ${ok}，失败 ${errors.length}。\n\n${head.join("\n")}${more}`);
+      }
+      return;
+    }
+
+    if (pdfFiles.length > 0) {
+    if (pdfFiles.length === 1) {
+      const file = pdfFiles[0]!;
+      setBusy(true);
+      try {
+        setHeavyJob({ phase: "chunks", percent: 0, label: "正在读取 PDF…", fileName: file.name });
+        const buf = await file.arrayBuffer();
+        const { text } = await extractPlainTextFromPdf(buf, {
+          onProgress: ({ page, totalPages }) => {
+            setHeavyJob({
+              phase: "chunks",
+              percent: Math.min(48, Math.round((page / Math.max(1, totalPages)) * 48)),
+              label: `解析 PDF ${page}/${totalPages} 页`,
+              fileName: file.name,
+            });
+          },
+        });
+        setHeavyJob(null);
+        const title =
+          window.prompt("参考库标题（书名）", file.name.replace(/\.pdf$/i, "").trim() || "未命名") ?? "";
+        if (title === "") return;
+        const cat =
+          window.prompt("分类（可空，便于筛选。如：科幻设定、历史资料）", "") ?? "";
+        const large = new Blob([text]).size >= REFERENCE_IMPORT_HEAVY_BYTES;
+        if (large) {
+          setHeavyJob({ phase: "chunks", percent: 0, label: "解析完成，准备写入…", fileName: file.name });
+        }
+        const entry = await createReferenceFromPlainText(
+          {
+            title: title.trim() || "未命名",
+            sourceName: file.name,
+            fullText: text,
+            category: cat.trim(),
+          },
+          large
+            ? {
+                onProgress: (p) =>
+                  setHeavyJob({
+                    phase: p.phase,
+                    percent: p.percent,
+                    label: p.label,
+                    fileName: file.name,
+                  }),
+              }
+            : undefined,
+        );
+        setHeavyJob(null);
+        await refresh();
+        await openReader(entry, 0, null);
+      } catch (err) {
+        setHeavyJob(null);
+        window.alert(err instanceof Error ? err.message : "导入失败");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    const batchCatPdf =
       window.prompt("批量导入默认分类（可空；留空则仅按书名管理）", "") ?? "";
 
     setBusy(true);
-    setImportProgress({ current: 0, total: txtFiles.length, fileName: "" });
-    const errors: string[] = [];
-    let ok = 0;
+    setImportProgress({ current: 0, total: pdfFiles.length, fileName: "" });
+    const pdfErrors: string[] = [];
+    let pdfOk = 0;
     try {
-      for (let i = 0; i < txtFiles.length; i++) {
-        const file = txtFiles[i]!;
-        setImportProgress({ current: i + 1, total: txtFiles.length, fileName: file.name });
+      for (let i = 0; i < pdfFiles.length; i++) {
+        const file = pdfFiles[i]!;
+        setImportProgress({ current: i + 1, total: pdfFiles.length, fileName: file.name });
         try {
-          const { text, suspiciousEncoding } = await readUtf8TextFileWithCheck(file);
-          if (suspiciousEncoding) {
-            const go = window.confirm(
-              `${file.name}：疑似非 UTF-8 或无法解码字符较多，继续导入可能乱码。仍要继续？`,
-            );
-            if (!go) continue;
-          }
-          const stem = file.name.replace(/\.txt$/i, "").trim() || "未命名";
+          setHeavyJob({ phase: "chunks", percent: 0, label: "正在读取 PDF…", fileName: file.name });
+          const buf = await file.arrayBuffer();
+          const { text } = await extractPlainTextFromPdf(buf, {
+            onProgress: ({ page, totalPages }) => {
+              setHeavyJob({
+                phase: "chunks",
+                percent: Math.min(48, Math.round((page / Math.max(1, totalPages)) * 48)),
+                label: `解析 ${i + 1}/${pdfFiles.length} · ${page}/${totalPages} 页`,
+                fileName: file.name,
+              });
+            },
+          });
+          setHeavyJob(null);
+          const stem = file.name.replace(/\.pdf$/i, "").trim() || "未命名";
           const large = new Blob([text]).size >= REFERENCE_IMPORT_HEAVY_BYTES;
           if (large) {
             setHeavyJob({
               phase: "chunks",
               percent: 0,
-              label: `批量 ${i + 1}/${txtFiles.length}`,
+              label: `批量 ${i + 1}/${pdfFiles.length}`,
               fileName: file.name,
             });
           }
@@ -512,7 +746,7 @@ export function ReferenceLibraryPage() {
               title: stem,
               sourceName: file.name,
               fullText: text,
-              category: batchCat.trim(),
+              category: batchCatPdf.trim(),
             },
             large
               ? {
@@ -520,18 +754,18 @@ export function ReferenceLibraryPage() {
                     setHeavyJob({
                       phase: p.phase,
                       percent: p.percent,
-                      label: `${p.label ?? ""}（${i + 1}/${txtFiles.length}）`,
+                      label: `${p.label ?? ""}（${i + 1}/${pdfFiles.length}）`,
                       fileName: file.name,
                     }),
                 }
               : undefined,
           );
           setHeavyJob(null);
-          ok++;
+          pdfOk++;
           await refresh();
         } catch (err) {
           setHeavyJob(null);
-          errors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
+          pdfErrors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
         }
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
@@ -541,10 +775,126 @@ export function ReferenceLibraryPage() {
       setBusy(false);
     }
 
-    if (errors.length > 0) {
-      const head = errors.slice(0, 8);
-      const more = errors.length > 8 ? `\n… 共 ${errors.length} 条失败` : "";
-      window.alert(`批量导入完成：成功 ${ok}，失败 ${errors.length}。\n\n${head.join("\n")}${more}`);
+    if (pdfErrors.length > 0) {
+      const head = pdfErrors.slice(0, 8);
+      const more = pdfErrors.length > 8 ? `\n… 共 ${pdfErrors.length} 条失败` : "";
+      window.alert(`批量导入完成：成功 ${pdfOk}，失败 ${pdfErrors.length}。\n\n${head.join("\n")}${more}`);
+    }
+    return;
+    }
+
+    if (docxFiles.length === 1) {
+      const file = docxFiles[0]!;
+      setBusy(true);
+      try {
+        setHeavyJob({ phase: "chunks", percent: 0, label: "正在解析 Word 文档…", fileName: file.name });
+        const buf = await file.arrayBuffer();
+        const text = await extractPlainTextFromDocx(buf);
+        setHeavyJob(null);
+        const title =
+          window.prompt("参考库标题（书名）", file.name.replace(/\.docx$/i, "").trim() || "未命名") ?? "";
+        if (title === "") return;
+        const cat =
+          window.prompt("分类（可空，便于筛选。如：科幻设定、历史资料）", "") ?? "";
+        const large = new Blob([text]).size >= REFERENCE_IMPORT_HEAVY_BYTES;
+        if (large) {
+          setHeavyJob({ phase: "chunks", percent: 0, label: "解析完成，准备写入…", fileName: file.name });
+        }
+        const entry = await createReferenceFromPlainText(
+          {
+            title: title.trim() || "未命名",
+            sourceName: file.name,
+            fullText: text,
+            category: cat.trim(),
+          },
+          large
+            ? {
+                onProgress: (p) =>
+                  setHeavyJob({
+                    phase: p.phase,
+                    percent: p.percent,
+                    label: p.label,
+                    fileName: file.name,
+                  }),
+              }
+            : undefined,
+        );
+        setHeavyJob(null);
+        await refresh();
+        await openReader(entry, 0, null);
+      } catch (err) {
+        setHeavyJob(null);
+        window.alert(err instanceof Error ? err.message : "导入失败");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    const batchCatDocx =
+      window.prompt("批量导入默认分类（可空；留空则仅按书名管理）", "") ?? "";
+
+    setBusy(true);
+    setImportProgress({ current: 0, total: docxFiles.length, fileName: "" });
+    const docxErrors: string[] = [];
+    let docxOk = 0;
+    try {
+      for (let i = 0; i < docxFiles.length; i++) {
+        const file = docxFiles[i]!;
+        setImportProgress({ current: i + 1, total: docxFiles.length, fileName: file.name });
+        try {
+          setHeavyJob({ phase: "chunks", percent: 0, label: "正在解析 Word 文档…", fileName: file.name });
+          const buf = await file.arrayBuffer();
+          const text = await extractPlainTextFromDocx(buf);
+          setHeavyJob(null);
+          const stem = file.name.replace(/\.docx$/i, "").trim() || "未命名";
+          const large = new Blob([text]).size >= REFERENCE_IMPORT_HEAVY_BYTES;
+          if (large) {
+            setHeavyJob({
+              phase: "chunks",
+              percent: 0,
+              label: `批量 ${i + 1}/${docxFiles.length}`,
+              fileName: file.name,
+            });
+          }
+          await createReferenceFromPlainText(
+            {
+              title: stem,
+              sourceName: file.name,
+              fullText: text,
+              category: batchCatDocx.trim(),
+            },
+            large
+              ? {
+                  onProgress: (p) =>
+                    setHeavyJob({
+                      phase: p.phase,
+                      percent: p.percent,
+                      label: `${p.label ?? ""}（${i + 1}/${docxFiles.length}）`,
+                      fileName: file.name,
+                    }),
+                }
+              : undefined,
+          );
+          setHeavyJob(null);
+          docxOk++;
+          await refresh();
+        } catch (err) {
+          setHeavyJob(null);
+          docxErrors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
+        }
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      }
+    } finally {
+      setImportProgress(null);
+      setHeavyJob(null);
+      setBusy(false);
+    }
+
+    if (docxErrors.length > 0) {
+      const head = docxErrors.slice(0, 8);
+      const more = docxErrors.length > 8 ? `\n… 共 ${docxErrors.length} 条失败` : "";
+      window.alert(`批量导入完成：成功 ${docxOk}，失败 ${docxErrors.length}。\n\n${head.join("\n")}${more}`);
     }
   }
 
@@ -581,7 +931,7 @@ export function ReferenceLibraryPage() {
       window.alert("请先在阅读器中划选要保存的文字。");
       return;
     }
-    let start = ch.content.indexOf(t);
+    const start = ch.content.indexOf(t);
     if (start < 0) {
       window.alert("无法定位选区，请缩短选区或避免跨段选择。");
       return;
@@ -648,37 +998,89 @@ export function ReferenceLibraryPage() {
 
   if (loading) {
     return (
-      <div className="page reference-page">
+      <div className={cn("page reference-page flex flex-col gap-4")}>
         <p className="muted">加载中…</p>
       </div>
     );
   }
 
   return (
-    <div className="page reference-page reference-page--split">
-      <header className="page-header">
-        <Link to="/library" className="back-link">
-          ← 作品库
-        </Link>
-        <h1>参考库</h1>
-        <div className="header-actions">
-          <button type="button" className="btn primary" disabled={busy} onClick={openPicker}>
+    <div className={cn("page reference-page reference-page--split flex flex-col gap-4")}>
+      <header
+        className={cn(
+          "reference-page-header rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6 shadow-sm",
+        )}
+      >
+        <div className="reference-page-header-text">
+          <Link to="/library" className="back-link reference-page-back">
+            ← 作品库
+          </Link>
+          <h1 className="text-xl font-semibold tracking-tight text-foreground">藏经</h1>
+          <p className="reference-page-sub muted small">
+            本地原著与摘录 · 关键词检索与分块阅读（.txt UTF-8；.pdf / .docx 均在浏览器内本地解析，不上传；旧 .doc 请另存为 .docx）
+          </p>
+          {libraryTotals.count > 0 ? (
+            <p className="reference-page-stats muted small">
+              书目 <strong>{libraryTotals.count}</strong> 部
+              {libraryTotals.chars > 0 ? (
+                <>
+                  {" "}
+                  · 约 <strong>{libraryTotals.chars.toLocaleString()}</strong> 字
+                </>
+              ) : null}
+              {categoryFilter ? (
+                <>
+                  {" "}
+                  · 当前分类 <strong>{categoryFilter}</strong> 共 {filteredItems.length} 部
+                </>
+              ) : null}
+            </p>
+          ) : null}
+        </div>
+        <div className="header-actions flex flex-wrap gap-2">
+          <Button type="button" disabled={busy} onClick={openPicker}>
             {busy
               ? importProgress
                 ? `导入中 ${importProgress.current}/${importProgress.total}…`
                 : "导入中…"
-              : "导入 .txt（可多选）"}
-          </button>
+              : "导入 .txt / .pdf / .docx（可多选，勿混选）"}
+          </Button>
           <input
             ref={fileRef}
             type="file"
-            accept=".txt,text/plain"
+            accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             multiple
             className="visually-hidden"
             onChange={(ev) => void handleFiles(ev)}
           />
         </div>
       </header>
+
+      <div className="reference-local-lock" role="region" aria-label="参考库仅本地存储">
+        <div className="reference-local-lock-icon" aria-hidden>
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <rect x="5" y="11" width="14" height="10" rx="2" />
+            <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+          </svg>
+        </div>
+        <div className="reference-local-lock-body">
+          <strong className="reference-local-lock-title">本地安全锁 · 参考库不上云</strong>
+          <p className="reference-local-lock-text">
+            参考书目正文、检索索引与摘录<strong>只保存在本机浏览器</strong>（IndexedDB），导入与解析均在本地完成，不会作为「参考库全文」上传至应用服务器。
+            若在设置中开启账号与<strong>写作数据</strong>云同步（Hybrid），同步范围仍<strong>不包含</strong>本页藏经数据，仅涵盖作品、章节等创作侧内容，二者相互独立。
+          </p>
+        </div>
+      </div>
 
       {importProgress && (
         <div className="reference-import-progress" role="status" aria-live="polite">
@@ -709,44 +1111,97 @@ export function ReferenceLibraryPage() {
       )}
 
       <p className="muted small import-hint">
-        导入时建立<strong>关键词倒排索引</strong>；检索为索引召回 + 字面量确认。可选中多个 .txt 批量导入。
-        分块约 <strong>{REFERENCE_CHUNK_CHAR_TARGET.toLocaleString()}</strong> 字/段。
+        导入时建立<strong>关键词倒排索引</strong>；检索为索引召回 + 字面量确认。可选中多个同类型文件批量导入（勿在同一批混 .txt / .pdf / .docx）。
+        PDF 依赖文本层，扫描版可能无法提取；Word 仅支持 .docx（Office 2007+）。分块约{" "}
+        <strong>{REFERENCE_CHUNK_CHAR_TARGET.toLocaleString()}</strong> 字/段。
       </p>
 
       <div className="reference-page-layout">
         <main className="reference-main">
           <div className="reference-search-block">
-            <div className="reference-filter-row">
-              <label className="small muted">
+            <div className="reference-toolbar" role="search">
+              <label className="visually-hidden" htmlFor="reference-category-filter">
                 分类筛选
-                <select
-                  className="input reference-category-select"
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value)}
-                >
-                  <option value="">全部</option>
-                  {categoryOptions.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
               </label>
-            </div>
-            <div className="reference-search-row">
-              <input
+              <select
+                id="reference-category-filter"
+                className="input reference-toolbar-category"
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+                aria-label="分类筛选"
+              >
+                <option value="">全部分类</option>
+                {categoryOptions.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <label className="visually-hidden" htmlFor="reference-fulltext-search">
+                全文搜索
+              </label>
+              <Input
+                id="reference-fulltext-search"
                 type="search"
-                className="input reference-search-input"
+                className="reference-toolbar-search"
                 placeholder="搜索参考库全文…"
                 value={searchQ}
                 onChange={(e) => setSearchQ(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void runSearch();
                 }}
+                autoComplete="off"
               />
-              <button type="button" className="btn small" disabled={searchLoading} onClick={() => void runSearch()}>
+              <Button type="button" size="sm" disabled={searchLoading} onClick={() => void runSearch()}>
                 {searchLoading ? "…" : "搜索"}
-              </button>
+              </Button>
+              <div className="reference-toolbar-seg" role="group" aria-label="检索模式">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn(refSearchMode === "strict" && "is-on")}
+                  aria-pressed={refSearchMode === "strict"}
+                  title="多词须同时出现，且整段查询需字面命中"
+                  onClick={() => void switchRefSearchMode("strict")}
+                >
+                  精确
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn(refSearchMode === "hybrid" && "is-on")}
+                  aria-pressed={refSearchMode === "hybrid"}
+                  title="多词任一命中即可参与排序；整句命中优先（本地无向量）"
+                  onClick={() => void switchRefSearchMode("hybrid")}
+                >
+                  扩展
+                </Button>
+              </div>
+              <div className="reference-toolbar-spacer" aria-hidden />
+              <div className="reference-toolbar-seg" role="group" aria-label="书目视图">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn(viewMode === "grid" && "is-on")}
+                  aria-pressed={viewMode === "grid"}
+                  onClick={() => setViewMode("grid")}
+                >
+                  网格
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className={cn(viewMode === "list" && "is-on")}
+                  aria-pressed={viewMode === "list"}
+                  onClick={() => setViewMode("list")}
+                >
+                  列表
+                </Button>
+              </div>
             </div>
             <label className="reference-scope small muted">
               <input
@@ -763,8 +1218,13 @@ export function ReferenceLibraryPage() {
               {!activeRefId ? "（先打开一本书）" : ""}
             </label>
             <p className="muted small reference-search-note">
-              全文检索命中的是参考正文<strong>分块</strong>，无法按写作进度裁剪；若需与 2.6 游标一致防剧透，请为摘录<strong>关联创作章节</strong>并在侧栏用「进度前」过滤。
+              <strong>精确</strong>：分词后各词均须命中且整句字面确认；<strong>扩展</strong>：分词 OR 召回并按相关度排序（无云端向量）。
+              命中均为正文<strong>分块</strong>；若需与 2.6 游标一致防剧透，请为摘录<strong>关联创作章节</strong>并在侧栏用「进度前」过滤。
             </p>
+            <section className="reference-panel" aria-labelledby="ref-panel-excerpt-filters">
+              <h2 id="ref-panel-excerpt-filters" className="reference-panel-title">
+                摘录与进度
+              </h2>
             <div className="reference-excerpt-filters">
               <label className="small muted">
                 摘录按标签筛选
@@ -822,19 +1282,24 @@ export function ReferenceLibraryPage() {
                 </select>
               </label>
             </div>
+            </section>
+            <section className="reference-panel" aria-labelledby="ref-panel-tags">
+              <h2 id="ref-panel-tags" className="reference-panel-title">
+                摘录标签
+              </h2>
             <div className="reference-tag-manage">
-              <span className="small muted">摘录标签（全局）</span>
+              <span className="small muted reference-tag-manage-lead">全局标签，可在编辑摘录时勾选</span>
               <div className="reference-tag-manage-row">
-                <input
+                <Input
                   type="text"
-                  className="input reference-tag-input"
+                  className="reference-tag-input"
                   placeholder="新标签名称"
                   value={newTagName}
                   onChange={(e) => setNewTagName(e.target.value)}
                 />
-                <button
+                <Button
                   type="button"
-                  className="btn small"
+                  size="sm"
                   disabled={!newTagName.trim()}
                   onClick={() => {
                     void (async () => {
@@ -849,16 +1314,17 @@ export function ReferenceLibraryPage() {
                   }}
                 >
                   添加标签
-                </button>
+                </Button>
               </div>
               {allTags.length > 0 ? (
                 <ul className="reference-tag-list">
                   {allTags.map((t) => (
                     <li key={t.id}>
                       <span className="reference-tag-name">{t.name}</span>
-                      <button
+                      <Button
                         type="button"
-                        className="btn ghost small"
+                        variant="ghost"
+                        size="sm"
                         onClick={() => {
                           if (!window.confirm(`删除标签「${t.name}」？摘录上的该标签会一并移除。`)) return;
                           void (async () => {
@@ -870,7 +1336,7 @@ export function ReferenceLibraryPage() {
                         }}
                       >
                         删除
-                      </button>
+                      </Button>
                     </li>
                   ))}
                 </ul>
@@ -878,6 +1344,7 @@ export function ReferenceLibraryPage() {
                 <p className="muted small">暂无标签；添加后可在侧栏摘录上勾选。</p>
               )}
             </div>
+            </section>
           </div>
 
           {searchHits.length > 0 && (
@@ -905,13 +1372,28 @@ export function ReferenceLibraryPage() {
           )}
 
           {items.length === 0 ? (
-            <p className="muted">暂无参考库。请先导入 .txt。</p>
+            <p className="muted reference-empty">暂无参考书目。请先导入 .txt、.pdf 或 .docx。</p>
+          ) : filteredItems.length === 0 ? (
+            <p className="muted reference-empty">当前分类下没有书目，请调整分类筛选。</p>
           ) : (
-            <ul className="reference-list">
+            <ul className={"reference-list" + (viewMode === "grid" ? " reference-list--grid" : " reference-list--list")}>
               {filteredItems.map((r) => {
                 const chCount = r.chapterHeadCount ?? 0;
+                const hue = refCoverHue(r.id);
                 return (
-                  <li key={r.id} className="reference-row">
+                  <li
+                    key={r.id}
+                    className={"reference-row" + (viewMode === "grid" ? " reference-row--grid-card" : "")}
+                  >
+                    {viewMode === "grid" ? (
+                      <div
+                        className="reference-ref-cover"
+                        aria-hidden
+                        style={{
+                          background: `linear-gradient(135deg, hsl(${hue} 40% 42%), hsl(${(hue + 42) % 360} 36% 26%))`,
+                        }}
+                      />
+                    ) : null}
                     <div className="reference-row-line">
                       <button
                         type="button"
@@ -929,9 +1411,10 @@ export function ReferenceLibraryPage() {
                         </span>
                       </button>
                       <div className="reference-row-actions">
-                        <button
+                        <Button
                           type="button"
-                          className="btn ghost small"
+                          variant="ghost"
+                          size="sm"
                           title="编辑分类"
                           onClick={(e) => {
                             e.stopPropagation();
@@ -944,14 +1427,15 @@ export function ReferenceLibraryPage() {
                           }}
                         >
                           分类
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           type="button"
-                          className="btn danger small"
+                          variant="destructive"
+                          size="sm"
                           onClick={() => void handleDelete(r.id, r.title)}
                         >
                           删除
-                        </button>
+                        </Button>
                       </div>
                     </div>
                     {chCount > 0 ? (
@@ -998,9 +1482,9 @@ export function ReferenceLibraryPage() {
               后若检索异常，可先试「重建索引」。
             </p>
             <div className="reference-maintain-btns">
-              <button
+              <Button
                 type="button"
-                className="btn"
+                variant="outline"
                 disabled={maintainBusy || busy}
                 onClick={() => {
                   void (async () => {
@@ -1023,10 +1507,10 @@ export function ReferenceLibraryPage() {
                 }}
               >
                 重建参考库索引
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
-                className="btn danger"
+                variant="destructive"
                 disabled={maintainBusy || busy}
                 onClick={() => {
                   if (
@@ -1053,7 +1537,7 @@ export function ReferenceLibraryPage() {
                 }}
               >
                 清空参考库
-              </button>
+              </Button>
             </div>
           </section>
         </main>
@@ -1085,9 +1569,10 @@ export function ReferenceLibraryPage() {
                     <div className="reference-reader-nav">
                       {activeChapterHeads.length > 0 ? (
                         <>
-                          <button
+                          <Button
                             type="button"
-                            className="btn ghost small"
+                            variant="ghost"
+                            size="sm"
                             disabled={currentChapterIndex <= 0}
                             onClick={() => {
                               const prev = activeChapterHeads[currentChapterIndex - 1];
@@ -1097,7 +1582,7 @@ export function ReferenceLibraryPage() {
                             }}
                           >
                             上一章
-                          </button>
+                          </Button>
                           <label className="reference-chapter-picker">
                             <span className="visually-hidden">章节</span>
                             <select
@@ -1117,9 +1602,10 @@ export function ReferenceLibraryPage() {
                               ))}
                             </select>
                           </label>
-                          <button
+                          <Button
                             type="button"
-                            className="btn ghost small"
+                            variant="ghost"
+                            size="sm"
                             disabled={currentChapterIndex < 0 || currentChapterIndex >= activeChapterHeads.length - 1}
                             onClick={() => {
                               const next = activeChapterHeads[currentChapterIndex + 1];
@@ -1129,12 +1615,13 @@ export function ReferenceLibraryPage() {
                             }}
                           >
                             下一章
-                          </button>
+                          </Button>
                         </>
                       ) : (
-                      <button
+                      <Button
                         type="button"
-                        className="btn ghost small"
+                        variant="ghost"
+                        size="sm"
                         disabled={focusOrdinal <= 0}
                         onClick={() => {
                           setFocusOrdinal((o) => o - 1);
@@ -1142,7 +1629,7 @@ export function ReferenceLibraryPage() {
                         }}
                       >
                         上一段
-                      </button>
+                      </Button>
                       )}
                       <span className="muted small">
                         {activeChapterHeads.length > 0
@@ -1154,9 +1641,10 @@ export function ReferenceLibraryPage() {
                         存储段 {focusOrdinal + 1} / {activeChunkCount}
                       </span>
                       {activeChapterHeads.length > 0 ? null : (
-                      <button
+                      <Button
                         type="button"
-                        className="btn ghost small"
+                        variant="ghost"
+                        size="sm"
                         disabled={focusOrdinal >= activeChunkCount - 1}
                         onClick={() => {
                           setFocusOrdinal((o) => o + 1);
@@ -1164,12 +1652,12 @@ export function ReferenceLibraryPage() {
                         }}
                       >
                         下一段
-                      </button>
+                      </Button>
                       )}
                     </div>
-                    <button type="button" className="btn small" onClick={() => void saveSelectionAsExcerpt()}>
+                    <Button type="button" size="sm" onClick={() => void saveSelectionAsExcerpt()}>
                       保存划选为摘录
-                    </button>
+                    </Button>
                   </div>
 
                   {prevChunk ? (
@@ -1234,27 +1722,30 @@ export function ReferenceLibraryPage() {
                               ) : null}
                             </div>
                             <div className="reference-excerpt-actions">
-                              <button
+                              <Button
                                 type="button"
-                                className="btn ghost small"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => void jumpExcerptToReader(ex)}
                               >
                                 跳转到原文
-                              </button>
-                              <button
+                              </Button>
+                              <Button
                                 type="button"
-                                className="btn ghost small"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => beginEditExcerpt(ex)}
                               >
                                 编辑
-                              </button>
-                              <button
+                              </Button>
+                              <Button
                                 type="button"
-                                className="btn ghost small"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => void removeExcerpt(ex.id)}
                               >
                                 删除
-                              </button>
+                              </Button>
                             </div>
                           </li>
                         ))}
@@ -1327,16 +1818,17 @@ export function ReferenceLibraryPage() {
                             </select>
                           </label>
                           <div className="reference-excerpt-edit-btns">
-                            <button type="button" className="btn small primary" onClick={() => void saveExcerptEdit()}>
+                            <Button type="button" size="sm" onClick={() => void saveExcerptEdit()}>
                               保存
-                            </button>
-                            <button
+                            </Button>
+                            <Button
                               type="button"
-                              className="btn ghost small"
+                              variant="ghost"
+                              size="sm"
                               onClick={() => setEditingExcerptId(null)}
                             >
                               取消
-                            </button>
+                            </Button>
                           </div>
                         </div>
                       ) : null}

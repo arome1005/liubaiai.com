@@ -18,10 +18,18 @@ import type {
   ReferenceSearchHit,
   ReferenceTag,
   ReferenceTokenPosting,
+  InspirationFragment,
   Volume,
   Work,
   WorkStyleCard,
+  WritingPromptTemplate,
+  WritingStyleSample,
 } from "../db/types";
+
+/** {@link WritingStore.updateChapter} 可选行为（步 25 乐观锁） */
+export type UpdateChapterOptions = {
+  expectedUpdatedAt?: number;
+};
 
 /**
  * 创作数据存储抽象。
@@ -36,23 +44,24 @@ export interface WritingStore {
 
   listWorks(): Promise<Work[]>;
   getWork(id: string): Promise<Work | undefined>;
-  createWork(title: string): Promise<Work>;
+  createWork(title: string, opts?: { tags?: string[] }): Promise<Work>;
   updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags">>,
   ): Promise<void>;
   deleteWork(id: string): Promise<void>;
 
   listVolumes(workId: string): Promise<Volume[]>;
   createVolume(workId: string, title?: string): Promise<Volume>;
-  updateVolume(id: string, patch: Partial<Pick<Volume, "title" | "order">>): Promise<void>;
+  updateVolume(id: string, patch: Partial<Pick<Volume, "title" | "order" | "summary">>): Promise<void>;
   deleteVolume(volumeId: string): Promise<void>;
 
   listChapters(workId: string): Promise<Chapter[]>;
   createChapter(workId: string, title?: string, volumeId?: string): Promise<Chapter>;
   updateChapter(
     id: string,
-    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary">>,
+    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt">>,
+    options?: UpdateChapterOptions,
   ): Promise<void>;
   deleteChapter(id: string): Promise<void>;
   reorderChapters(workId: string, orderedIds: string[]): Promise<void>;
@@ -92,10 +101,10 @@ export interface WritingStore {
   syncChapterMetadataForRefWork(refWorkId: string): Promise<void>;
   getReferenceChunk(chunkId: string): Promise<ReferenceChunk | undefined>;
 
-  /** 参考库全文检索（倒排索引召回 + 字面量精排） */
+  /** 参考库全文检索：`strict` 多词 AND + 整句字面量；`hybrid` 多词 OR + 相关度排序（步 40） */
   searchReferenceLibrary(
     query: string,
-    opts?: { refWorkId?: string; limit?: number },
+    opts?: { refWorkId?: string; limit?: number; mode?: "strict" | "hybrid" },
   ): Promise<ReferenceSearchHit[]>;
 
   /** 3.7：按序按需取块（复合索引），避免一次加载全书分块正文 */
@@ -192,12 +201,49 @@ export interface WritingStore {
   updateBibleGlossaryTerm(id: string, patch: Partial<Omit<BibleGlossaryTerm, "id" | "workId">>): Promise<void>;
   deleteBibleGlossaryTerm(id: string): Promise<void>;
 
+  /** §11 步 42：可复用「额外要求」模板 */
+  listWritingPromptTemplates(workId: string): Promise<WritingPromptTemplate[]>;
+  addWritingPromptTemplate(
+    workId: string,
+    input: Partial<Omit<WritingPromptTemplate, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
+  ): Promise<WritingPromptTemplate>;
+  updateWritingPromptTemplate(
+    id: string,
+    patch: Partial<Omit<WritingPromptTemplate, "id" | "workId">>,
+  ): Promise<void>;
+  deleteWritingPromptTemplate(id: string): Promise<void>;
+  reorderWritingPromptTemplates(workId: string, orderedIds: string[]): Promise<void>;
+
+  /** §11 步 43：笔感参考样本（注入 user 上下文） */
+  listWritingStyleSamples(workId: string): Promise<WritingStyleSample[]>;
+  addWritingStyleSample(
+    workId: string,
+    input: Partial<Omit<WritingStyleSample, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
+  ): Promise<WritingStyleSample>;
+  updateWritingStyleSample(
+    id: string,
+    patch: Partial<Omit<WritingStyleSample, "id" | "workId">>,
+  ): Promise<void>;
+  deleteWritingStyleSample(id: string): Promise<void>;
+  reorderWritingStyleSamples(workId: string, orderedIds: string[]): Promise<void>;
+
   /** 第 5 组：全书级风格卡 / 调性锁（5.3） */
   getWorkStyleCard(workId: string): Promise<WorkStyleCard | undefined>;
   upsertWorkStyleCard(
     workId: string,
     patch: Partial<Omit<WorkStyleCard, "id" | "workId" | "updatedAt">>,
   ): Promise<WorkStyleCard>;
+
+  /** §11 步 35：流光碎片 */
+  listInspirationFragments(): Promise<InspirationFragment[]>;
+  addInspirationFragment(
+    input: Partial<Omit<InspirationFragment, "id" | "createdAt" | "updatedAt">> & { body: string },
+  ): Promise<InspirationFragment>;
+  updateInspirationFragment(
+    id: string,
+    patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId">>,
+  ): Promise<void>;
+  deleteInspirationFragment(id: string): Promise<void>;
 
   exportAllData(): Promise<{
     works: Work[];
@@ -219,6 +265,9 @@ export interface WritingStore {
     chapterBible: ChapterBible[];
     bibleGlossaryTerms: BibleGlossaryTerm[];
     workStyleCards: WorkStyleCard[];
+    inspirationFragments: InspirationFragment[];
+    writingPromptTemplates: WritingPromptTemplate[];
+    writingStyleSamples: WritingStyleSample[];
   }>;
   importAllData(data: {
     works: Work[];
@@ -240,6 +289,9 @@ export interface WritingStore {
     chapterBible?: ChapterBible[];
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
+    inspirationFragments?: InspirationFragment[];
+    writingPromptTemplates?: WritingPromptTemplate[];
+    writingStyleSamples?: WritingStyleSample[];
   }): Promise<void>;
   /** 合并导入：生成新 id，追加到现有库 */
   importAllDataMerge(data: {
@@ -261,5 +313,8 @@ export interface WritingStore {
     chapterBible?: ChapterBible[];
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
+    inspirationFragments?: InspirationFragment[];
+    writingPromptTemplates?: WritingPromptTemplate[];
+    writingStyleSamples?: WritingStyleSample[];
   }): Promise<void>;
 }

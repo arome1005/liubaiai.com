@@ -1,47 +1,73 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { exportBibleMarkdown, searchReferenceLibrary } from "../db/repo";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { exportBibleMarkdown } from "../db/repo";
 import type { BibleGlossaryTerm, ReferenceExcerpt, ReferenceSearchHit, Work, Chapter } from "../db/types";
-import { generateWithProviderStream } from "../ai/providers";
+import { approxRoughTokenCount } from "../ai/approx-tokens";
+import { addSessionApproxTokens, readSessionApproxTokens, resetSessionApproxTokens } from "../ai/sidepanel-session-tokens";
+import {
+  buildWritingSidepanelInjectBlocks,
+  buildWritingSidepanelMaterialsSummaryLines,
+  buildWritingSidepanelMessages,
+  validateDrawCardRequest,
+  type WritingSidepanelAssembleInput,
+  type WritingSkillMode,
+  type WritingStyleSampleSlice,
+  type WritingGlossaryTermSlice,
+} from "../ai/assemble-context";
+import { generateWithProviderStream, isFirstAiGateCancelledError } from "../ai/client";
 import { getProviderConfig, loadAiSettings, saveAiSettings } from "../ai/storage";
-import type { AiChatMessage, AiProviderId, AiSettings } from "../ai/types";
+import type { AiChatMessage, AiProviderConfig, AiProviderId, AiSettings } from "../ai/types";
+import { formatInjectionConfirmDialogText, resolveInjectionConfirmPrompt } from "../util/ai-injection-confirm";
+import {
+  buildContextDegradeOverrides,
+  errorSuggestsContextDegrade,
+  type AiRunContextOverrides,
+} from "../util/ai-degrade-retry";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
-
-function clampText(s: string, maxChars: number): string {
-  if (s.length <= maxChars) return s;
-  return s.slice(0, Math.max(0, maxChars - 24)) + "\n\n…（已截断）";
-}
-
-function approxTokens(s: string): number {
-  // Very rough: CJK chars are token-dense; ASCII is looser.
-  // We only need a stable estimate for UI feedback.
-  const chars = Array.from(s);
-  let cjk = 0;
-  for (const ch of chars) {
-    const code = ch.codePointAt(0) ?? 0;
-    const isCjk =
-      (code >= 0x4e00 && code <= 0x9fff) || // CJK Unified Ideographs
-      (code >= 0x3400 && code <= 0x4dbf) || // Extension A
-      (code >= 0x20000 && code <= 0x2a6df) || // Extension B
-      (code >= 0x2a700 && code <= 0x2b73f) || // Extension C
-      (code >= 0x2b740 && code <= 0x2b81f) || // Extension D
-      (code >= 0x2b820 && code <= 0x2ceaf) || // Extension E-F
-      (code >= 0x3000 && code <= 0x303f); // punctuation
-    if (isCjk) cjk++;
-  }
-  const total = chars.length;
-  const ascii = Math.max(0, total - cjk);
-  return Math.max(1, Math.ceil(cjk / 1.5 + ascii / 4));
-}
+import { normalizeWorkTagList, workTagsToProfileText } from "../util/work-tags";
+import { computeToneDriftHints } from "../util/tone-drift-hint";
+import {
+  DEFAULT_WRITING_RAG_SOURCES,
+  isRuntimeRagHit,
+  searchWritingRagMerged,
+  type WritingRagSources,
+} from "../util/work-rag-runtime";
+import { AiDraftMergeDialog, type AiDraftMergePayload } from "./AiDraftMergeDialog";
+import { AiInlineErrorNotice } from "./AiInlineErrorNotice";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
+import { cn } from "../lib/utils";
 
 export function AiPanel(props: {
   onClose: () => void;
+  /**
+   * 递增时触发一次：打开侧栏后由父组件递增；本面板切到「续写」并立即 `run`（结果仅进侧栏草稿，不写入正文）。
+   * 总体规划 §11 步 17。
+   */
+  continueRunTick?: number;
+  /** 父级已消费的 tick，避免 AiPanel 重挂载时对同一 tick 重复 run */
+  lastContinueConsumedTick?: number;
+  onContinueRunConsumed?: (tick: number) => void;
+  /** §11 步 18：递增则切「抽卡」并自动 run（无额外提示词；概要+前文尾 → 草稿） */
+  drawRunTick?: number;
+  lastDrawConsumedTick?: number;
+  onDrawRunConsumed?: (tick: number) => void;
+  /** 圣经「提示词」跳转：一次性覆盖侧栏「额外要求」 */
+  prefillUserHint?: string | null;
+  onPrefillUserHintConsumed?: () => void;
   workId: string;
   work: Work;
   chapter: Chapter | null;
   chapters: Chapter[];
   chapterContent: string;
-  chapterBible: { goalText: string; forbidText: string; povText: string; sceneStance: string };
+  chapterBible: {
+    goalText: string;
+    forbidText: string;
+    povText: string;
+    sceneStance: string;
+    characterStateText: string;
+  };
   glossaryTerms: BibleGlossaryTerm[];
+  /** §11 步 43：圣经「笔感」页维护的参考段落 */
+  styleSampleSlices: WritingStyleSampleSlice[];
   workStyle: { pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string };
   onUpdateWorkStyle: (patch: Partial<{ pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string }>) => void;
   linkedExcerptsForChapter: Array<ReferenceExcerpt & { refTitle: string; tagIds: string[] }>;
@@ -302,8 +328,21 @@ export function AiPanel(props: {
   };
 
   const [settings, setSettings] = useState<AiSettings>(() => loadAiSettings());
-  const [mode, setMode] = useState<"continue" | "rewrite" | "outline" | "summarize">("continue");
+  const [mode, setMode] = useState<WritingSkillMode>("continue");
   const [userHint, setUserHint] = useState("");
+  useEffect(() => {
+    const p = props.prefillUserHint;
+    if (p == null) return;
+    const t = p.trim();
+    if (!t) {
+      props.onPrefillUserHintConsumed?.();
+      return;
+    }
+    setUserHint(t);
+    props.onPrefillUserHintConsumed?.();
+    // 仅响应圣经页注入的一次性 state，不依赖 callback 引用
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onPrefillUserHintConsumed intentionally omitted
+  }, [props.prefillUserHint]);
   const [storyBackground, setStoryBackground] = useState("");
   const [characters, setCharacters] = useState("");
   const [relations, setRelations] = useState("");
@@ -313,7 +352,12 @@ export function AiPanel(props: {
   const [includeRecentSummaries, setIncludeRecentSummaries] = useState(true);
   const [recentN, setRecentN] = useState(3);
   const [currentContextMode, setCurrentContextMode] = useState<"full" | "summary" | "selection" | "none">("full");
+  const [sessionBudgetUiTick, setSessionBudgetUiTick] = useState(0);
   const [busy, setBusy] = useState(false);
+  const sessionTokensUsed = useMemo(() => {
+    void sessionBudgetUiTick;
+    return settings.aiSessionApproxTokenBudget > 0 ? readSessionApproxTokens() : 0;
+  }, [settings.aiSessionApproxTokenBudget, sessionBudgetUiTick, busy]);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [biblePreview, setBiblePreview] = useState<{ text: string; chars: number } | null>(null);
@@ -323,12 +367,66 @@ export function AiPanel(props: {
   const [ragK, setRagK] = useState(6);
   const [ragHits, setRagHits] = useState<ReferenceSearchHit[]>([]);
   const [ragLoading, setRagLoading] = useState(false);
+  const [ragWorkSources, setRagWorkSources] = useState<WritingRagSources>(() => {
+    try {
+      const raw = localStorage.getItem("liubai:ragWorkSources:v1");
+      if (raw) return { ...DEFAULT_WRITING_RAG_SOURCES, ...(JSON.parse(raw) as Partial<WritingRagSources>) };
+    } catch {
+      /* ignore */
+    }
+    return { ...DEFAULT_WRITING_RAG_SOURCES };
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("liubai:ragWorkSources:v1", JSON.stringify(ragWorkSources));
+    } catch {
+      /* ignore */
+    }
+  }, [ragWorkSources]);
   const abortRef = useRef<AbortController | null>(null);
   const lastReqRef = useRef<{
     provider: AiProviderId;
     providerCfg: AiSettings["openai"];
     messages: AiChatMessage[];
   } | null>(null);
+  const runContextOverridesRef = useRef<AiRunContextOverrides | null>(null);
+  const degradeAttemptedRef = useRef(false);
+  const [showDegradeRetry, setShowDegradeRetry] = useState(false);
+  const [mergePayload, setMergePayload] = useState<AiDraftMergePayload | null>(null);
+  const skipDraftPersistRef = useRef(false);
+
+  const draftStorageKey =
+    props.chapter && props.workId ? `liubai:aiPanelDraft:v1:${props.workId}:${props.chapter.id}` : null;
+
+  useLayoutEffect(() => {
+    if (!draftStorageKey) {
+      setDraft("");
+      return;
+    }
+    skipDraftPersistRef.current = true;
+    try {
+      setDraft(sessionStorage.getItem(draftStorageKey) ?? "");
+    } catch {
+      setDraft("");
+    }
+  }, [draftStorageKey]);
+
+  useEffect(() => {
+    if (!draftStorageKey) return;
+    if (skipDraftPersistRef.current) {
+      skipDraftPersistRef.current = false;
+      return;
+    }
+    const t = window.setTimeout(() => {
+      try {
+        sessionStorage.setItem(draftStorageKey, draft);
+      } catch {
+        /* quota */
+      }
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [draft, draftStorageKey]);
 
   const providerCfg = useMemo(() => getProviderConfig(settings, settings.provider), [settings]);
 
@@ -351,6 +449,19 @@ export function AiPanel(props: {
   }, [pickerActive, modelPickerTune]);
 
   const selectedText = useMemo(() => props.getSelectedText(), [props]);
+
+  const toneDriftHints = useMemo(() => {
+    if (!settings.toneDriftHintEnabled) return [];
+    const t = draft.trim();
+    if (!t) return [];
+    return computeToneDriftHints({
+      bannedPhrases: props.workStyle.bannedPhrases,
+      styleAnchor: props.workStyle.styleAnchor,
+      draftText: draft,
+    });
+  }, [settings.toneDriftHintEnabled, draft, props.workStyle.bannedPhrases, props.workStyle.styleAnchor]);
+
+  const sessionBudget = settings.aiSessionApproxTokenBudget;
 
   const glossaryHitsInDraft = useMemo(() => {
     const text = draft;
@@ -398,143 +509,173 @@ export function AiPanel(props: {
     return "";
   }, [skillPreset, skillText]);
 
-  type InjectBlock = {
-    id: string;
-    title: string;
-    chars: number;
-    content: string;
-    note?: string;
-  };
+  /** 与 `buildWritingSidepanelMessages` 同源字段；材料预览与真实请求一致（步 9 / 15） */
+  const tagProfileText = useMemo(() => workTagsToProfileText(props.work.tags), [props.work.tags]);
+  const tagCount = useMemo(() => normalizeWorkTagList(props.work.tags)?.length ?? 0, [props.work.tags]);
 
-  const injectBlocks = useMemo<InjectBlock[]>(() => {
-    const blocks: InjectBlock[] = [];
-    if (!props.chapter) return blocks;
+  const glossarySlices = useMemo((): WritingGlossaryTermSlice[] => {
+    return props.glossaryTerms.map((g) => ({
+      term: g.term,
+      category: g.category,
+      note: g.note ?? "",
+    }));
+  }, [props.glossaryTerms]);
 
-    const ctxParts: string[] = [];
-    ctxParts.push(`作品：${props.work.title}`);
-    ctxParts.push(`章节：${props.chapter.title}`);
-    if (storyBackground.trim()) ctxParts.push(`故事背景：\n${storyBackground.trim()}`);
-    if (characters.trim()) ctxParts.push(`角色清单：\n${characters.trim()}`);
-    if (relations.trim()) ctxParts.push(`角色关系：\n${relations.trim()}`);
-    if (props.chapterBible.goalText.trim()) ctxParts.push(`本章目标：\n${props.chapterBible.goalText.trim()}`);
-    if (props.chapterBible.forbidText.trim()) ctxParts.push(`禁止：\n${props.chapterBible.forbidText.trim()}`);
-    if (props.chapterBible.povText.trim()) ctxParts.push(`视角/口吻：\n${props.chapterBible.povText.trim()}`);
-    if (props.chapterBible.sceneStance.trim()) ctxParts.push(`场景状态：\n${props.chapterBible.sceneStance.trim()}`);
-    if (skillPresetText) ctxParts.push(skillPresetText);
+  const glossaryTermCountForSummary = useMemo(
+    () => glossarySlices.filter((g) => (g.term ?? "").trim()).length,
+    [glossarySlices],
+  );
 
-    if (includeLinkedExcerpts && props.linkedExcerptsForChapter.length > 0) {
-      const ex = props.linkedExcerptsForChapter
-        .slice(0, 8)
-        .map((e, i) => `【摘录${i + 1}｜${e.refTitle}】\n${e.text}`)
-        .join("\n\n");
-      ctxParts.push(`参考摘录（与本章关联）：\n${ex}`);
-    }
+  const styleSampleCountForSummary = useMemo(
+    () => props.styleSampleSlices.filter((s) => (s.body ?? "").trim()).length,
+    [props.styleSampleSlices],
+  );
 
-    const ctx = "上下文：\n" + clampText(ctxParts.join("\n\n"), Math.floor(settings.maxContextChars * 0.25));
-    blocks.push({ id: "ctx", title: "上下文（作品/章节/变量/本章约束/摘录）", chars: ctx.length, content: ctx });
-
-    if (includeRecentSummaries && recentSummaryText.trim()) {
-      const s =
-        "最近章节概要（仅供回忆事实）：\n" +
-        clampText(recentSummaryText, Math.floor(settings.maxContextChars * 0.2));
-      blocks.push({ id: "recent", title: `最近章节概要（N=${Math.max(0, Math.min(12, recentN))}）`, chars: s.length, content: s });
-    }
-
-    if (settings.includeBible) {
-      const raw = biblePreview?.text?.trim() ? biblePreview.text.trim() : "";
-      const shown = raw
-        ? "创作圣经（如与正文冲突，以圣经为准）：\n" +
-          clampText(raw, Math.floor(settings.maxContextChars * 0.45))
-        : "创作圣经（如与正文冲突，以圣经为准）：\n（预览未加载；运行时会抓取并按上限截断）";
-      blocks.push({
-        id: "bible",
-        title: "创作圣经（导出 Markdown）",
-        chars: shown.length,
-        content: shown,
-        note: raw ? `预览已加载：${raw.length.toLocaleString()} 字` : undefined,
-      });
-    }
-
-    if (ragEnabled) {
-      const key = ragQuery.trim();
-      const picked = ragHits.slice(0, Math.max(0, Math.min(20, ragK)));
-      const s = key
-        ? picked.length > 0
-          ? [
-              `参考库检索（top-k=${picked.length}，query=${key}）：`,
-              ...picked.map((h, i) => {
-                const snippet = `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`.trim();
-                return `【命中${i + 1}｜${h.refTitle}｜段${h.ordinal + 1}】\n${snippet}`;
-              }),
-            ].join("\n\n")
-          : `参考库检索（query=${key}）：（暂无命中）`
-        : "参考库检索：（未设置 query）";
-      blocks.push({ id: "rag", title: "RAG：参考库检索注入", chars: s.length, content: s });
-    }
-
-    const content = props.chapterContent ?? "";
-    if (currentContextMode === "full" && content.trim()) {
-      const s = "当前正文：\n" + clampText(content, Math.floor(settings.maxContextChars * 0.45));
-      blocks.push({ id: "cur", title: "当前章注入：全文", chars: s.length, content: s });
-    } else if (currentContextMode === "summary" && (props.chapter.summary ?? "").trim()) {
-      const s =
-        "当前章节概要（仅供回忆事实）：\n" +
-        clampText((props.chapter.summary ?? "").trim(), Math.floor(settings.maxContextChars * 0.2));
-      blocks.push({ id: "cur", title: "当前章注入：概要", chars: s.length, content: s });
-    } else if (currentContextMode === "selection" && selectedText.trim()) {
-      const s = "当前选区：\n" + clampText(selectedText.trim(), Math.floor(settings.maxContextChars * 0.25));
-      blocks.push({ id: "cur", title: "当前章注入：选区", chars: s.length, content: s });
-    } else if (currentContextMode === "none") {
-      blocks.push({ id: "cur", title: "当前章注入：不注入", chars: 0, content: "（不注入当前章内容）" });
-    } else {
-      blocks.push({ id: "cur", title: "当前章注入：空", chars: 0, content: "（当前选择的注入来源为空）" });
-    }
-
-    const hint = userHint.trim();
-    if (hint) {
-      const s = "额外要求：\n" + hint;
-      blocks.push({ id: "hint", title: "额外要求", chars: s.length, content: s });
-    }
-
-    return blocks;
+  const sidepanelAssembleInput = useMemo((): WritingSidepanelAssembleInput | null => {
+    if (!props.chapter) return null;
+    return {
+      workStyle: props.workStyle,
+      tagProfileText,
+      workTitle: props.work.title,
+      chapterTitle: props.chapter.title,
+      storyBackground,
+      characters,
+      relations,
+      chapterBible: props.chapterBible,
+      skillPresetText,
+      includeLinkedExcerpts,
+      linkedExcerpts: props.linkedExcerptsForChapter.map((e) => ({ refTitle: e.refTitle, text: e.text })),
+      maxContextChars: settings.maxContextChars,
+      isCloudProvider,
+      privacy: settings.privacy,
+      includeBible: settings.includeBible,
+      bibleMarkdown: biblePreview?.text ?? "",
+      recentSummaryText,
+      includeRecentSummaries,
+      ragEnabled,
+      ragQuery,
+      ragK,
+      ragHits,
+      ragSources: ragWorkSources,
+      chapterContent: props.chapterContent,
+      chapterSummary: props.chapter.summary,
+      selectedText,
+      currentContextMode,
+      userHint,
+      mode,
+      recentN,
+      styleSamples: props.styleSampleSlices,
+      glossaryTerms: glossarySlices,
+    };
   }, [
     props.chapter,
     props.work.title,
     props.chapter?.title,
-    props.chapterBible.goalText,
-    props.chapterBible.forbidText,
-    props.chapterBible.povText,
-    props.chapterBible.sceneStance,
-    props.linkedExcerptsForChapter,
-    props.chapterContent,
-    props.chapter?.summary,
     storyBackground,
     characters,
     relations,
-    includeLinkedExcerpts,
-    includeRecentSummaries,
-    recentSummaryText,
-    recentN,
-    currentContextMode,
-    selectedText,
-    userHint,
+    props.chapterBible,
     skillPresetText,
-    settings.includeBible,
+    includeLinkedExcerpts,
+    props.linkedExcerptsForChapter,
     settings.maxContextChars,
+    settings.privacy,
+    settings.includeBible,
+    isCloudProvider,
     biblePreview?.text,
+    recentSummaryText,
+    includeRecentSummaries,
     ragEnabled,
     ragQuery,
     ragK,
     ragHits,
+    ragWorkSources,
+    props.chapterContent,
+    props.chapter?.summary,
+    selectedText,
+    currentContextMode,
+    userHint,
+    mode,
+    recentN,
+    props.workStyle,
+    tagProfileText,
+    props.styleSampleSlices,
+    glossarySlices,
   ]);
+
+  const injectBlocks = useMemo(() => {
+    if (!sidepanelAssembleInput) return [];
+    return buildWritingSidepanelInjectBlocks(sidepanelAssembleInput, {
+      bibleRawLength: biblePreview?.text?.trim() ? biblePreview.chars : undefined,
+    });
+  }, [sidepanelAssembleInput, biblePreview?.text, biblePreview?.chars]);
 
   const approxInjectChars = useMemo(() => injectBlocks.reduce((s, b) => s + (b.chars ?? 0), 0), [injectBlocks]);
 
   const approxInjectTokens = useMemo(() => {
     // Bible size is unknown until fetched; we keep it as a small constant signal.
     const s = settings.includeBible ? `${approxInjectChars}\n[BIBLE]` : String(approxInjectChars);
-    return approxTokens(s);
+    return approxRoughTokenCount(s);
   }, [approxInjectChars, settings.includeBible]);
+
+  /** 可解释性简版（步 15）：与装配器字段对齐，见 `buildWritingSidepanelMaterialsSummaryLines` */
+  const materialsSummaryLines = useMemo(() => {
+    if (!props.chapter) return ["未选择章节时不会组装请求。"];
+    return buildWritingSidepanelMaterialsSummaryLines({
+      workTitle: props.work.title,
+      chapterTitle: props.chapter.title,
+      providerLabel: PROVIDER_UI[settings.provider]?.label ?? settings.provider,
+      modelId: providerCfg.model ?? "",
+      workStyle: props.workStyle,
+      chapterBible: props.chapterBible,
+      includeBible: settings.includeBible,
+      isCloudProvider,
+      privacy: settings.privacy,
+      includeLinkedExcerpts,
+      linkedExcerptCount: props.linkedExcerptsForChapter.length,
+      includeRecentSummaries,
+      recentN,
+      currentContextMode,
+      skillMode: mode,
+      ragEnabled,
+      ragQuery,
+      ragK,
+      ragSources: ragWorkSources,
+      tagProfileText,
+      tagCount,
+      styleSampleCount: styleSampleCountForSummary,
+      glossaryTermCount: glossaryTermCountForSummary,
+      approxInjectChars,
+      approxInjectTokens,
+    });
+  }, [
+    props.chapter,
+    props.work.title,
+    props.chapter?.title,
+    props.chapterBible,
+    props.workStyle,
+    settings.provider,
+    settings.includeBible,
+    settings.privacy,
+    providerCfg.model,
+    includeLinkedExcerpts,
+    props.linkedExcerptsForChapter.length,
+    includeRecentSummaries,
+    recentN,
+    currentContextMode,
+    mode,
+    ragEnabled,
+    ragQuery,
+    ragK,
+    ragWorkSources,
+    isCloudProvider,
+    approxInjectChars,
+    approxInjectTokens,
+    tagProfileText,
+    tagCount,
+    styleSampleCountForSummary,
+    glossaryTermCountForSummary,
+  ]);
 
   function updateSettings(patch: Partial<AiSettings>) {
     const next: AiSettings = { ...settings, ...patch };
@@ -546,7 +687,10 @@ export function AiPanel(props: {
     updateSettings({ provider: p });
   }
 
-  async function run(input?: { provider: AiProviderId; providerCfg: any; messages: AiChatMessage[] }) {
+  async function run(
+    input?: { provider: AiProviderId; providerCfg: AiProviderConfig; messages: AiChatMessage[] },
+    opts?: { mode?: WritingSkillMode; fromDegrade?: boolean },
+  ) {
     if (!props.chapter) {
       setError("请先选择章节。");
       return;
@@ -562,147 +706,156 @@ export function AiPanel(props: {
     setBusy(true);
     setError(null);
     setDraft("");
+    setShowDegradeRetry(false);
+    if (!opts?.fromDegrade) degradeAttemptedRef.current = false;
+    const modeForAssemble: WritingSkillMode = opts?.mode ?? mode;
     try {
+      if (!input && modeForAssemble === "draw") {
+        const v = validateDrawCardRequest({
+          chapterContent: props.chapterContent ?? "",
+          chapterSummary: props.chapter?.summary,
+          isCloudProvider,
+          privacy: settings.privacy,
+        });
+        if (!v.ok) {
+          setError(v.message);
+          return;
+        }
+      }
       let messages: AiChatMessage[];
       let usedProvider: AiProviderId;
-      let usedProviderCfg: any;
+      let usedProviderCfg: AiProviderConfig;
       if (input) {
         messages = input.messages;
         usedProvider = input.provider;
         usedProviderCfg = input.providerCfg;
       } else {
-        const sysParts: string[] = [
-          "你是一个严谨的中文小说写作助手。你必须遵守用户提供的约束与设定，不要编造设定外事实。",
-          "输出要求：中文；尽量具体可执行；不要输出与任务无关的解释。",
-        ];
-        if (props.workStyle.pov.trim()) sysParts.push(`叙述视角/人称：${props.workStyle.pov.trim()}`);
-        if (props.workStyle.tone.trim()) sysParts.push(`整体调性：${props.workStyle.tone.trim()}`);
-        if (props.workStyle.bannedPhrases.trim()) {
-          sysParts.push("禁用词/禁用套话（必须避免）：\n" + props.workStyle.bannedPhrases.trim());
-        }
-        if (props.workStyle.extraRules.trim()) sysParts.push("额外硬约束：\n" + props.workStyle.extraRules.trim());
+        const ov = runContextOverridesRef.current;
+        runContextOverridesRef.current = null;
 
-        const ctxParts: string[] = [];
-        if (!isCloudProvider || settings.privacy.allowMetadata) {
-          ctxParts.push(`作品：${props.work.title}`);
-          ctxParts.push(`章节：${props.chapter.title}`);
-        }
-        if (props.workStyle.styleAnchor.trim()) {
-          ctxParts.push("文风锚点（尽量贴近其用词/节奏/句法）：\n" + props.workStyle.styleAnchor.trim());
-        }
-        if (storyBackground.trim()) ctxParts.push(`故事背景：\n${storyBackground.trim()}`);
-        if (characters.trim()) ctxParts.push(`角色清单：\n${characters.trim()}`);
-        if (relations.trim()) ctxParts.push(`角色关系：\n${relations.trim()}`);
-        if (props.chapterBible.goalText.trim()) ctxParts.push(`本章目标：\n${props.chapterBible.goalText.trim()}`);
-        if (props.chapterBible.forbidText.trim()) ctxParts.push(`禁止：\n${props.chapterBible.forbidText.trim()}`);
-        if (props.chapterBible.povText.trim()) ctxParts.push(`视角/口吻：\n${props.chapterBible.povText.trim()}`);
-        if (props.chapterBible.sceneStance.trim()) ctxParts.push(`场景状态：\n${props.chapterBible.sceneStance.trim()}`);
-        if (skillPresetText) ctxParts.push(skillPresetText);
+        const effMax = ov?.maxContextChars ?? settings.maxContextChars;
+        const effIncludeBible =
+          ov?.includeBible !== undefined ? ov.includeBible : settings.includeBible;
+        const effRag = ov?.ragEnabled !== undefined ? ov.ragEnabled : ragEnabled;
+        const effRecent =
+          ov?.includeRecentSummaries !== undefined ? ov.includeRecentSummaries : includeRecentSummaries;
+        const effLinked =
+          ov?.includeLinkedExcerpts !== undefined ? ov.includeLinkedExcerpts : includeLinkedExcerpts;
+        const effCtxMode = ov?.currentContextMode ?? currentContextMode;
 
-        if (
-          includeLinkedExcerpts &&
-          props.linkedExcerptsForChapter.length > 0 &&
-          (!isCloudProvider || settings.privacy.allowLinkedExcerpts)
-        ) {
-          const ex = props.linkedExcerptsForChapter
-            .slice(0, 8)
-            .map((e, i) => `【摘录${i + 1}｜${e.refTitle}】\n${e.text}`)
-            .join("\n\n");
-          ctxParts.push(`参考摘录（与本章关联）：\n${ex}`);
-        }
-
-        if (ragEnabled && (!isCloudProvider || settings.privacy.allowRagSnippets)) {
-          const q = ragQuery.trim();
-          if (q) {
-            try {
-              setRagLoading(true);
-              const hits = await searchReferenceLibrary(q, { limit: Math.max(1, Math.min(20, ragK)) });
-              setRagHits(hits);
-            } finally {
-              setRagLoading(false);
-            }
-          }
-        }
+        const qRag = ragQuery.trim();
+        const needBibleForRagChunks =
+          effRag &&
+          !!qRag &&
+          ragWorkSources.workBibleExport &&
+          (!isCloudProvider || settings.privacy.allowRagSnippets);
 
         let bible = "";
-        if (settings.includeBible && (!isCloudProvider || settings.privacy.allowBible)) {
-          try {
-            setBibleLoading(true);
+        const needBibleFull = effIncludeBible && (!isCloudProvider || settings.privacy.allowBible);
+        if (needBibleFull || needBibleForRagChunks) {
+          if (needBibleFull) {
+            try {
+              setBibleLoading(true);
+              bible = await exportBibleMarkdown(props.workId);
+              setBiblePreview({ text: bible, chars: bible.length });
+            } finally {
+              setBibleLoading(false);
+            }
+          } else {
             bible = await exportBibleMarkdown(props.workId);
-            setBiblePreview({ text: bible, chars: bible.length });
+          }
+        }
+
+        let ragHitsForRequest: ReferenceSearchHit[] = effRag ? ragHits : [];
+        if (effRag && (!isCloudProvider || settings.privacy.allowRagSnippets) && qRag) {
+          try {
+            setRagLoading(true);
+            const hits = await searchWritingRagMerged({
+              workId: props.workId,
+              query: qRag,
+              limit: Math.max(1, Math.min(20, ragK)),
+              sources: ragWorkSources,
+              chapters: props.chapters,
+              progressCursorChapterId: props.work.progressCursor,
+              excludeManuscriptChapterId: props.chapter?.id ?? null,
+              bibleMarkdownOverride: bible.trim() ? bible : undefined,
+            });
+            setRagHits(hits);
+            ragHitsForRequest = hits;
           } finally {
-            setBibleLoading(false);
+            setRagLoading(false);
           }
         }
 
-        const content = props.chapterContent ?? "";
-        const userParts: string[] = [];
-        userParts.push("上下文：\n" + clampText(ctxParts.join("\n\n"), Math.floor(settings.maxContextChars * 0.25)));
-        if (recentSummaryText.trim() && (!isCloudProvider || settings.privacy.allowRecentSummaries)) {
-          userParts.push(
-            "最近章节概要（仅供回忆事实）：\n" + clampText(recentSummaryText, Math.floor(settings.maxContextChars * 0.2)),
-          );
-        }
-        if (bible.trim()) {
-          userParts.push(
-            "创作圣经（如与正文冲突，以圣经为准）：\n" + clampText(bible, Math.floor(settings.maxContextChars * 0.45)),
-          );
-        }
-        if (ragEnabled && ragQuery.trim() && (!isCloudProvider || settings.privacy.allowRagSnippets)) {
-          const picked = (ragHits.length ? ragHits : []).slice(0, Math.max(0, Math.min(20, ragK)));
-          if (picked.length > 0) {
-            const s = [
-              `参考库检索（top-k=${picked.length}，query=${ragQuery.trim()}）：`,
-              ...picked.map((h, i) => {
-                const snippet = `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`.trim();
-                return `【命中${i + 1}｜${h.refTitle}｜段${h.ordinal + 1}】\n${snippet}`;
-              }),
-            ].join("\n\n");
-            userParts.push("参考库检索片段（仅供引用原文信息，不要编造）：\n" + clampText(s, Math.floor(settings.maxContextChars * 0.25)));
-          }
-        }
-        if (currentContextMode === "full" && content.trim() && (!isCloudProvider || settings.privacy.allowChapterContent)) {
-          userParts.push("当前正文：\n" + clampText(content, Math.floor(settings.maxContextChars * 0.45)));
-        } else if (
-          currentContextMode === "summary" &&
-          (props.chapter.summary ?? "").trim() &&
-          (!isCloudProvider || settings.privacy.allowRecentSummaries)
-        ) {
-          userParts.push(
-            "当前章节概要（仅供回忆事实）：\n" +
-              clampText((props.chapter.summary ?? "").trim(), Math.floor(settings.maxContextChars * 0.2)),
-          );
-        } else if (currentContextMode === "selection" && selectedText.trim() && (!isCloudProvider || settings.privacy.allowSelection)) {
-          userParts.push("当前选区：\n" + clampText(selectedText.trim(), Math.floor(settings.maxContextChars * 0.25)));
-        }
+        const recentForAssemble = effRecent ? recentSummaryText : "";
+        const linkedForAssemble = effLinked
+          ? props.linkedExcerptsForChapter.map((e) => ({ refTitle: e.refTitle, text: e.text }))
+          : [];
 
-        const hint = userHint.trim();
-        if (hint) userParts.push("额外要求：\n" + hint);
-
-        const task =
-          mode === "continue"
-            ? "请续写本章下一段（约 300～800 字），保持语气一致，承接当前正文末尾。"
-            : mode === "outline"
-              ? "请给出本章后续 6～10 个要点的场景推进大纲（每条一句）。"
-              : mode === "summarize"
-                ? "请用 6～10 条要点总结本章已写正文的事实信息（只列事实，不要推测）。"
-                : selectedText.trim()
-                  ? "请在不改变事实与设定的前提下重写所选文本，使其更紧凑更有画面感。输出只给重写后的文本。"
-                  : "请从正文末尾开始重写最近一段，使其更紧凑更有画面感。输出只给重写后的文本。";
-
-        messages = [
-          { role: "system", content: sysParts.join("\n") },
-          {
-            role: "user",
-            content:
-              userParts.join("\n\n") +
-              "\n\n任务：\n" +
-              task +
-              (mode === "rewrite" && selectedText.trim() ? `\n\n所选文本：\n${selectedText}` : ""),
-          },
-        ];
+        const assembleInput: WritingSidepanelAssembleInput = {
+          workStyle: props.workStyle,
+          tagProfileText,
+          workTitle: props.work.title,
+          chapterTitle: props.chapter.title,
+          storyBackground,
+          characters,
+          relations,
+          chapterBible: props.chapterBible,
+          skillPresetText,
+          includeLinkedExcerpts: effLinked,
+          linkedExcerpts: linkedForAssemble,
+          maxContextChars: effMax,
+          isCloudProvider,
+          privacy: settings.privacy,
+          includeBible: effIncludeBible,
+          bibleMarkdown: bible,
+          recentSummaryText: recentForAssemble,
+          includeRecentSummaries: effRecent,
+          ragEnabled: effRag,
+          ragQuery,
+          ragK,
+          ragHits: ragHitsForRequest,
+          ragSources: ragWorkSources,
+          chapterContent: props.chapterContent,
+          chapterSummary: props.chapter.summary,
+          selectedText,
+          currentContextMode: effCtxMode,
+          userHint,
+          mode: modeForAssemble,
+          recentN,
+          styleSamples: props.styleSampleSlices,
+          glossaryTerms: glossarySlices,
+        };
+        messages = buildWritingSidepanelMessages(assembleInput);
         usedProvider = settings.provider;
         usedProviderCfg = providerCfg;
+
+        const willSendBibleToCloud =
+          effIncludeBible &&
+          isCloudProvider &&
+          settings.privacy.allowBible &&
+          bible.trim().length > 0;
+        const injPrompt = resolveInjectionConfirmPrompt({
+          messages,
+          settings,
+          willSendBibleToCloud,
+        });
+        if (injPrompt.shouldPrompt && !window.confirm(formatInjectionConfirmDialogText(injPrompt))) {
+          return;
+        }
+      }
+
+      const sessionBudgetCap = settings.aiSessionApproxTokenBudget;
+      let requestTokApprox = 0;
+      if (sessionBudgetCap > 0) {
+        requestTokApprox = messages.reduce((sum, m) => sum + approxRoughTokenCount(m.content), 0);
+        const used = readSessionApproxTokens();
+        if (used + requestTokApprox > sessionBudgetCap) {
+          setError(
+            `本会话累计粗估约 ${used.toLocaleString()} tokens，本次请求约 ${requestTokApprox.toLocaleString()}，将超过上限 ${sessionBudgetCap.toLocaleString()}。可在「后端模型配置 → 默认与上下文」调高上限或设为 0；也可点草稿区「清零本会话累计」。`,
+          );
+          return;
+        }
       }
 
       lastReqRef.current = { provider: usedProvider, providerCfg: usedProviderCfg, messages };
@@ -717,13 +870,67 @@ export function AiPanel(props: {
       if (!draft.trim() && (r.text ?? "").trim()) {
         setDraft((r.text ?? "").trim());
       }
+      if (sessionBudgetCap > 0) {
+        const outTok = approxRoughTokenCount((r.text ?? "").trim());
+        addSessionApproxTokens(requestTokApprox + Math.max(0, outTok));
+        setSessionBudgetUiTick((x) => x + 1);
+      }
     } catch (e) {
+      if (isFirstAiGateCancelledError(e)) return;
       const aborted = e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message));
-      if (!aborted) setError(e instanceof Error ? e.message : "AI 调用失败");
+      if (!aborted) {
+        const msg = e instanceof Error ? e.message : "AI 调用失败";
+        setError(msg);
+        if (errorSuggestsContextDegrade(msg) && !degradeAttemptedRef.current) {
+          setShowDegradeRetry(true);
+        }
+      }
     } finally {
       setBusy(false);
     }
   }
+
+  function runWithDegrade() {
+    degradeAttemptedRef.current = true;
+    runContextOverridesRef.current = buildContextDegradeOverrides({
+      maxContextChars: settings.maxContextChars,
+      currentContextMode,
+      hasChapterSummary: !!(props.chapter?.summary ?? "").trim(),
+    });
+    void run(undefined, { fromDegrade: true });
+  }
+
+  function confirmDraftMerge(p: AiDraftMergePayload) {
+    if (p.kind === "insert") props.insertAtCursor(p.payload);
+    else if (p.kind === "append") props.appendToEnd(p.payload);
+    else props.replaceSelection(p.after);
+    setMergePayload(null);
+  }
+
+  const runRef = useRef(run);
+  runRef.current = run;
+  /** 防 StrictMode / 重挂载对同一 tick 重复 run；与父级 `lastContinueConsumedTick` 配合 */
+  const continueLocalStartedRef = useRef(0);
+  useEffect(() => {
+    const t = props.continueRunTick ?? 0;
+    const consumed = props.lastContinueConsumedTick ?? 0;
+    if (t === 0 || t === consumed || t === continueLocalStartedRef.current) return;
+    continueLocalStartedRef.current = t;
+    props.onContinueRunConsumed?.(t);
+    setMode("continue");
+    void runRef.current(undefined, { mode: "continue" });
+  }, [props.continueRunTick, props.lastContinueConsumedTick, props.onContinueRunConsumed]);
+
+  const drawLocalStartedRef = useRef(0);
+  useEffect(() => {
+    const t = props.drawRunTick ?? 0;
+    const consumed = props.lastDrawConsumedTick ?? 0;
+    if (t === 0 || t === consumed || t === drawLocalStartedRef.current) return;
+    drawLocalStartedRef.current = t;
+    props.onDrawRunConsumed?.(t);
+    setMode("draw");
+    void runRef.current(undefined, { mode: "draw" });
+  }, [props.drawRunTick, props.lastDrawConsumedTick, props.onDrawRunConsumed]);
 
   return (
     <aside className="ai-panel" aria-label="AI 面板">
@@ -734,38 +941,51 @@ export function AiPanel(props: {
         </button>
       </div>
 
-      <div className="ai-panel-row">
-        <label className="small muted">提供方</label>
-        <button
-          type="button"
-          className="btn"
-          title={PROVIDER_UI[settings.provider]?.tip ?? ""}
-          onClick={() => setProviderPickerOpen(true)}
-          style={{ display: "inline-flex", alignItems: "center", gap: 8 }}
-        >
-          <ProviderLogo provider={settings.provider} />
-          <span>{PROVIDER_UI[settings.provider]?.label ?? settings.provider}</span>
-        </button>
-      </div>
+      <div className="ai-panel-body-stack">
+        <section className="ai-panel-section" aria-labelledby="ai-panel-model-h">
+          <h3 id="ai-panel-model-h" className="ai-panel-section-title">
+            模型
+          </h3>
+          <div className="ai-panel-row ai-panel-row--flush">
+            <label className="small muted">提供方</label>
+            <button
+              type="button"
+              className="btn ai-panel-model-trigger"
+              title={PROVIDER_UI[settings.provider]?.tip ?? ""}
+              onClick={() => setProviderPickerOpen(true)}
+            >
+              <ProviderLogo provider={settings.provider} />
+              <span>{PROVIDER_UI[settings.provider]?.label ?? settings.provider}</span>
+            </button>
+          </div>
+        </section>
 
-      {providerPickerOpen ? (
-        <div
-          className="modal-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-label="选择模型提供方"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setProviderPickerOpen(false);
-          }}
-        >
-          <div className="modal-card modal-card--wide model-picker">
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-              <h3 style={{ margin: 0 }}>选择模型</h3>
-              <button type="button" className="icon-btn" title="关闭" onClick={() => setProviderPickerOpen(false)}>
-                ×
-              </button>
-            </div>
+      <details className="ai-panel-box ai-panel-box--tier2">
+        <summary>本次使用材料（简版）</summary>
+        <ul className="muted small" style={{ margin: "8px 0 0", paddingLeft: "1.15rem", lineHeight: 1.55 }}>
+          {materialsSummaryLines.map((line, i) => (
+            <li key={i}>{line}</li>
+          ))}
+        </ul>
+      </details>
 
+      <Dialog open={providerPickerOpen} onOpenChange={setProviderPickerOpen}>
+        <DialogContent
+          showCloseButton={false}
+          overlayClassName="work-form-modal-overlay"
+          aria-describedby={undefined}
+          className={cn(
+            "model-picker-dialog z-[var(--z-modal-app-content)] max-h-[min(92vh,880px)] w-full max-w-[min(880px,100vw-2rem)] gap-0 overflow-hidden border-border bg-[var(--surface)] p-0 shadow-lg sm:max-w-[min(880px,calc(100vw-2rem))]",
+          )}
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-3 sm:px-5">
+            <DialogTitle className="text-left text-lg font-semibold">选择模型</DialogTitle>
+            <button type="button" className="icon-btn" title="关闭" onClick={() => setProviderPickerOpen(false)}>
+              ×
+            </button>
+          </div>
+
+          <div className="model-picker model-picker--dialog">
             <div className="model-picker-body">
               <div className="model-picker-left" role="tablist" aria-label="模型列表">
                 {(["openai", "anthropic", "gemini", "doubao", "zhipu", "kimi", "xiaomi", "ollama"] as AiProviderId[]).map((id) => {
@@ -1000,16 +1220,24 @@ export function AiPanel(props: {
               })()}
             </div>
           </div>
-        </div>
-      ) : null}
-      <div className="ai-panel-row">
-        <label className="small muted">模式</label>
-        <select name="aiMode" value={mode} onChange={(e) => setMode(e.target.value as any)}>
-          <option value="continue">续写</option>
-          <option value="rewrite">改写</option>
-          <option value="outline">大纲</option>
-          <option value="summarize">事实总结</option>
-        </select>
+        </DialogContent>
+      </Dialog>
+
+        <section className="ai-panel-section" aria-labelledby="ai-panel-mode-h">
+          <h3 id="ai-panel-mode-h" className="ai-panel-section-title">
+            运行模式
+          </h3>
+          <div className="ai-panel-row ai-panel-row--flush">
+            <label className="small muted">模式</label>
+            <select name="aiMode" value={mode} onChange={(e) => setMode(e.target.value as WritingSkillMode)}>
+              <option value="continue">续写</option>
+              <option value="rewrite">改写</option>
+              <option value="outline">大纲</option>
+              <option value="summarize">事实总结</option>
+              <option value="draw">抽卡（无提示词）</option>
+            </select>
+          </div>
+        </section>
       </div>
 
       <details className="ai-panel-box">
@@ -1099,11 +1327,62 @@ export function AiPanel(props: {
       </details>
 
       <details className="ai-panel-box">
-        <summary>检索增强（RAG v1：参考库）</summary>
+        <summary>检索增强（RAG：参考库 / 本书）</summary>
         <label className="ai-panel-check row row--check">
           <input name="ragEnabled" type="checkbox" checked={ragEnabled} onChange={(e) => setRagEnabled(e.target.checked)} />
-          <span>启用参考库检索注入</span>
+          <span>启用检索片段注入</span>
         </label>
+        <div className="ai-panel-field">
+          <span className="small muted">检索范围（步 24：本书分块为运行时检索，无单独向量索引）</span>
+          <label className="ai-panel-check row row--check">
+            <input
+              type="checkbox"
+              checked={ragWorkSources.referenceLibrary}
+              disabled={!ragEnabled}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setRagWorkSources((s) => {
+                  const next = { ...s, referenceLibrary: checked };
+                  if (!next.referenceLibrary && !next.workBibleExport && !next.workManuscript) return s;
+                  return next;
+                });
+              }}
+            />
+            <span>藏经 · 参考库</span>
+          </label>
+          <label className="ai-panel-check row row--check">
+            <input
+              type="checkbox"
+              checked={ragWorkSources.workBibleExport}
+              disabled={!ragEnabled}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setRagWorkSources((s) => {
+                  const next = { ...s, workBibleExport: checked };
+                  if (!next.referenceLibrary && !next.workBibleExport && !next.workManuscript) return s;
+                  return next;
+                });
+              }}
+            />
+            <span>本书 · 创作圣经（导出分块）</span>
+          </label>
+          <label className="ai-panel-check row row--check">
+            <input
+              type="checkbox"
+              checked={ragWorkSources.workManuscript}
+              disabled={!ragEnabled}
+              onChange={(e) => {
+                const checked = e.target.checked;
+                setRagWorkSources((s) => {
+                  const next = { ...s, workManuscript: checked };
+                  if (!next.referenceLibrary && !next.workBibleExport && !next.workManuscript) return s;
+                  return next;
+                });
+              }}
+            />
+            <span>本书 · 章节正文（进度游标之前；不含当前章）</span>
+          </label>
+        </div>
         <label className="ai-panel-field">
           <span className="small muted">检索关键词（query）</span>
           <input
@@ -1133,10 +1412,33 @@ export function AiPanel(props: {
               const q = ragQuery.trim();
               if (!q) return;
               setRagLoading(true);
-              void searchReferenceLibrary(q, { limit: Math.max(1, Math.min(20, ragK)) })
-                .then((hits) => setRagHits(hits))
-                .catch((e) => setError(e instanceof Error ? e.message : "检索失败"))
-                .finally(() => setRagLoading(false));
+              void (async () => {
+                try {
+                  let bibleOverride = "";
+                  if (ragWorkSources.workBibleExport) {
+                    try {
+                      bibleOverride = await exportBibleMarkdown(props.workId);
+                    } catch {
+                      bibleOverride = "";
+                    }
+                  }
+                  const hits = await searchWritingRagMerged({
+                    workId: props.workId,
+                    query: q,
+                    limit: Math.max(1, Math.min(20, ragK)),
+                    sources: ragWorkSources,
+                    chapters: props.chapters,
+                    progressCursorChapterId: props.work.progressCursor,
+                    excludeManuscriptChapterId: props.chapter?.id ?? null,
+                    bibleMarkdownOverride: bibleOverride.trim() ? bibleOverride : undefined,
+                  });
+                  setRagHits(hits);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : "检索失败");
+                } finally {
+                  setRagLoading(false);
+                }
+              })();
             }}
           >
             {ragLoading ? "检索中…" : "检索预览"}
@@ -1147,20 +1449,26 @@ export function AiPanel(props: {
             <ul className="rr-list">
               {ragHits.slice(0, Math.max(0, Math.min(12, ragK))).map((h) => (
                 <li key={`${h.chunkId}-${h.highlightStart}-${h.highlightEnd}`} className="rr-list-item">
-                  <a
-                    className="rr-link"
-                    href={referenceReaderHref({
-                      refWorkId: h.refWorkId,
-                      ordinal: h.ordinal,
-                      startOffset: h.highlightStart,
-                      endOffset: h.highlightEnd,
-                    })}
-                    target="_blank"
-                    rel="noreferrer"
-                    title="在参考库打开（新标签页）"
-                  >
-                    {h.refTitle} · 段 {h.ordinal + 1}
-                  </a>
+                  {isRuntimeRagHit(h) ? (
+                    <span className="rr-link" title="本书运行时检索命中（无参考库深链）">
+                      {h.refTitle}
+                    </span>
+                  ) : (
+                    <a
+                      className="rr-link"
+                      href={referenceReaderHref({
+                        refWorkId: h.refWorkId,
+                        ordinal: h.ordinal,
+                        startOffset: h.highlightStart,
+                        endOffset: h.highlightEnd,
+                      })}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="在参考库打开（新标签页）"
+                    >
+                      {h.refTitle} · 段 {h.ordinal + 1}
+                    </a>
+                  )}
                   <div className="muted small">{h.snippetBefore}{h.snippetMatch}{h.snippetAfter}</div>
                 </li>
               ))}
@@ -1309,71 +1617,129 @@ export function AiPanel(props: {
           重试
         </button>
       </div>
-      {error ? <p className="muted small ai-panel-error">{error}</p> : null}
-
-      <label className="ai-panel-field">
-        <span className="small muted">AI 草稿（不会自动写入正文）</span>
-        <textarea name="aiDraft" value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} />
-      </label>
-
-      {glossaryHitsInDraft.length > 0 ? (
-        <div className="rr-block">
-          <div className="rr-block-title">一致性提示（来自术语/人名表）</div>
-          <ul className="rr-list">
-            {glossaryHitsInDraft.map((t) => (
-              <li key={t.id} className="rr-list-item">
-                <span style={{ fontWeight: 700 }}>{t.term}</span>
-                <span className="muted small">
-                  {t.category === "dead" ? " · 已死（请确认没有复活/误用）" : t.category === "name" ? " · 人名" : " · 术语"}
-                  {t.note.trim() ? ` · ${t.note}` : ""}
-                </span>
-              </li>
-            ))}
-          </ul>
+      {error ? <AiInlineErrorNotice message={error} /> : null}
+      {showDegradeRetry ? (
+        <div className="rr-block" style={{ marginTop: 8 }}>
+          <button type="button" className="btn" disabled={busy} onClick={() => runWithDegrade()}>
+            精简并重试
+          </button>
+          <span className="muted small" style={{ marginLeft: 8 }}>
+            减半字数上限，并暂时关闭全书圣经、RAG、邻章概要、关联摘录；全文且本章有概要时改为概要模式。
+          </span>
         </div>
       ) : null}
 
-      <div className="ai-panel-actions">
-        <button
-          type="button"
-          className="btn"
-          disabled={!draft.trim()}
-          onClick={() => props.insertAtCursor(draft.trim() + "\n\n")}
-        >
-          插入到光标
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={!draft.trim()}
-          onClick={() => {
-            const t = draft.trim();
-            if (!t) return;
-            props.appendToEnd("\n\n" + t + "\n");
-          }}
-        >
-          追加到章尾
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={!draft.trim() || !selectedText.trim()}
-          title={selectedText.trim() ? "" : "请先选中要替换的文本"}
-          onClick={() => {
-            const t = draft.trim();
-            if (!t) return;
-            if (!selectedText.trim()) return;
-            if (!window.confirm("确定用 AI 草稿替换当前选区？此操作会直接修改正文。")) return;
-            props.replaceSelection(t);
-          }}
-        >
-          替换选区
-        </button>
-      </div>
+      <section className="ai-panel-draft-zone" aria-label="AI 草稿区">
+        <div className="ai-panel-draft-zone-head">
+          <span className="ai-panel-draft-zone-title">AI 草稿</span>
+          <span className="small muted">
+            与正文分离、不自动写入；合并前会弹出对比确认。切换章节草稿按章分别保存在本会话内。
+          </span>
+        </div>
+        <label className="ai-panel-field ai-panel-field--draft">
+          <textarea name="aiDraft" value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} />
+        </label>
+
+        {sessionBudget > 0 ? (
+          <p className="muted small ai-panel-session-budget">
+            本会话侧栏累计（粗估）{sessionTokensUsed.toLocaleString()} / {sessionBudget.toLocaleString()} tokens ·{" "}
+            <button
+              type="button"
+              className="btn small secondary"
+              disabled={busy}
+              onClick={() => {
+                resetSessionApproxTokens();
+                setSessionBudgetUiTick((x) => x + 1);
+              }}
+            >
+              清零本会话累计
+            </button>
+          </p>
+        ) : null}
+
+        {toneDriftHints.length > 0 ? (
+          <div className="rr-block ai-tone-drift-hint" role="status">
+            <div className="rr-block-title">调性提示（轻量规则 · 仅参考）</div>
+            <ul className="rr-list">
+              {toneDriftHints.map((h, i) => (
+                <li key={i} className="rr-list-item muted small">
+                  {h}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {glossaryHitsInDraft.length > 0 ? (
+          <div className="rr-block">
+            <div className="rr-block-title">一致性提示（来自术语/人名表）</div>
+            <ul className="rr-list">
+              {glossaryHitsInDraft.map((t) => (
+                <li key={t.id} className="rr-list-item">
+                  <span style={{ fontWeight: 700 }}>{t.term}</span>
+                  <span className="muted small">
+                    {t.category === "dead" ? " · 已死（请确认没有复活/误用）" : t.category === "name" ? " · 人名" : " · 术语"}
+                    {t.note.trim() ? ` · ${t.note}` : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        <div className="ai-panel-actions">
+          <button
+            type="button"
+            className="btn"
+            disabled={!draft.trim()}
+            onClick={() => {
+              const t = draft.trim();
+              if (!t) return;
+              setMergePayload({ kind: "insert", payload: t + "\n\n" });
+            }}
+          >
+            插入到光标
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={!draft.trim()}
+            onClick={() => {
+              const t = draft.trim();
+              if (!t) return;
+              setMergePayload({ kind: "append", payload: "\n\n" + t + "\n" });
+            }}
+          >
+            追加到章尾
+          </button>
+          <button
+            type="button"
+            className="btn"
+            disabled={!draft.trim() || !selectedText.trim()}
+            title={selectedText.trim() ? "" : "请先选中要替换的文本"}
+            onClick={() => {
+              const t = draft.trim();
+              const before = props.getSelectedText().trim();
+              if (!t || !before) return;
+              setMergePayload({ kind: "replace", before, after: t });
+            }}
+          >
+            替换选区
+          </button>
+        </div>
+      </section>
 
       <p className="muted small">
         提示：浏览器直连第三方模型可能遇到 CORS/网络限制；Ollama 默认 `http://localhost:11434`。
       </p>
+
+      <AiDraftMergeDialog
+        open={mergePayload !== null}
+        payload={mergePayload}
+        getSelectedText={props.getSelectedText}
+        onCancel={() => setMergePayload(null)}
+        onConfirm={confirmDraftMerge}
+      />
     </aside>
   );
 }

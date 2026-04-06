@@ -87,6 +87,11 @@ export async function generateWithProvider(args: {
   return generateGemini(config, messages, args.temperature, args.signal);
 }
 
+/**
+ * 流式策略（侧栏/UI 均经此入口）：
+ * - **真流式**（SSE / 可读器，`onDelta` 逐段）：OpenAI 兼容（含 openai / doubao / zhipu / kimi / xiaomi）、Ollama。
+ * - **非流式回退**（整段 `generateWithProvider` 后一次性展示，可 `AbortSignal` 取消）：**anthropic**、**gemini**。后续可改为原生流式 API。
+ */
 export async function generateWithProviderStream(args: {
   provider: AiProviderId;
   config: AiProviderConfig;
@@ -102,7 +107,6 @@ export async function generateWithProviderStream(args: {
   if (provider === "zhipu") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
   if (provider === "kimi") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
   if (provider === "xiaomi") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
-  // Claude/Gemini：先用可取消的非流式（后续再补真流式）
   return generateWithProvider({ provider, config, messages, temperature: args.temperature, signal: args.signal });
 }
 

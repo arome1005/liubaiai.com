@@ -11,6 +11,7 @@ import type {
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  InspirationFragment,
   ReferenceChunk,
   ReferenceChapterHead,
   ReferenceExcerpt,
@@ -22,6 +23,8 @@ import type {
   Volume,
   Work,
   WorkStyleCard,
+  WritingPromptTemplate,
+  WritingStyleSample,
 } from "../db/types";
 import { SNAPSHOT_CAP_PER_CHAPTER, SNAPSHOT_MAX_AGE_MS } from "../db/types";
 import { annotateReferenceParts } from "./chapter-detector";
@@ -29,11 +32,16 @@ import { splitTextIntoReferenceChunks } from "./reference-chunks";
 import {
   buildPostingRowsForChunk,
   MAX_CHUNKS_PER_TOKEN_QUERY,
+  MAX_HYBRID_CHUNKS_TO_SCORE,
+  refineHybridHit,
   refineLiteralHits,
   tokenizeQuery,
+  type ReferenceSearchHitDraft,
 } from "./reference-search-index";
+import { normalizeWorkTagList } from "../util/work-tags";
 import { wordCount } from "../util/wordCount";
-import type { WritingStore } from "./writing-store";
+import { ChapterSaveConflictError } from "./chapter-save-conflict";
+import type { UpdateChapterOptions, WritingStore } from "./writing-store";
 import { normalizeImportRows } from "./import-normalize";
 import { remapImportMergePayload, type MergeRemapResult } from "./backup-merge-remap";
 
@@ -233,16 +241,18 @@ export class WritingStoreIndexedDB implements WritingStore {
     return getDB().works.get(id);
   }
 
-  async createWork(title: string): Promise<Work> {
+  async createWork(title: string, opts?: { tags?: string[] }): Promise<Work> {
     const db = getDB();
     const id = crypto.randomUUID();
     const t = now();
+    const tags = normalizeWorkTagList(opts?.tags);
     const work: Work = {
       id,
       title: title.trim() || "未命名作品",
       createdAt: t,
       updatedAt: t,
       progressCursor: null,
+      ...(tags?.length ? { tags } : {}),
     };
     await db.works.add(work);
     const vid = crypto.randomUUID();
@@ -252,15 +262,25 @@ export class WritingStoreIndexedDB implements WritingStore {
       title: "正文",
       order: 0,
       createdAt: t,
+      summary: "",
     });
     return work;
   }
 
   async updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags">>,
   ): Promise<void> {
-    await getDB().works.update(id, { ...patch, updatedAt: now() });
+    const db = getDB();
+    const cur = await db.works.get(id);
+    if (!cur) return;
+    const next: Work = { ...cur, ...patch, updatedAt: now() };
+    if (patch.tags !== undefined) {
+      const n = normalizeWorkTagList(patch.tags);
+      if (n?.length) next.tags = n;
+      else delete next.tags;
+    }
+    await db.works.put(next);
   }
 
   async deleteWork(id: string): Promise<void> {
@@ -283,6 +303,7 @@ export class WritingStoreIndexedDB implements WritingStore {
     await db.bibleChapterTemplates.where("workId").equals(id).delete();
     await db.bibleGlossaryTerms.where("workId").equals(id).delete();
     await db.workStyleCards.where("workId").equals(id).delete();
+    await db.inspirationFragments.where("workId").equals(id).modify({ workId: null });
     await db.works.delete(id);
   }
 
@@ -302,13 +323,14 @@ export class WritingStoreIndexedDB implements WritingStore {
       title: title?.trim() || `第 ${existing.length + 1} 卷`,
       order: maxOrder + 1,
       createdAt: t,
+      summary: "",
     };
     await db.volumes.add(vol);
     await db.works.update(workId, { updatedAt: t });
     return vol;
   }
 
-  async updateVolume(id: string, patch: Partial<Pick<Volume, "title" | "order">>): Promise<void> {
+  async updateVolume(id: string, patch: Partial<Pick<Volume, "title" | "order" | "summary">>): Promise<void> {
     await getDB().volumes.update(id, { ...patch });
   }
 
@@ -353,6 +375,7 @@ export class WritingStoreIndexedDB implements WritingStore {
       volumeId: vid,
       title: title?.trim() || `第 ${existing.length + 1} 章`,
       content: "",
+      summary: "",
       order: maxOrder + 1,
       updatedAt: t,
       wordCountCache: 0,
@@ -364,14 +387,27 @@ export class WritingStoreIndexedDB implements WritingStore {
 
   async updateChapter(
     id: string,
-    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary">>,
+    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt">>,
+    options?: UpdateChapterOptions,
   ): Promise<void> {
     const db = getDB();
-    const extra: Partial<Chapter> = { updatedAt: now() };
-    if (patch.content !== undefined) {
-      extra.wordCountCache = wordCount(patch.content);
+    const row = await db.chapters.get(id);
+    if (!row) return;
+    if (
+      options?.expectedUpdatedAt !== undefined &&
+      row.updatedAt !== options.expectedUpdatedAt
+    ) {
+      throw new ChapterSaveConflictError();
     }
-    await db.chapters.update(id, { ...patch, ...extra });
+    const t = now();
+    const merged: Partial<Chapter> = { ...patch, updatedAt: t };
+    if (patch.content !== undefined) {
+      merged.wordCountCache = wordCount(patch.content);
+    }
+    if (patch.summary !== undefined && patch.summaryUpdatedAt === undefined) {
+      merged.summaryUpdatedAt = t;
+    }
+    await db.chapters.update(id, merged);
   }
 
   async deleteChapter(id: string): Promise<void> {
@@ -650,8 +686,11 @@ export class WritingStoreIndexedDB implements WritingStore {
 
   async searchReferenceLibrary(
     query: string,
-    opts?: { refWorkId?: string; limit?: number },
+    opts?: { refWorkId?: string; limit?: number; mode?: "strict" | "hybrid" },
   ): Promise<ReferenceSearchHit[]> {
+    if (opts?.mode === "hybrid") {
+      return this.searchReferenceLibraryHybrid(query, opts);
+    }
     const q = query.trim();
     if (!q) return [];
     const limit = opts?.limit ?? 80;
@@ -698,6 +737,66 @@ export class WritingStoreIndexedDB implements WritingStore {
     }));
     hits.sort((a, b) => a.refTitle.localeCompare(b.refTitle) || a.ordinal - b.ordinal);
     return hits.slice(0, limit);
+  }
+
+  /** 步 40：分词 OR 召回 + 块内加权，无向量依赖 */
+  private async searchReferenceLibraryHybrid(
+    query: string,
+    opts?: { refWorkId?: string; limit?: number },
+  ): Promise<ReferenceSearchHit[]> {
+    const q = query.trim();
+    if (!q) return [];
+    const limit = opts?.limit ?? 80;
+    const db = getDB();
+    const refMap = new Map((await db.referenceLibrary.toArray()).map((r) => [r.id, r.title]));
+
+    const tokens = tokenizeQuery(q);
+    if (tokens.length === 0) {
+      return this.searchReferenceLiteralFallback(q, opts?.refWorkId, limit, refMap);
+    }
+
+    const chunkIdSet = new Set<string>();
+    for (const tok of tokens) {
+      const part = await this.chunkIdsMatchingToken(tok, opts?.refWorkId);
+      for (const cid of part) {
+        chunkIdSet.add(cid);
+        if (chunkIdSet.size >= MAX_HYBRID_CHUNKS_TO_SCORE) break;
+      }
+      if (chunkIdSet.size >= MAX_HYBRID_CHUNKS_TO_SCORE) break;
+    }
+    if (chunkIdSet.size === 0) return [];
+
+    const ids = [...chunkIdSet];
+    const chunks = (
+      await Promise.all(ids.map((cid) => db.referenceChunks.get(cid)))
+    ).filter((c): c is ReferenceChunk => c != null);
+
+    const rows: Array<{ draft: ReferenceSearchHitDraft; score: number }> = [];
+    for (const ch of chunks) {
+      const r = refineHybridHit(q, tokens, ch);
+      if (r) rows.push(r);
+    }
+    rows.sort(
+      (a, b) =>
+        b.score - a.score ||
+        (refMap.get(a.draft.refWorkId) ?? "").localeCompare(refMap.get(b.draft.refWorkId) ?? "") ||
+        a.draft.ordinal - b.draft.ordinal,
+    );
+
+    const hits: ReferenceSearchHit[] = rows.slice(0, limit).map(({ draft: d }) => ({
+      refWorkId: d.refWorkId,
+      refTitle: refMap.get(d.refWorkId) ?? "",
+      chunkId: d.chunkId,
+      ordinal: d.ordinal,
+      matchCount: d.matchCount,
+      preview: d.preview,
+      snippetBefore: d.snippetBefore,
+      snippetMatch: d.snippetMatch,
+      snippetAfter: d.snippetAfter,
+      highlightStart: d.highlightStart,
+      highlightEnd: d.highlightEnd,
+    }));
+    return hits;
   }
 
   private async chunkIdsMatchingToken(token: string, refWorkId?: string): Promise<Set<string>> {
@@ -1048,7 +1147,9 @@ export class WritingStoreIndexedDB implements WritingStore {
   }
 
   async getChapterBible(chapterId: string): Promise<ChapterBible | undefined> {
-    return getDB().chapterBible.where("chapterId").equals(chapterId).first();
+    const row = await getDB().chapterBible.where("chapterId").equals(chapterId).first();
+    if (!row) return undefined;
+    return { ...row, characterStateText: row.characterStateText ?? "" };
   }
 
   async upsertChapterBible(
@@ -1063,6 +1164,7 @@ export class WritingStoreIndexedDB implements WritingStore {
         forbidText: input.forbidText,
         povText: input.povText,
         sceneStance: input.sceneStance,
+        characterStateText: input.characterStateText ?? "",
         updatedAt: t,
       });
       return {
@@ -1071,6 +1173,7 @@ export class WritingStoreIndexedDB implements WritingStore {
         forbidText: input.forbidText,
         povText: input.povText,
         sceneStance: input.sceneStance,
+        characterStateText: input.characterStateText ?? "",
         updatedAt: t,
       };
     }
@@ -1082,6 +1185,7 @@ export class WritingStoreIndexedDB implements WritingStore {
       forbidText: input.forbidText ?? "",
       povText: input.povText ?? "",
       sceneStance: input.sceneStance ?? "",
+      characterStateText: input.characterStateText ?? "",
       updatedAt: t,
     };
     await db.chapterBible.add(row);
@@ -1122,6 +1226,110 @@ export class WritingStoreIndexedDB implements WritingStore {
     await getDB().bibleGlossaryTerms.delete(id);
   }
 
+  async listWritingPromptTemplates(workId: string): Promise<WritingPromptTemplate[]> {
+    return getDB().writingPromptTemplates.where("workId").equals(workId).sortBy("sortOrder");
+  }
+
+  async addWritingPromptTemplate(
+    workId: string,
+    input: Partial<Omit<WritingPromptTemplate, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
+  ): Promise<WritingPromptTemplate> {
+    const db = getDB();
+    const list = await db.writingPromptTemplates.where("workId").equals(workId).sortBy("sortOrder");
+    const maxOrder = list.length === 0 ? -1 : Math.max(...list.map((c) => c.sortOrder));
+    const t = now();
+    const row: WritingPromptTemplate = {
+      id: crypto.randomUUID(),
+      workId,
+      category: (input.category ?? "").trim(),
+      title: (input.title ?? "").trim() || "未命名模板",
+      body: input.body ?? "",
+      sortOrder: maxOrder + 1,
+      createdAt: t,
+      updatedAt: t,
+    };
+    await db.writingPromptTemplates.add(row);
+    return row;
+  }
+
+  async updateWritingPromptTemplate(
+    id: string,
+    patch: Partial<Omit<WritingPromptTemplate, "id" | "workId">>,
+  ): Promise<void> {
+    const upd: Record<string, unknown> = { updatedAt: now() };
+    if (patch.category !== undefined) upd.category = patch.category.trim();
+    if (patch.title !== undefined) upd.title = patch.title.trim() || "未命名模板";
+    if (patch.body !== undefined) upd.body = patch.body;
+    if (patch.sortOrder !== undefined) upd.sortOrder = patch.sortOrder;
+    await getDB().writingPromptTemplates.update(id, upd as Partial<WritingPromptTemplate>);
+  }
+
+  async deleteWritingPromptTemplate(id: string): Promise<void> {
+    await getDB().writingPromptTemplates.delete(id);
+  }
+
+  async reorderWritingPromptTemplates(workId: string, orderedIds: string[]): Promise<void> {
+    void workId;
+    const db = getDB();
+    const t = now();
+    await db.transaction("rw", db.writingPromptTemplates, async () => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await db.writingPromptTemplates.update(orderedIds[i], { sortOrder: i, updatedAt: t });
+      }
+    });
+  }
+
+  async listWritingStyleSamples(workId: string): Promise<WritingStyleSample[]> {
+    return getDB().writingStyleSamples.where("workId").equals(workId).sortBy("sortOrder");
+  }
+
+  async addWritingStyleSample(
+    workId: string,
+    input: Partial<Omit<WritingStyleSample, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
+  ): Promise<WritingStyleSample> {
+    const db = getDB();
+    const list = await db.writingStyleSamples.where("workId").equals(workId).sortBy("sortOrder");
+    const maxOrder = list.length === 0 ? -1 : Math.max(...list.map((c) => c.sortOrder));
+    const t = now();
+    const row: WritingStyleSample = {
+      id: crypto.randomUUID(),
+      workId,
+      title: (input.title ?? "").trim() || "未命名样本",
+      body: input.body ?? "",
+      sortOrder: maxOrder + 1,
+      createdAt: t,
+      updatedAt: t,
+    };
+    await db.writingStyleSamples.add(row);
+    return row;
+  }
+
+  async updateWritingStyleSample(
+    id: string,
+    patch: Partial<Omit<WritingStyleSample, "id" | "workId">>,
+  ): Promise<void> {
+    const upd: Record<string, unknown> = { updatedAt: now() };
+    if (patch.title !== undefined) upd.title = patch.title.trim() || "未命名样本";
+    if (patch.body !== undefined) upd.body = patch.body;
+    if (patch.sortOrder !== undefined) upd.sortOrder = patch.sortOrder;
+    await getDB().writingStyleSamples.update(id, upd as Partial<WritingStyleSample>);
+  }
+
+  async deleteWritingStyleSample(id: string): Promise<void> {
+    await getDB().writingStyleSamples.delete(id);
+  }
+
+  async reorderWritingStyleSamples(workId: string, orderedIds: string[]): Promise<void> {
+    void workId;
+    const db = getDB();
+    const t = now();
+    await db.transaction("rw", db.writingStyleSamples, async () => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await db.writingStyleSamples.update(orderedIds[i], { sortOrder: i, updatedAt: t });
+      }
+    });
+  }
+
   async getWorkStyleCard(workId: string): Promise<WorkStyleCard | undefined> {
     return getDB().workStyleCards.get(workId);
   }
@@ -1147,6 +1355,50 @@ export class WritingStoreIndexedDB implements WritingStore {
     return next;
   }
 
+  async listInspirationFragments(): Promise<InspirationFragment[]> {
+    return getDB().inspirationFragments.orderBy("createdAt").reverse().toArray();
+  }
+
+  async addInspirationFragment(
+    input: Partial<Omit<InspirationFragment, "id" | "createdAt" | "updatedAt">> & { body: string },
+  ): Promise<InspirationFragment> {
+    const db = getDB();
+    const wid = input.workId ?? null;
+    if (wid && !(await db.works.get(wid))) throw new Error("作品不存在");
+    const t = now();
+    const row: InspirationFragment = {
+      id: crypto.randomUUID(),
+      workId: wid,
+      body: input.body.trim() || "（空碎片）",
+      tags: normalizeWorkTagList(input.tags) ?? [],
+      createdAt: t,
+      updatedAt: t,
+    };
+    await db.inspirationFragments.add(row);
+    return row;
+  }
+
+  async updateInspirationFragment(
+    id: string,
+    patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId">>,
+  ): Promise<void> {
+    const db = getDB();
+    if (patch.workId !== undefined && patch.workId !== null && !(await db.works.get(patch.workId))) {
+      throw new Error("作品不存在");
+    }
+    const cur = await db.inspirationFragments.get(id);
+    if (!cur) throw new Error("碎片不存在");
+    const upd: Record<string, unknown> = { updatedAt: now() };
+    if (patch.body !== undefined) upd.body = patch.body.trim() || "（空碎片）";
+    if (patch.tags !== undefined) upd.tags = normalizeWorkTagList(patch.tags) ?? [];
+    if (patch.workId !== undefined) upd.workId = patch.workId;
+    await db.inspirationFragments.update(id, upd as Partial<InspirationFragment>);
+  }
+
+  async deleteInspirationFragment(id: string): Promise<void> {
+    await getDB().inspirationFragments.delete(id);
+  }
+
   async exportAllData(): Promise<{
     works: Work[];
     volumes: Volume[];
@@ -1167,6 +1419,9 @@ export class WritingStoreIndexedDB implements WritingStore {
     chapterBible: ChapterBible[];
     bibleGlossaryTerms: BibleGlossaryTerm[];
     workStyleCards: WorkStyleCard[];
+    inspirationFragments: InspirationFragment[];
+    writingPromptTemplates: WritingPromptTemplate[];
+    writingStyleSamples: WritingStyleSample[];
   }> {
     const db = getDB();
     const works = await db.works.toArray();
@@ -1188,6 +1443,9 @@ export class WritingStoreIndexedDB implements WritingStore {
     const chapterBible = await db.chapterBible.toArray();
     const bibleGlossaryTerms = await db.bibleGlossaryTerms.toArray();
     const workStyleCards = await db.workStyleCards.toArray();
+    const inspirationFragments = await db.inspirationFragments.toArray();
+    const writingPromptTemplates = await db.writingPromptTemplates.toArray();
+    const writingStyleSamples = await db.writingStyleSamples.toArray();
     return {
       works,
       volumes,
@@ -1208,6 +1466,9 @@ export class WritingStoreIndexedDB implements WritingStore {
       chapterBible,
       bibleGlossaryTerms,
       workStyleCards,
+      inspirationFragments,
+      writingPromptTemplates,
+      writingStyleSamples,
     };
   }
 
@@ -1231,6 +1492,9 @@ export class WritingStoreIndexedDB implements WritingStore {
     chapterBible?: ChapterBible[];
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
+    inspirationFragments?: InspirationFragment[];
+    writingPromptTemplates?: WritingPromptTemplate[];
+    writingStyleSamples?: WritingStyleSample[];
   }): Promise<void> {
     const normalized = normalizeImportRows(data);
     const refLib = data.referenceLibrary ?? [];
@@ -1248,6 +1512,9 @@ export class WritingStoreIndexedDB implements WritingStore {
     const chapterBible = data.chapterBible ?? [];
     const bibleGlossaryTerms = data.bibleGlossaryTerms ?? [];
     const workStyleCards = data.workStyleCards ?? [];
+    const inspirationFragments = data.inspirationFragments ?? [];
+    const writingPromptTemplates = data.writingPromptTemplates ?? [];
+    const writingStyleSamples = data.writingStyleSamples ?? [];
     const db = getDB();
     await db.transaction(
       "rw",
@@ -1271,6 +1538,9 @@ export class WritingStoreIndexedDB implements WritingStore {
         db.chapterBible,
         db.bibleGlossaryTerms,
         db.workStyleCards,
+        db.inspirationFragments,
+        db.writingPromptTemplates,
+        db.writingStyleSamples,
       ],
       async () => {
         await db.referenceTokenPostings.clear();
@@ -1288,6 +1558,9 @@ export class WritingStoreIndexedDB implements WritingStore {
         await db.bibleWorldEntries.clear();
         await db.bibleCharacters.clear();
         await db.workStyleCards.clear();
+        await db.inspirationFragments.clear();
+        await db.writingPromptTemplates.clear();
+        await db.writingStyleSamples.clear();
         await db.chapterSnapshots.clear();
         await db.chapters.clear();
         await db.volumes.clear();
@@ -1351,6 +1624,43 @@ export class WritingStoreIndexedDB implements WritingStore {
             })),
           );
         }
+        if (inspirationFragments.length) {
+          await db.inspirationFragments.bulkAdd(
+            inspirationFragments.map((f) => ({
+              ...f,
+              workId: f.workId ?? null,
+              tags: normalizeWorkTagList(f.tags) ?? [],
+              body: (f.body ?? "").trim() || "（空碎片）",
+              createdAt: f.createdAt ?? now(),
+              updatedAt: f.updatedAt ?? now(),
+            })),
+          );
+        }
+        if (writingPromptTemplates.length) {
+          await db.writingPromptTemplates.bulkAdd(
+            writingPromptTemplates.map((p) => ({
+              ...p,
+              category: (p.category ?? "").trim(),
+              title: (p.title ?? "").trim() || "未命名模板",
+              body: p.body ?? "",
+              sortOrder: p.sortOrder ?? 0,
+              createdAt: p.createdAt ?? now(),
+              updatedAt: p.updatedAt ?? now(),
+            })),
+          );
+        }
+        if (writingStyleSamples.length) {
+          await db.writingStyleSamples.bulkAdd(
+            writingStyleSamples.map((s) => ({
+              ...s,
+              title: (s.title ?? "").trim() || "未命名样本",
+              body: s.body ?? "",
+              sortOrder: s.sortOrder ?? 0,
+              createdAt: s.createdAt ?? now(),
+              updatedAt: s.updatedAt ?? now(),
+            })),
+          );
+        }
       },
     );
     if (refChunks.length > 0 && refChapterHeads.length === 0) {
@@ -1382,6 +1692,9 @@ export class WritingStoreIndexedDB implements WritingStore {
     chapterBible?: ChapterBible[];
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
+    inspirationFragments?: InspirationFragment[];
+    writingPromptTemplates?: WritingPromptTemplate[];
+    writingStyleSamples?: WritingStyleSample[];
   }): Promise<void> {
     const m = remapImportMergePayload(data, now);
     await this.bulkAddFullMergeRemap(m);
@@ -1521,6 +1834,9 @@ export class WritingStoreIndexedDB implements WritingStore {
         db.chapterBible,
         db.bibleGlossaryTerms,
         db.workStyleCards,
+        db.inspirationFragments,
+        db.writingPromptTemplates,
+        db.writingStyleSamples,
       ],
       async () => {
         if (m.newWorks.length) await db.works.bulkAdd(m.newWorks);
@@ -1541,6 +1857,13 @@ export class WritingStoreIndexedDB implements WritingStore {
         if (m.newChapterBible.length) await db.chapterBible.bulkAdd(m.newChapterBible);
         if (m.newBibleGloss.length) await db.bibleGlossaryTerms.bulkAdd(m.newBibleGloss);
         if (m.newStyleCards.length) await db.workStyleCards.bulkAdd(m.newStyleCards);
+        if (m.newInspirationFragments.length) await db.inspirationFragments.bulkAdd(m.newInspirationFragments);
+        if (m.newWritingPromptTemplates.length) {
+          await db.writingPromptTemplates.bulkAdd(m.newWritingPromptTemplates);
+        }
+        if (m.newWritingStyleSamples.length) {
+          await db.writingStyleSamples.bulkAdd(m.newWritingStyleSamples);
+        }
       },
     );
     for (const r of m.newRefLib) {

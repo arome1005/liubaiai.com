@@ -5,6 +5,8 @@ import { REFERENCE_CHAPTER_HEAD_POSTING_TOKEN } from "./chapter-detector";
 export const MAX_OFFSETS_PER_POSTING = 32;
 /** 单 token 全局最多参与的结果块数 */
 export const MAX_CHUNKS_PER_TOKEN_QUERY = 800;
+/** 混合检索：参与打分的最大块数（控制内存与耗时） */
+export const MAX_HYBRID_CHUNKS_TO_SCORE = 640;
 
 const MAX_TOKEN_LEN = 48;
 
@@ -164,6 +166,83 @@ export function buildSnippetParts(
     after,
     preview: previewAround(content, start, end),
   };
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+  if (!needle) return 0;
+  let count = 0;
+  let pos = 0;
+  while (pos < haystack.length) {
+    const i = haystack.indexOf(needle, pos);
+    if (i < 0) break;
+    count++;
+    pos = i + Math.max(1, needle.length);
+  }
+  return count;
+}
+
+/**
+ * 混合检索单块：多词任一命中即可入候选；整句字面量加权；摘要优先整句否则最长词。
+ */
+export function refineHybridHit(
+  rawQuery: string,
+  tokens: string[],
+  chunk: ReferenceChunk,
+): { draft: ReferenceSearchHitDraft; score: number } | null {
+  const q = rawQuery.trim();
+  const content = chunk.content;
+  const unique = [...new Set(tokens.filter((t) => t.length > 0))];
+
+  const literalCount = q ? countOccurrences(content, q) : 0;
+  const tokenCounts = new Map<string, number>();
+  for (const t of unique) {
+    tokenCounts.set(t, countOccurrences(content, t));
+  }
+  const tokensHit = [...tokenCounts.values()].filter((c) => c > 0).length;
+  if (literalCount === 0 && tokensHit === 0) return null;
+
+  let score = 0;
+  if (literalCount > 0) {
+    score += 8000 + literalCount * 24;
+  }
+  score += tokensHit * 160;
+  for (const [, c] of tokenCounts) {
+    if (c > 0) score += Math.min(c, 18) * 9;
+  }
+
+  let start = 0;
+  let end = 0;
+  let matchCount = 0;
+
+  if (literalCount > 0) {
+    start = content.indexOf(q);
+    end = start + q.length;
+    matchCount = literalCount;
+  } else {
+    const withHits = unique.filter((t) => (tokenCounts.get(t) ?? 0) > 0);
+    withHits.sort((a, b) => b.length - a.length);
+    const pick = withHits[0]!;
+    start = content.indexOf(pick);
+    end = start + pick.length;
+    matchCount = [...tokenCounts.entries()]
+      .filter(([, c]) => c > 0)
+      .reduce((s, [, c]) => s + Math.min(c, 6), 0);
+  }
+
+  const sn = buildSnippetParts(content, start, end);
+  const draft: ReferenceSearchHitDraft = {
+    refWorkId: chunk.refWorkId,
+    chunkId: chunk.id,
+    ordinal: chunk.ordinal,
+    matchCount,
+    highlightStart: start,
+    highlightEnd: end,
+    preview: sn.preview,
+    snippetBefore: sn.before,
+    snippetMatch: sn.match,
+    snippetAfter: sn.after,
+  };
+  return { draft, score };
 }
 
 export function refineLiteralHits(query: string, chunks: ReferenceChunk[]): ReferenceSearchHitDraft[] {

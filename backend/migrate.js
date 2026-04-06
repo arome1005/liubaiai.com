@@ -138,6 +138,7 @@ create table if not exists chapter_bible (
   forbid_text text not null default '',
   pov_text text not null default '',
   scene_stance text not null default '',
+  character_state text not null default '',
   updated_at bigint not null
 );
 create index if not exists idx_chapter_bible_work_updated on chapter_bible(work_id, updated_at desc);
@@ -152,6 +153,41 @@ create table if not exists bible_glossary_term (
   updated_at bigint not null
 );
 create index if not exists idx_glossary_work_term on bible_glossary_term(work_id, term);
+
+create table if not exists writing_prompt_template (
+  id uuid primary key default gen_random_uuid(),
+  work_id uuid not null references work(id) on delete cascade,
+  category text not null default '',
+  title text not null default '',
+  body text not null default '',
+  sort_order integer not null default 0,
+  created_at bigint not null,
+  updated_at bigint not null
+);
+create index if not exists idx_wpt_work_sort on writing_prompt_template(work_id, sort_order);
+create index if not exists idx_wpt_work_category on writing_prompt_template(work_id, category);
+
+create table if not exists writing_style_sample (
+  id uuid primary key default gen_random_uuid(),
+  work_id uuid not null references work(id) on delete cascade,
+  title text not null default '',
+  body text not null default '',
+  sort_order integer not null default 0,
+  created_at bigint not null,
+  updated_at bigint not null
+);
+create index if not exists idx_wss_work_sort on writing_style_sample(work_id, sort_order);
+
+create table if not exists inspiration_fragment (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null,
+  work_id uuid null references work(id) on delete set null,
+  body text not null,
+  tags text[] not null default '{}',
+  created_at bigint not null,
+  updated_at bigint not null
+);
+create index if not exists idx_insp_frag_user_created on inspiration_fragment(user_id, created_at desc);
 
 -- ========= reference library (minimal storage tables; search index can be added later) =========
 create table if not exists reference_library_entry (
@@ -236,6 +272,18 @@ create table if not exists test_content (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_test_content_user_created on test_content(user_id, created_at desc);
+
+-- §11 步 19：卷/章摘要结构（与 Supabase schema 对齐）
+alter table volume add column if not exists summary text null;
+alter table chapter add column if not exists summary_updated_at bigint null;
+
+-- §11 步 29：作品封面（data URL，宜控制体积）
+alter table work add column if not exists cover_image text null;
+-- §11 步 30：留白作品标签（text[]，装配器侧写）
+alter table work add column if not exists tags text[] not null default '{}';
+
+-- §11 步 21：本章人物状态备忘（与 Dexie / 装配器一致）
+alter table chapter_bible add column if not exists character_state text not null default '';
 `;
 
 async function main() {

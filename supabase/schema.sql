@@ -56,16 +56,21 @@ create table if not exists public.work (
   title text not null,
   created_at bigint not null,
   updated_at bigint not null,
-  progress_cursor uuid null
+  progress_cursor uuid null,
+  cover_image text null
 );
 create index if not exists idx_work_user_updated on public.work (user_id, updated_at desc);
+
+alter table public.work add column if not exists cover_image text null;
+alter table public.work add column if not exists tags text[] not null default '{}';
 
 create table if not exists public.volume (
   id uuid primary key default gen_random_uuid(),
   work_id uuid not null references public.work (id) on delete cascade,
   title text not null,
   "order" integer not null,
-  created_at bigint not null
+  created_at bigint not null,
+  summary text null
 );
 create index if not exists idx_volume_work_order on public.volume (work_id, "order");
 
@@ -78,10 +83,15 @@ create table if not exists public.chapter (
   summary text null,
   "order" integer not null,
   updated_at bigint not null,
-  word_count_cache integer null
+  word_count_cache integer null,
+  summary_updated_at bigint null
 );
 create index if not exists idx_chapter_work_order on public.chapter (work_id, "order");
 create index if not exists idx_chapter_volume_order on public.chapter (volume_id, "order");
+
+-- §11 步 19：旧库仅执行过早期 DDL 时补列
+alter table public.volume add column if not exists summary text null;
+alter table public.chapter add column if not exists summary_updated_at bigint null;
 
 create table if not exists public.chapter_snapshot (
   id uuid primary key default gen_random_uuid(),
@@ -178,9 +188,12 @@ create table if not exists public.chapter_bible (
   forbid_text text not null default '',
   pov_text text not null default '',
   scene_stance text not null default '',
+  character_state text not null default '',
   updated_at bigint not null
 );
 create index if not exists idx_chapter_bible_work_updated on public.chapter_bible (work_id, updated_at desc);
+
+alter table public.chapter_bible add column if not exists character_state text not null default '';
 
 create table if not exists public.bible_glossary_term (
   id uuid primary key default gen_random_uuid(),
@@ -192,6 +205,47 @@ create table if not exists public.bible_glossary_term (
   updated_at bigint not null
 );
 create index if not exists idx_glossary_work_term on public.bible_glossary_term (work_id, term);
+
+-- §11 步 42：落笔 Prompt 模板（每作品可复用片段 → 写作侧栏「额外要求」）
+create table if not exists public.writing_prompt_template (
+  id uuid primary key default gen_random_uuid(),
+  work_id uuid not null references public.work (id) on delete cascade,
+  category text not null default '',
+  title text not null default '',
+  body text not null default '',
+  sort_order integer not null default 0,
+  created_at bigint not null,
+  updated_at bigint not null
+);
+create index if not exists idx_wpt_work_sort on public.writing_prompt_template (work_id, sort_order);
+create index if not exists idx_wpt_work_category on public.writing_prompt_template (work_id, category);
+
+-- §11 步 43：笔感样本（参考段落 → 写作侧栏 user 上下文）
+create table if not exists public.writing_style_sample (
+  id uuid primary key default gen_random_uuid(),
+  work_id uuid not null references public.work (id) on delete cascade,
+  title text not null default '',
+  body text not null default '',
+  sort_order integer not null default 0,
+  created_at bigint not null,
+  updated_at bigint not null
+);
+create index if not exists idx_wss_work_sort on public.writing_style_sample (work_id, sort_order);
+
+-- -----------------------------------------------------------------------------
+-- 5.5) §11 步 35：流光碎片（用户级，可选归属作品）
+-- -----------------------------------------------------------------------------
+create table if not exists public.inspiration_fragment (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.app_user (id) on delete cascade,
+  work_id uuid null references public.work (id) on delete set null,
+  body text not null,
+  tags text[] not null default '{}',
+  created_at bigint not null,
+  updated_at bigint not null
+);
+create index if not exists idx_insp_frag_user_created on public.inspiration_fragment (user_id, created_at desc);
+create index if not exists idx_insp_frag_work on public.inspiration_fragment (work_id) where work_id is not null;
 
 -- -----------------------------------------------------------------------------
 -- 6) 注册验证码（仅后端 service_role 访问；勿对 anon 建 policy）
@@ -234,6 +288,9 @@ alter table public.bible_timeline_event enable row level security;
 alter table public.bible_chapter_template enable row level security;
 alter table public.chapter_bible enable row level security;
 alter table public.bible_glossary_term enable row level security;
+alter table public.writing_prompt_template enable row level security;
+alter table public.writing_style_sample enable row level security;
+alter table public.inspiration_fragment enable row level security;
 alter table public.app_user enable row level security;
 alter table public.test_content enable row level security;
 alter table public.email_otp_challenge enable row level security;
@@ -284,6 +341,9 @@ drop policy if exists bt_all on public.bible_timeline_event;
 drop policy if exists bct_all on public.bible_chapter_template;
 drop policy if exists cb_all on public.chapter_bible;
 drop policy if exists bgt_all on public.bible_glossary_term;
+drop policy if exists wpt_all on public.writing_prompt_template;
+drop policy if exists wss_all on public.writing_style_sample;
+drop policy if exists ifr_all on public.inspiration_fragment;
 create policy bc_all on public.bible_character for all using (
   exists (select 1 from public.work w where w.id = bible_character.work_id and w.user_id = auth.uid())
 );
@@ -304,6 +364,33 @@ create policy cb_all on public.chapter_bible for all using (
 );
 create policy bgt_all on public.bible_glossary_term for all using (
   exists (select 1 from public.work w where w.id = bible_glossary_term.work_id and w.user_id = auth.uid())
+);
+
+create policy wpt_all on public.writing_prompt_template for all using (
+  exists (select 1 from public.work w where w.id = writing_prompt_template.work_id and w.user_id = auth.uid())
+);
+
+create policy wss_all on public.writing_style_sample for all using (
+  exists (select 1 from public.work w where w.id = writing_style_sample.work_id and w.user_id = auth.uid())
+);
+
+create policy ifr_all on public.inspiration_fragment for all using (
+  auth.uid() = user_id
+  and (
+    inspiration_fragment.work_id is null
+    or exists (
+      select 1 from public.work w where w.id = inspiration_fragment.work_id and w.user_id = auth.uid()
+    )
+  )
+)
+with check (
+  auth.uid() = user_id
+  and (
+    inspiration_fragment.work_id is null
+    or exists (
+      select 1 from public.work w where w.id = inspiration_fragment.work_id and w.user_id = auth.uid()
+    )
+  )
 );
 
 drop policy if exists tc_all on public.test_content;

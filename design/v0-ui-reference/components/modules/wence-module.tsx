@@ -72,6 +72,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AIModelSelector, AI_MODELS } from "@/components/ai-model-selector"
 
 // 策略类型定义
 type StrategyType = "plot" | "character" | "worldbuilding" | "pacing" | "conflict" | "foreshadow"
@@ -229,10 +230,10 @@ const mockAnalysisCards: AnalysisCard[] = [
   },
   {
     id: "3",
-    title: "战斗节奏控制",
+    title: "���斗节奏控制",
     type: "pacing",
     source: "《全职高手》",
-    content: "长战斗中穿插「呼吸点」——技能冷却、双方喘息、旁观者反应——让读者有消化空间，避免疲劳。",
+    content: "长战斗中穿��「呼吸点」——技能冷却、双方喘息、旁观者反应——让读者有消化空间，避免疲劳。",
     tags: ["战斗", "节奏", "技巧"],
     isSaved: false,
   },
@@ -248,6 +249,9 @@ export function WenCeModule() {
   const [searchQuery, setSearchQuery] = useState("")
   const [activeStrategyFilter, setActiveStrategyFilter] = useState<StrategyType | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [selectedModelId, setSelectedModelId] = useState("jianshan")
+  const [showModelSelector, setShowModelSelector] = useState(false)
+  const selectedModel = AI_MODELS.find(m => m.id === selectedModelId) || AI_MODELS[0]
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   const handleCopy = (content: string, id: string) => {
@@ -373,15 +377,23 @@ export function WenCeModule() {
                 {filteredConversations.map((conv) => {
                   const config = strategyConfig[conv.type]
                   return (
-                    <button
+                    <div
                       key={conv.id}
                       onClick={() => setSelectedConversation(conv)}
                       className={cn(
-                        "group flex w-full flex-col gap-1.5 rounded-lg p-3 text-left transition-colors",
+                        "group flex w-full cursor-pointer flex-col gap-1.5 rounded-lg p-3 text-left transition-colors",
                         selectedConversation?.id === conv.id
                           ? "bg-primary/10 border border-primary/30"
                           : "hover:bg-muted/30"
                       )}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          setSelectedConversation(conv)
+                        }
+                      }}
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="flex items-center gap-2">
@@ -445,7 +457,7 @@ export function WenCeModule() {
                           {conv.messageCount} 条
                         </span>
                       </div>
-                    </button>
+                    </div>
                   )
                 })}
               </div>
@@ -627,10 +639,26 @@ export function WenCeModule() {
                     )}
                   </Button>
                 </div>
-                <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Enter 发送 · Shift + Enter 换行</span>
-                  <span>问策侧重开放式讨论，改纲请前往「推演」</span>
+                <div className="mt-2 flex items-center justify-between">
+                  <button
+                    onClick={() => setShowModelSelector(true)}
+                    className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs transition-colors hover:bg-muted/50"
+                  >
+                    {selectedModel.icon}
+                    <span className="font-medium text-foreground">{selectedModel.name}</span>
+                    <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                  </button>
+                  <span className="text-xs text-muted-foreground">Enter 发送 · Shift + Enter 换行</span>
                 </div>
+
+                {/* AI Model Selector Dialog */}
+                <AIModelSelector
+                  open={showModelSelector}
+                  onOpenChange={setShowModelSelector}
+                  selectedModelId={selectedModelId}
+                  onSelectModel={setSelectedModelId}
+                  title="选择模型"
+                />
               </div>
             </>
           )}

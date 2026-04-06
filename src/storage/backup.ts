@@ -25,6 +25,10 @@ export async function buildBackupZip(): Promise<Blob> {
     bibleChapterTemplates,
     chapterBible,
     bibleGlossaryTerms,
+    workStyleCards,
+    inspirationFragments,
+    writingPromptTemplates,
+    writingStyleSamples,
   } = await exportAllData();
   const zip = new JSZip();
   zip.file(
@@ -61,6 +65,10 @@ export async function buildBackupZip(): Promise<Blob> {
         bibleChapterTemplates,
         chapterBible,
         bibleGlossaryTerms,
+        workStyleCards,
+        inspirationFragments,
+        writingPromptTemplates,
+        writingStyleSamples,
       },
       null,
       2,
@@ -93,6 +101,10 @@ export async function parseBackupZip(file: File, mode: "replace" | "merge" = "re
     bibleChapterTemplates?: unknown[];
     chapterBible?: unknown[];
     bibleGlossaryTerms?: unknown[];
+    workStyleCards?: unknown[];
+    inspirationFragments?: unknown[];
+    writingPromptTemplates?: unknown[];
+    writingStyleSamples?: unknown[];
   };
   if (!Array.isArray(parsed.works) || !Array.isArray(parsed.chapters)) {
     throw new Error("data.json 格式无效");
@@ -145,6 +157,18 @@ export async function parseBackupZip(file: File, mode: "replace" | "merge" = "re
       : [],
     bibleGlossaryTerms: Array.isArray(parsed.bibleGlossaryTerms)
       ? (parsed.bibleGlossaryTerms as import("../db/types").BibleGlossaryTerm[])
+      : [],
+    workStyleCards: Array.isArray(parsed.workStyleCards)
+      ? (parsed.workStyleCards as import("../db/types").WorkStyleCard[])
+      : [],
+    inspirationFragments: Array.isArray(parsed.inspirationFragments)
+      ? (parsed.inspirationFragments as import("../db/types").InspirationFragment[])
+      : [],
+    writingPromptTemplates: Array.isArray(parsed.writingPromptTemplates)
+      ? (parsed.writingPromptTemplates as import("../db/types").WritingPromptTemplate[])
+      : [],
+    writingStyleSamples: Array.isArray(parsed.writingStyleSamples)
+      ? (parsed.writingStyleSamples as import("../db/types").WritingStyleSample[])
       : [],
   };
   if (mode === "merge") {

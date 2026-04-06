@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Button } from "../components/ui/button";
+import { cn } from "../lib/utils";
 import {
   addChapterSnapshot,
   createChapter,
@@ -12,6 +14,7 @@ import {
   getWork,
   listAllReferenceExcerpts,
   listBibleGlossaryTerms,
+  listWritingStyleSamples,
   listChapterSnapshots,
   listChapters,
   listVolumes,
@@ -19,6 +22,7 @@ import {
   upsertChapterBible,
   reorderChapters,
   searchWork,
+  isChapterSaveConflictError,
   updateChapter,
   updateVolume,
   updateWork,
@@ -32,6 +36,7 @@ import type {
   ReferenceExcerpt,
   Volume,
   Work,
+  WritingStyleSample,
 } from "../db/types";
 import { SNAPSHOT_CAP_PER_CHAPTER, SNAPSHOT_MAX_AGE_MS } from "../db/types";
 import { exportWorkAsMergedMarkdown } from "../storage/backup";
@@ -43,30 +48,38 @@ import {
 } from "../storage/export-txt-docx";
 import { addDailyWordsFromDelta, getDailyWordsToday } from "../util/dailyWords";
 import { clearDraft, readDraft, writeDraftDebounced } from "../util/draftRecovery";
+import { LAST_CHAPTER_SESSION_KEY_PREFIX } from "../util/last-chapter-session";
 import { normalizeLineEndings, readLineEndingMode } from "../util/lineEnding";
+import { formatSummaryUpdatedAt } from "../util/summary-meta";
 import { replaceAllLiteral, replaceFirstLiteral } from "../util/text-replace";
 import { wordCount } from "../util/wordCount";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
+import { isFirstAiGateCancelledError } from "../ai/client";
+import { generateChapterSummaryWithRetry } from "../ai/chapter-summary-generate";
+import { loadAiSettings } from "../ai/storage";
 import { CodeMirrorEditor, type CodeMirrorEditorHandle } from "../components/CodeMirrorEditor";
 import { AiPanel } from "../components/AiPanel";
+import { useEditorZen } from "../components/EditorZenContext";
 import { useRightRail } from "../components/RightRailContext";
 import { BibleRightPanel, RefRightPanel, SummaryRightPanel } from "../components/RightRailPanels";
 import { useTopbar } from "../components/TopbarContext";
 
-const LAST_CHAPTER_KEY = "liubai:lastChapter:";
 const SIDEBAR_KEY = "liubai:editorSidebarCollapsed";
 const CHAPTER_LIST_KEY = "liubai:chapterListCollapsed";
 const EDITOR_WIDTH_KEY = "liubai:editorMaxWidthPx";
 
 export function EditorPage() {
   const { workId } = useParams<{ workId: string }>();
+  const location = useLocation();
+  const navigate = useNavigate();
   const rightRail = useRightRail();
+  const { zenWrite, setZenWrite } = useEditorZen();
   const topbar = useTopbar();
   const [work, setWork] = useState<Work | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [content, setContent] = useState("");
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error" | "conflict">("idle");
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [findQ, setFindQ] = useState("");
@@ -107,15 +120,36 @@ export function EditorPage() {
   const [cbForbid, setCbForbid] = useState("");
   const [cbPov, setCbPov] = useState("");
   const [cbScene, setCbScene] = useState("");
+  /** §11 步 21：本章人物状态备忘（与 chapter_bible 同存） */
+  const [cbCharacterState, setCbCharacterState] = useState("");
   const [stylePov, setStylePov] = useState("");
   const [styleTone, setStyleTone] = useState("");
   const [styleBanned, setStyleBanned] = useState("");
   const [styleAnchor, setStyleAnchor] = useState("");
   const [styleExtra, setStyleExtra] = useState("");
   const [glossaryTerms, setGlossaryTerms] = useState<BibleGlossaryTerm[]>([]);
+  const [writingStyleSamples, setWritingStyleSamples] = useState<WritingStyleSample[]>([]);
+  /** 圣经「提示词」页跳转：一次性写入 AI 侧栏「额外要求」 */
+  const [aiUserHintPrefill, setAiUserHintPrefill] = useState<string | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
+  /** 递增触发 AiPanel 一次「续写」自动 run（§11 步 17） */
+  const [aiContinueRunTick, setAiContinueRunTick] = useState(0);
+  const [aiLastContinueConsumedTick, setAiLastContinueConsumedTick] = useState(0);
+  const onAiContinueRunConsumed = useCallback((tick: number) => {
+    setAiLastContinueConsumedTick(tick);
+  }, []);
+  const [aiDrawRunTick, setAiDrawRunTick] = useState(0);
+  const [aiLastDrawConsumedTick, setAiLastDrawConsumedTick] = useState(0);
+  const onAiDrawRunConsumed = useCallback((tick: number) => {
+    setAiLastDrawConsumedTick(tick);
+  }, []);
+  const onAiPrefillUserHintConsumed = useCallback(() => {
+    setAiUserHintPrefill(null);
+  }, []);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState("");
+  const [summaryAiBusy, setSummaryAiBusy] = useState(false);
+  const summaryAiAbortRef = useRef<AbortController | null>(null);
   const [editorMaxWidthPx, setEditorMaxWidthPx] = useState(() => {
     try {
       const n = Number(localStorage.getItem(EDITOR_WIDTH_KEY));
@@ -130,21 +164,88 @@ export function EditorPage() {
     return false;
   });
   const widthDragRef = useRef<null | { startX: number; startW: number }>(null);
-  const cbStateRef = useRef({ goal: "", forbid: "", pov: "", scene: "" });
+  const cbStateRef = useRef({ goal: "", forbid: "", pov: "", scene: "", characterState: "" });
   const cbSkipSaveRef = useRef(true);
   const cbReadyForChapterRef = useRef<string | null>(null);
   const lastPersistedRef = useRef<Map<string, string>>(new Map());
+  /** 与存储层 `updatedAt` 对齐，供步 25 正文保存乐观锁 */
+  const chapterServerUpdatedAtRef = useRef<Map<string, number>>(new Map());
   const persistInFlightRef = useRef(false);
   const contentRef = useRef(content);
   const activeIdRef = useRef(activeId);
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
+  /** 章切换后把焦点还给正文（§E.2.3）；全屏/模态打开时不抢焦点 */
+  useEffect(() => {
+    if (!activeId) return;
+    const t = window.requestAnimationFrame(() => {
+      const el = document.activeElement as HTMLElement | null;
+      if (el?.closest?.(".modal-overlay")) return;
+      editorRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(t);
+  }, [activeId]);
+  const sidebarBeforeZen = useRef<boolean | null>(null);
+  const chapterListBeforeZen = useRef<boolean | null>(null);
+  const sidebarCollapsedRef = useRef(sidebarCollapsed);
+  const chapterListCollapsedRef = useRef(chapterListCollapsed);
+  const zenWritePrev = useRef(false);
+  sidebarCollapsedRef.current = sidebarCollapsed;
+  chapterListCollapsedRef.current = chapterListCollapsed;
   contentRef.current = content;
   activeIdRef.current = activeId;
+
+  useEffect(() => {
+    const entered = zenWrite && !zenWritePrev.current;
+    const left = !zenWrite && zenWritePrev.current;
+    zenWritePrev.current = zenWrite;
+
+    if (entered) {
+      sidebarBeforeZen.current = sidebarCollapsedRef.current;
+      chapterListBeforeZen.current = chapterListCollapsedRef.current;
+      setSidebarCollapsed(true);
+      setChapterListCollapsed(true);
+    } else if (left) {
+      if (sidebarBeforeZen.current !== null) {
+        const v = sidebarBeforeZen.current;
+        sidebarBeforeZen.current = null;
+        setSidebarCollapsed(v);
+        try {
+          localStorage.setItem(SIDEBAR_KEY, v ? "1" : "0");
+        } catch {
+          /* ignore */
+        }
+      }
+      if (chapterListBeforeZen.current !== null) {
+        const v = chapterListBeforeZen.current;
+        chapterListBeforeZen.current = null;
+        setChapterListCollapsed(v);
+        try {
+          localStorage.setItem(CHAPTER_LIST_KEY, v ? "1" : "0");
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }, [zenWrite]);
+
+  useEffect(() => {
+    if (!zenWrite) return;
+    const id = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => editorRef.current?.focus());
+    });
+    return () => cancelAnimationFrame(id);
+  }, [zenWrite]);
 
   const activeChapter = useMemo(
     () => chapters.find((c) => c.id === activeId) ?? null,
     [chapters, activeId],
   );
+
+  useEffect(() => {
+    for (const c of chapters) {
+      chapterServerUpdatedAtRef.current.set(c.id, c.updatedAt);
+    }
+  }, [chapters]);
 
   useEffect(() => {
     if (!summaryOpen || !activeChapter) return;
@@ -172,6 +273,34 @@ export function EditorPage() {
     [inspirationList, activeId],
   );
 
+  const styleSampleSlices = useMemo(
+    () => writingStyleSamples.map((s) => ({ title: s.title, body: s.body })),
+    [writingStyleSamples],
+  );
+
+  useEffect(() => {
+    const st = location.state as { applyUserHint?: string } | null | undefined;
+    const h = st?.applyUserHint;
+    if (typeof h !== "string" || !h.trim()) return;
+    setAiUserHintPrefill(h);
+    rightRail.setActiveTab("ai");
+    rightRail.setOpen(true);
+    navigate(
+      { pathname: location.pathname, search: location.search, hash: location.hash },
+      { replace: true, state: {} },
+    );
+    // setActiveTab / setOpen 来自 context；仅依赖路由即可
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rightRail API 引用不稳定时避免重复 replace
+  }, [location.key, location.pathname, location.search, location.hash, navigate]);
+
+  /** §11 步 18：抽卡至少需正文或章节概要其一 */
+  const canAiDrawCard = useMemo(() => {
+    if (!activeChapter) return false;
+    const hasBody = content.trim().length > 0;
+    const hasSummary = (activeChapter.summary ?? "").trim().length > 0;
+    return hasBody || hasSummary;
+  }, [activeChapter, content]);
+
   // Mount AI 等面板到写作壳右侧栏（仅 EditorShell）
   useEffect(() => {
     if (!workId || !work) return;
@@ -183,13 +312,28 @@ export function EditorPage() {
           setAiOpen(false);
           rightRail.setOpen(false);
         }}
+        continueRunTick={aiContinueRunTick}
+        lastContinueConsumedTick={aiLastContinueConsumedTick}
+        onContinueRunConsumed={onAiContinueRunConsumed}
+        drawRunTick={aiDrawRunTick}
+        lastDrawConsumedTick={aiLastDrawConsumedTick}
+        onDrawRunConsumed={onAiDrawRunConsumed}
+        prefillUserHint={aiUserHintPrefill}
+        onPrefillUserHintConsumed={onAiPrefillUserHintConsumed}
         workId={workId}
         work={work}
         chapter={activeChapter}
         chapters={chapters}
         chapterContent={content}
-        chapterBible={{ goalText: cbGoal, forbidText: cbForbid, povText: cbPov, sceneStance: cbScene }}
+        chapterBible={{
+          goalText: cbGoal,
+          forbidText: cbForbid,
+          povText: cbPov,
+          sceneStance: cbScene,
+          characterStateText: cbCharacterState,
+        }}
         glossaryTerms={glossaryTerms}
+        styleSampleSlices={styleSampleSlices}
         workStyle={{
           pov: stylePov,
           tone: styleTone,
@@ -220,8 +364,12 @@ export function EditorPage() {
         workId={workId}
         work={work}
         chapter={activeChapter}
+        chapterEditorContent={content}
         chapters={chapters}
         onJumpToChapter={(id) => void switchChapter(id)}
+        onChapterPatch={(id, patch) => {
+          setChapters((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+        }}
       />,
     );
     rightRail.setTabEnabled("bible", true);
@@ -255,12 +403,21 @@ export function EditorPage() {
     cbPov,
     cbScene,
     glossaryTerms,
+    styleSampleSlices,
     stylePov,
     styleTone,
     styleBanned,
     styleAnchor,
     styleExtra,
     linkedExcerptsForChapter,
+    aiContinueRunTick,
+    aiLastContinueConsumedTick,
+    onAiContinueRunConsumed,
+    aiDrawRunTick,
+    aiLastDrawConsumedTick,
+    onAiDrawRunConsumed,
+    aiUserHintPrefill,
+    onAiPrefillUserHintConsumed,
   ]);
 
   const glossaryHits = useMemo(() => {
@@ -279,12 +436,23 @@ export function EditorPage() {
   }, [content, glossaryTerms]);
 
   useEffect(() => {
-    cbStateRef.current = { goal: cbGoal, forbid: cbForbid, pov: cbPov, scene: cbScene };
-  }, [cbGoal, cbForbid, cbPov, cbScene]);
+    cbStateRef.current = {
+      goal: cbGoal,
+      forbid: cbForbid,
+      pov: cbPov,
+      scene: cbScene,
+      characterState: cbCharacterState,
+    };
+  }, [cbGoal, cbForbid, cbPov, cbScene, cbCharacterState]);
 
   useEffect(() => {
     if (!workId) return;
     void listBibleGlossaryTerms(workId).then(setGlossaryTerms);
+  }, [workId]);
+
+  useEffect(() => {
+    if (!workId) return;
+    void listWritingStyleSamples(workId).then(setWritingStyleSamples);
   }, [workId]);
 
   useEffect(() => {
@@ -308,6 +476,7 @@ export function EditorPage() {
       setCbForbid(row?.forbidText ?? "");
       setCbPov(row?.povText ?? "");
       setCbScene(row?.sceneStance ?? "");
+      setCbCharacterState(row?.characterStateText ?? "");
       cbReadyForChapterRef.current = activeId;
       window.setTimeout(() => {
         if (activeIdRef.current === activeId) cbSkipSaveRef.current = false;
@@ -327,10 +496,11 @@ export function EditorPage() {
         forbidText: cbForbid,
         povText: cbPov,
         sceneStance: cbScene,
+        characterStateText: cbCharacterState,
       });
     }, 500);
     return () => window.clearTimeout(t);
-  }, [cbGoal, cbForbid, cbPov, cbScene, activeId, workId]);
+  }, [cbGoal, cbForbid, cbPov, cbScene, cbCharacterState, activeId, workId]);
 
   const load = useCallback(async () => {
     if (!workId) return;
@@ -353,7 +523,7 @@ export function EditorPage() {
     for (const c of list) {
       lastPersistedRef.current.set(c.id, c.content);
     }
-    const stored = sessionStorage.getItem(LAST_CHAPTER_KEY + workId);
+    const stored = sessionStorage.getItem(LAST_CHAPTER_SESSION_KEY_PREFIX + workId);
     const pick =
       (stored && list.some((c) => c.id === stored) && stored) ||
       list[0]?.id ||
@@ -400,7 +570,7 @@ export function EditorPage() {
 
   useEffect(() => {
     if (!workId || !activeId) return;
-    sessionStorage.setItem(LAST_CHAPTER_KEY + workId, activeId);
+    sessionStorage.setItem(LAST_CHAPTER_SESSION_KEY_PREFIX + workId, activeId);
   }, [workId, activeId]);
 
   useEffect(() => {
@@ -517,17 +687,102 @@ export function EditorPage() {
     };
   }, [moreOpen]);
 
+  const resolveSaveConflict = useCallback(async () => {
+    if (!workId || !activeId) return;
+    setSaveState("saving");
+    try {
+      const list = await listChapters(workId);
+      setChapters(list);
+      const c = list.find((x) => x.id === activeId);
+      if (c) {
+        setContent(c.content);
+        lastPersistedRef.current.set(c.id, c.content);
+        clearDraft(workId, c.id);
+      }
+      setSaveState("saved");
+      setLastSavedAt(Date.now());
+    } catch {
+      setSaveState("error");
+    }
+  }, [workId, activeId]);
+
+  const persistContent = useCallback(
+    async (chapterId: string, text: string) => {
+      if (!workId) return;
+      persistInFlightRef.current = true;
+      setSaveState("saving");
+      try {
+        const prev = lastPersistedRef.current.get(chapterId) ?? "";
+        addDailyWordsFromDelta(prev, text);
+        const expected = chapterServerUpdatedAtRef.current.get(chapterId);
+        await updateChapter(
+          chapterId,
+          { content: text },
+          expected !== undefined ? { expectedUpdatedAt: expected } : undefined,
+        );
+        lastPersistedRef.current.set(chapterId, text);
+        clearDraft(workId, chapterId);
+        setDailyTick((t) => t + 1);
+        const t = Date.now();
+        setChapters((prevCh) =>
+          prevCh.map((c) =>
+            c.id === chapterId
+              ? { ...c, content: text, updatedAt: t, wordCountCache: wordCount(text) }
+              : c,
+          ),
+        );
+        setSaveState("saved");
+        setLastSavedAt(t);
+      } catch (e) {
+        if (isChapterSaveConflictError(e)) setSaveState("conflict");
+        else setSaveState("error");
+      } finally {
+        persistInFlightRef.current = false;
+      }
+    },
+    [workId],
+  );
+
+  useEffect(() => {
+    if (!activeId) return;
+    const t = window.setTimeout(() => {
+      void persistContent(activeId, content);
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [content, activeId, persistContent]);
+
+  const handleManualSnapshot = useCallback(async () => {
+    if (!activeId) return;
+    await persistContent(activeId, content);
+    await addChapterSnapshot(activeId, content);
+    if (snapshotOpen) void listChapterSnapshots(activeId).then(setSnapshotList);
+  }, [activeId, content, persistContent, snapshotOpen]);
+
+  useEffect(() => {
+    function onSaveShortcut(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        void handleManualSnapshot();
+      }
+    }
+    window.addEventListener("keydown", onSaveShortcut);
+    return () => window.removeEventListener("keydown", onSaveShortcut);
+  }, [handleManualSnapshot]);
+
   // Inject write tools into global topbar
   useEffect(() => {
     if (!work) return;
     topbar.setTitleNode(
-      <>
-        <strong>写作</strong>
-        <span className="muted small"> · {work.title}</span>
-      </>,
+      <div className="editor-topbar-breadcrumb">
+        <span className="editor-topbar-bc-book muted small">{work.title}</span>
+        <span className="editor-topbar-bc-sep muted small" aria-hidden>
+          ›
+        </span>
+        <span className="editor-topbar-bc-chapter">{activeChapter?.title ?? "未选章节"}</span>
+      </div>,
     );
-    topbar.setActionsNode(
-      <div className="editor-topbar-actions">
+    topbar.setCenterNode(
+      <div className="editor-topbar-center-inner">
         <div className="editor-topbar-stats">
           <span className="muted small" title="本章字数">
             {chapterWords}
@@ -550,18 +805,43 @@ export function EditorPage() {
           {saveState === "saved" && "已保存"}
           {saveState === "idle" && ""}
           {saveState === "error" && "保存失败"}
+          {saveState === "conflict" && (
+            <>
+              保存冲突
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="save-conflict-reload"
+                onClick={() => void resolveSaveConflict()}
+              >
+                重新载入本章
+              </Button>
+            </>
+          )}
         </span>
         {lastSavedAt ? (
-          <span className="muted small" title="最后一次保存完成时间">
+          <span className="muted small editor-topbar-saved-time" title="最后一次保存完成时间">
             {new Date(lastSavedAt).toLocaleTimeString()}
           </span>
         ) : null}
-        <button type="button" className="btn small" disabled={!activeChapter} onClick={() => void handleManualSnapshot()}>
-          保存
-        </button>
-        <button
+      </div>,
+    );
+    topbar.setActionsNode(
+      <div className="editor-topbar-actions">
+        <Button
           type="button"
-          className={`btn small ${aiOpen ? "primary" : ""}`}
+          variant="outline"
+          size="sm"
+          disabled={!activeChapter}
+          onClick={() => void handleManualSnapshot()}
+        >
+          保存
+        </Button>
+        <Button
+          type="button"
+          variant={aiOpen ? "default" : "outline"}
+          size="sm"
           disabled={!activeChapter}
           onClick={() => {
             setAiOpen((v) => {
@@ -573,47 +853,111 @@ export function EditorPage() {
           }}
         >
           AI
-        </button>
-        <button type="button" className="btn small" disabled={!canWideWrite} onClick={() => setEditorAutoWidth((v) => !v)}>
-          {editorAutoWidth ? "宽度：自适应" : "宽度：自定义"}
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          className={`icon-btn editor-topbar-hide-sm ${findOpen ? "is-on" : ""}`}
+          variant="outline"
+          size="sm"
+          disabled={!activeChapter}
+          title="打开 AI 侧栏并以续写模式生成；结果在侧栏草稿框，确认后再插入正文"
+          onClick={() => {
+            setAiOpen(true);
+            rightRail.setActiveTab("ai");
+            rightRail.setOpen(true);
+            setAiContinueRunTick((n) => n + 1);
+          }}
+        >
+          续写
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!canAiDrawCard}
+          title="打开 AI 侧栏并以抽卡模式生成（仅用章节概要 +/或 前文末尾，无额外提示词）；结果在侧栏草稿"
+          onClick={() => {
+            setAiOpen(true);
+            rightRail.setActiveTab("ai");
+            rightRail.setOpen(true);
+            setAiDrawRunTick((n) => n + 1);
+          }}
+        >
+          抽卡
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          title="沉浸写作：隐藏顶栏与右栏、收起章列表；Alt+Z 切换，Esc 或右上角退出"
+          onClick={() => setZenWrite(true)}
+        >
+          沉浸
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!canWideWrite}
+          onClick={() => setEditorAutoWidth((v) => !v)}
+        >
+          {editorAutoWidth ? "宽度：自适应" : "宽度：自定义"}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className={cn("icon-btn editor-topbar-hide-sm", findOpen && "is-on")}
           title="查找 / 替换"
           onClick={() => setFindOpen((v) => !v)}
         >
           ⌕
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          className={`icon-btn editor-topbar-hide-sm ${bookSearchOpen ? "is-on" : ""}`}
+          variant="ghost"
+          size="sm"
+          className={cn("icon-btn editor-topbar-hide-sm", bookSearchOpen && "is-on")}
           title="全书搜索"
           onClick={() => (bookSearchOpen ? closeBookSearch() : openBookSearch())}
         >
           全书
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
           className="icon-btn editor-topbar-hide-sm"
           title="章节历史"
           disabled={!activeChapter}
           onClick={() => setSnapshotOpen(true)}
         >
           历史
-        </button>
+        </Button>
         <div className="toolbar-more-wrap" ref={moreWrapRef}>
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
             className="icon-btn"
             title="更多"
             aria-expanded={moreOpen}
             onClick={() => setMoreOpen((v) => !v)}
           >
             ···
-          </button>
+          </Button>
           {moreOpen ? (
             <div className="toolbar-more-menu" role="menu">
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMoreOpen(false);
+                  setZenWrite(true);
+                }}
+              >
+                沉浸写作
+              </button>
+              <div className="toolbar-menu-divider" />
               <button
                 type="button"
                 role="menuitem"
@@ -741,6 +1085,7 @@ export function EditorPage() {
     );
     return () => {
       topbar.setTitleNode(null);
+      topbar.setCenterNode(null);
       topbar.setActionsNode(null);
     };
   }, [
@@ -754,12 +1099,15 @@ export function EditorPage() {
     lastSavedAt,
     activeChapter,
     aiOpen,
+    canAiDrawCard,
     canWideWrite,
     editorAutoWidth,
     findOpen,
     bookSearchOpen,
     moreOpen,
     rightRail,
+    resolveSaveConflict,
+    setZenWrite,
   ]);
 
   useEffect(() => {
@@ -786,44 +1134,6 @@ export function EditorPage() {
     };
   }, [editorMaxWidthPx]);
 
-  const persistContent = useCallback(
-    async (chapterId: string, text: string) => {
-      if (!workId) return;
-      persistInFlightRef.current = true;
-      setSaveState("saving");
-      try {
-        const prev = lastPersistedRef.current.get(chapterId) ?? "";
-        addDailyWordsFromDelta(prev, text);
-        await updateChapter(chapterId, { content: text });
-        lastPersistedRef.current.set(chapterId, text);
-        clearDraft(workId, chapterId);
-        setDailyTick((t) => t + 1);
-        setChapters((prevCh) =>
-          prevCh.map((c) =>
-            c.id === chapterId
-              ? { ...c, content: text, updatedAt: Date.now(), wordCountCache: wordCount(text) }
-              : c,
-          ),
-        );
-        setSaveState("saved");
-        setLastSavedAt(Date.now());
-      } catch {
-        setSaveState("error");
-      } finally {
-        persistInFlightRef.current = false;
-      }
-    },
-    [workId],
-  );
-
-  useEffect(() => {
-    if (!activeId) return;
-    const t = window.setTimeout(() => {
-      void persistContent(activeId, content);
-    }, 700);
-    return () => window.clearTimeout(t);
-  }, [content, activeId, persistContent]);
-
   async function switchChapter(nextId: string) {
     if (activeId && activeId !== nextId) {
       await persistContent(activeId, content);
@@ -836,6 +1146,7 @@ export function EditorPage() {
           forbidText: cbStateRef.current.forbid,
           povText: cbStateRef.current.pov,
           sceneStance: cbStateRef.current.scene,
+          characterStateText: cbStateRef.current.characterState,
         });
       }
     }
@@ -846,24 +1157,6 @@ export function EditorPage() {
     lastPersistedRef.current.set(nextId, nextBody);
   }
 
-  const handleManualSnapshot = useCallback(async () => {
-    if (!activeId) return;
-    await persistContent(activeId, content);
-    await addChapterSnapshot(activeId, content);
-    if (snapshotOpen) void listChapterSnapshots(activeId).then(setSnapshotList);
-  }, [activeId, content, persistContent, snapshotOpen]);
-
-  useEffect(() => {
-    function onSaveShortcut(e: KeyboardEvent) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        void handleManualSnapshot();
-      }
-    }
-    window.addEventListener("keydown", onSaveShortcut);
-    return () => window.removeEventListener("keydown", onSaveShortcut);
-  }, [handleManualSnapshot]);
-
   async function handleRestoreSnapshot(snap: ChapterSnapshot) {
     if (!activeChapter || snap.chapterId !== activeChapter.id) return;
     if (!window.confirm("用此历史版本覆盖当前正文？")) return;
@@ -871,7 +1164,12 @@ export function EditorPage() {
     await addChapterSnapshot(activeChapter.id, content);
     setContent(snap.content);
     const wc = wordCount(snap.content);
-    await updateChapter(activeChapter.id, { content: snap.content });
+    const exp = chapterServerUpdatedAtRef.current.get(activeChapter.id);
+    await updateChapter(
+      activeChapter.id,
+      { content: snap.content },
+      exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
+    );
     lastPersistedRef.current.set(activeChapter.id, snap.content);
     setChapters((prev) =>
       prev.map((c) =>
@@ -985,7 +1283,13 @@ export function EditorPage() {
     if (n === null) return;
     const idx = Number.parseInt(n, 10) - 1;
     if (idx < 0 || idx >= volumes.length) return;
-    await updateChapter(chapterId, { volumeId: volumes[idx].id });
+    const ch = chapters.find((c) => c.id === chapterId);
+    const exp = ch?.updatedAt;
+    await updateChapter(
+      chapterId,
+      { volumeId: volumes[idx].id },
+      exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
+    );
     await load();
   }
 
@@ -1012,7 +1316,12 @@ export function EditorPage() {
     const ch = chapters.find((c) => c.id === id);
     const t = window.prompt("章节标题", ch?.title ?? "");
     if (t === null) return;
-    await updateChapter(id, { title: t.trim() || ch?.title });
+    const exp = ch?.updatedAt;
+    await updateChapter(
+      id,
+      { title: t.trim() || ch?.title },
+      exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
+    );
     await load();
   }
 
@@ -1141,23 +1450,25 @@ export function EditorPage() {
 
   if (loading) {
     return (
-      <div className="page editor-page">
-        <p className="muted">加载中…</p>
+      <div className="page editor-page flex min-h-[40vh] flex-col items-center justify-center px-4 py-16">
+        <p className="text-sm text-muted-foreground">加载中…</p>
       </div>
     );
   }
 
   if (!work) {
     return (
-      <div className="page editor-page">
-        <p>作品不存在。</p>
-        <Link to="/library">返回</Link>
+      <div className="page editor-page flex min-h-[40vh] flex-col items-center justify-center gap-3 px-4 py-16 text-center">
+        <p className="text-foreground">作品不存在。</p>
+        <Button asChild variant="outline" size="sm">
+          <Link to="/library">返回作品库</Link>
+        </Button>
       </div>
     );
   }
 
   return (
-    <div className="page editor-page theme-typora">
+    <div className={"page editor-page theme-typora" + (zenWrite ? " editor-page--zen" : "")}>
       <header className="editor-toolbar-lite">
         <button
           type="button"
@@ -1358,6 +1669,15 @@ export function EditorPage() {
                   placeholder="站位、持物、出口等"
                 />
               </label>
+              <label className="sidebar-bible-field">
+                <span>本章人物状态</span>
+                <textarea
+                  value={cbCharacterState}
+                  onChange={(e) => setCbCharacterState(e.target.value)}
+                  rows={3}
+                  placeholder="本章末主要人物处境、关系变化等备忘；会注入侧栏 AI 上下文"
+                />
+              </label>
             </div>
           ) : null}
           {linkedExcerptsForChapter.length > 0 && (
@@ -1505,6 +1825,7 @@ export function EditorPage() {
               ) : null}
               {activeChapter ? (
                 <CodeMirrorEditor
+                  key={activeChapter.id}
                   ref={editorRef}
                   className="editor-textarea cm6-editor"
                   value={content}
@@ -1524,7 +1845,14 @@ export function EditorPage() {
       </div>
 
       {summaryOpen && activeChapter && (
-        <div className="modal-overlay" role="presentation" onClick={() => setSummaryOpen(false)}>
+        <div
+          className="modal-overlay"
+          role="presentation"
+          onClick={() => {
+            summaryAiAbortRef.current?.abort();
+            setSummaryOpen(false);
+          }}
+        >
           <div
             className="modal-card modal-card--wide"
             role="dialog"
@@ -1532,31 +1860,122 @@ export function EditorPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 id="sum-title">章节概要 · {activeChapter.title}</h3>
-            <p className="small muted">建议用要点列事实与推进（供 AI 注入与快速回忆）。</p>
+            <p className="small muted">
+              建议用要点列事实与推进（供 AI 注入与快速回忆）。可使用「AI 生成」根据本章正文草稿生成要点，生成后会自动保存并更新时间戳。
+            </p>
+            {formatSummaryUpdatedAt(activeChapter.summaryUpdatedAt) ? (
+              <p className="small muted" style={{ marginTop: "-0.25rem" }}>
+                概要上次更新：{formatSummaryUpdatedAt(activeChapter.summaryUpdatedAt)}
+              </p>
+            ) : null}
             <textarea
               value={summaryDraft}
               onChange={(e) => setSummaryDraft(e.target.value)}
               rows={12}
               style={{ width: "100%", resize: "vertical" }}
               placeholder="例如：\n- 主角与某人达成协议…\n- 伏笔：提到某物…"
+              disabled={summaryAiBusy}
             />
             <div className="modal-actions">
               <button
                 type="button"
+                className="btn"
+                disabled={summaryAiBusy}
+                onClick={() => {
+                  summaryAiAbortRef.current?.abort();
+                  const ac = new AbortController();
+                  summaryAiAbortRef.current = ac;
+                  void (async () => {
+                    setSummaryAiBusy(true);
+                    try {
+                      const text = await generateChapterSummaryWithRetry({
+                        workTitle: work?.title ?? "未命名作品",
+                        chapterTitle: activeChapter.title,
+                        chapterContent: content,
+                        settings: loadAiSettings(),
+                        signal: ac.signal,
+                      });
+                      setSummaryDraft(text);
+                      const exp = chapterServerUpdatedAtRef.current.get(activeChapter.id);
+                      const t = Date.now();
+                      await updateChapter(
+                        activeChapter.id,
+                        { summary: text, summaryUpdatedAt: t },
+                        exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
+                      );
+                      setChapters((prev) =>
+                        prev.map((c) =>
+                          c.id === activeChapter.id
+                            ? { ...c, summary: text, summaryUpdatedAt: t, updatedAt: t }
+                            : c,
+                        ),
+                      );
+                    } catch (e) {
+                      if (isFirstAiGateCancelledError(e)) return;
+                      if (e instanceof DOMException && e.name === "AbortError") return;
+                      window.alert(e instanceof Error ? e.message : "生成失败");
+                    } finally {
+                      setSummaryAiBusy(false);
+                      summaryAiAbortRef.current = null;
+                    }
+                  })();
+                }}
+              >
+                {summaryAiBusy ? "生成中…" : "AI 生成概要"}
+              </button>
+              {summaryAiBusy ? (
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => {
+                    summaryAiAbortRef.current?.abort();
+                    setSummaryAiBusy(false);
+                  }}
+                >
+                  取消生成
+                </button>
+              ) : null}
+              <button
+                type="button"
                 className="btn primary"
+                disabled={summaryAiBusy}
                 onClick={() => {
                   void (async () => {
-                    await updateChapter(activeChapter.id, { summary: summaryDraft });
-                    setChapters((prev) =>
-                      prev.map((c) => (c.id === activeChapter.id ? { ...c, summary: summaryDraft } : c)),
-                    );
-                    setSummaryOpen(false);
+                    try {
+                      const exp = chapterServerUpdatedAtRef.current.get(activeChapter.id);
+                      const t = Date.now();
+                      await updateChapter(
+                        activeChapter.id,
+                        { summary: summaryDraft, summaryUpdatedAt: t },
+                        exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
+                      );
+                      setChapters((prev) =>
+                        prev.map((c) =>
+                          c.id === activeChapter.id
+                            ? { ...c, summary: summaryDraft, summaryUpdatedAt: t, updatedAt: t }
+                            : c,
+                        ),
+                      );
+                      setSummaryOpen(false);
+                    } catch (e) {
+                      if (isChapterSaveConflictError(e)) {
+                        window.alert("概要保存冲突：请关闭弹窗后「重新载入本章」再试。");
+                      }
+                    }
                   })();
                 }}
               >
                 保存概要
               </button>
-              <button type="button" className="btn ghost" onClick={() => setSummaryOpen(false)}>
+              <button
+                type="button"
+                className="btn ghost"
+                disabled={summaryAiBusy}
+                onClick={() => {
+                  summaryAiAbortRef.current?.abort();
+                  setSummaryOpen(false);
+                }}
+              >
                 关闭
               </button>
             </div>

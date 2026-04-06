@@ -13,6 +13,13 @@ import {
   HelpCircle,
   LogOut,
   ChevronDown,
+  BookOpen,
+  FileText,
+  ChevronRight,
+  Sparkles,
+  AlertTriangle,
+  X,
+  Check,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import {
@@ -22,11 +29,49 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+
+// 当前作品上下文类型
+interface CurrentWorkContext {
+  workId: string
+  workTitle: string
+  currentChapterId?: string
+  currentChapterTitle?: string
+  currentChapterNumber?: number
+  totalChapters?: number
+  lastEditedAt?: Date
+  wordCount?: number
+  tags?: string[]
+}
 
 interface AppShellProps {
   activeModule: string
   onModuleChange: (module: string) => void
   children: React.ReactNode
+  currentWork?: CurrentWorkContext
+  onWorkChange?: (workId: string | null) => void
+}
+
+// 模拟当前作品数据
+const mockCurrentWork: CurrentWorkContext = {
+  workId: "work-1",
+  workTitle: "星辰变",
+  currentChapterId: "ch-15",
+  currentChapterTitle: "第十五章：突破瓶颈",
+  currentChapterNumber: 15,
+  totalChapters: 42,
+  lastEditedAt: new Date(),
+  wordCount: 156800,
+  tags: ["玄幻", "升级", "热血"],
 }
 
 const modules = [
@@ -39,8 +84,17 @@ const modules = [
   { id: "cangjing", label: "藏经", description: "参考书库", shortcut: "7" },
 ]
 
-export function AppShell({ activeModule, onModuleChange, children }: AppShellProps) {
+export function AppShell({ 
+  activeModule, 
+  onModuleChange, 
+  children,
+  currentWork = mockCurrentWork,
+  onWorkChange,
+}: AppShellProps) {
   const [showSearch, setShowSearch] = useState(false)
+  const [showAIDeclaration, setShowAIDeclaration] = useState(false)
+  const [aiDeclarationAccepted, setAiDeclarationAccepted] = useState(false)
+  const [hasAcceptedDeclaration, setHasAcceptedDeclaration] = useState(false)
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
@@ -60,6 +114,85 @@ export function AppShell({ activeModule, onModuleChange, children }: AppShellPro
               </span>
             </div>
           </div>
+
+          {/* Current Work Context Button - 当前作品上下文（可隐藏弹窗） */}
+          {currentWork && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="mr-2 flex h-8 w-8 items-center justify-center rounded-lg border border-primary/30 bg-primary/5 transition-colors hover:bg-primary/10">
+                  <BookOpen className="h-4 w-4 text-primary" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-80 p-0">
+                {/* 作品信息头部 */}
+                <div className="border-b border-border/50 bg-muted/30 p-4">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="font-semibold text-foreground">{currentWork.workTitle}</h4>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        第{currentWork.currentChapterNumber}章 · {currentWork.currentChapterTitle}
+                      </p>
+                    </div>
+                    <div className="flex gap-1">
+                      {currentWork.tags?.slice(0, 2).map((tag) => (
+                        <span
+                          key={tag}
+                          className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  {/* 统计信息 */}
+                  <div className="mt-3 grid grid-cols-3 gap-3">
+                    <div className="rounded-lg bg-background/60 p-2 text-center">
+                      <p className="text-lg font-semibold text-foreground">{currentWork.totalChapters}</p>
+                      <p className="text-[10px] text-muted-foreground">总章节</p>
+                    </div>
+                    <div className="rounded-lg bg-background/60 p-2 text-center">
+                      <p className="text-lg font-semibold text-foreground">{((currentWork.wordCount || 0) / 10000).toFixed(1)}万</p>
+                      <p className="text-[10px] text-muted-foreground">总字数</p>
+                    </div>
+                    <div className="rounded-lg bg-background/60 p-2 text-center">
+                      <p className="text-lg font-semibold text-foreground">{currentWork.currentChapterNumber}</p>
+                      <p className="text-[10px] text-muted-foreground">当前章</p>
+                    </div>
+                  </div>
+                </div>
+                
+                {/* 快捷操作 */}
+                <div className="p-2">
+                  <DropdownMenuItem onClick={() => onModuleChange("luobi")} className="gap-2 rounded-lg">
+                    <FileText className="h-4 w-4 text-primary" />
+                    <div className="flex-1">
+                      <p className="font-medium">继续编辑</p>
+                      <p className="text-xs text-muted-foreground">打开落笔模块</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onModuleChange("tuiyan")} className="gap-2 rounded-lg">
+                    <Sparkles className="h-4 w-4 text-amber-500" />
+                    <div className="flex-1">
+                      <p className="font-medium">查看大纲</p>
+                      <p className="text-xs text-muted-foreground">打开推演模块</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => onModuleChange("liubai")} className="gap-2 rounded-lg">
+                    <BookOpen className="h-4 w-4 text-muted-foreground" />
+                    <div className="flex-1">
+                      <p className="font-medium">切换作品</p>
+                      <p className="text-xs text-muted-foreground">返回作品库</p>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                  </DropdownMenuItem>
+                </div>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
 
           {/* Navigation Modules */}
           <nav className="flex flex-1 items-center gap-0.5">
@@ -128,7 +261,7 @@ export function AppShell({ activeModule, onModuleChange, children }: AppShellPro
                   <User className="mr-2 h-4 w-4" />
                   个人资料
                 </DropdownMenuItem>
-                <DropdownMenuItem>
+                <DropdownMenuItem onClick={() => onModuleChange("settings")}>
                   <Settings className="mr-2 h-4 w-4" />
                   设置
                 </DropdownMenuItem>
@@ -189,6 +322,110 @@ export function AppShell({ activeModule, onModuleChange, children }: AppShellPro
           </div>
         </div>
       )}
+
+      {/* AI Declaration Dialog - 虚构创作声明 */}
+      <Dialog open={showAIDeclaration} onOpenChange={setShowAIDeclaration}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+              <Sparkles className="h-6 w-6 text-primary" />
+            </div>
+            <DialogTitle className="text-center text-xl">AI 辅助创作声明</DialogTitle>
+            <DialogDescription className="text-center">
+              ��使用 AI 功能前，请阅读并确认以下内容
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-4">
+            {/* 核心声明 */}
+            <div className="rounded-lg border border-border/50 bg-muted/30 p-4">
+              <h4 className="mb-2 flex items-center gap-2 font-medium text-foreground">
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                虚构创作说明
+              </h4>
+              <ul className="space-y-2 text-sm text-muted-foreground">
+                <li className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground" />
+                  <span>AI 生成的内容仅供<strong className="text-foreground">虚构创作</strong>参考，不代表任何真实事件或观点</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground" />
+                  <span>创作内容应遵守法律法规，<strong className="text-foreground">不鼓励任何现实伤害行为</strong></span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground" />
+                  <span>AI 可能产生不准确或不当内容，<strong className="text-foreground">最终内容由您审核负责</strong></span>
+                </li>
+              </ul>
+            </div>
+
+            {/* 数据说明 */}
+            <div className="rounded-lg border border-border/50 bg-muted/30 p-4">
+              <h4 className="mb-2 flex items-center gap-2 font-medium text-foreground">
+                <FileText className="h-4 w-4 text-primary" />
+                数据使用说明
+              </h4>
+              <ul className="space-y-2 text-sm text-muted-foreground">
+                <li className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground" />
+                  <span>您的作品内容将按需发送至 AI 服务商处理</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground" />
+                  <span>「藏经」参考书库内容<strong className="text-foreground">仅存储在本地</strong>，不会上传至云端</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground" />
+                  <span>详细的数据政策请查阅<a href="#" className="text-primary hover:underline">隐私政策</a></span>
+                </li>
+              </ul>
+            </div>
+
+            {/* 同人/二创提示 */}
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+              <h4 className="mb-2 flex items-center gap-2 font-medium text-amber-600 dark:text-amber-400">
+                <AlertTriangle className="h-4 w-4" />
+                同人/二创创作提示
+              </h4>
+              <p className="text-sm text-muted-foreground">
+                若您的创作涉及同人或二次创作，请确保遵守原作品的版权规定和发布平台的相关规则。
+                <strong className="text-foreground">版权与平台规则合规由创作者自行负责</strong>。
+              </p>
+            </div>
+
+            {/* 确认勾选 */}
+            <div className="flex items-start gap-3 rounded-lg border border-border/50 p-4">
+              <Checkbox
+                id="ai-declaration"
+                checked={aiDeclarationAccepted}
+                onCheckedChange={(checked) => setAiDeclarationAccepted(checked === true)}
+              />
+              <label htmlFor="ai-declaration" className="text-sm text-foreground">
+                我已阅读并理解上述内容，同意在遵守相关规定的前提下使用 AI 辅助创作功能
+              </label>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="outline"
+              onClick={() => setShowAIDeclaration(false)}
+            >
+              稍后再说
+            </Button>
+            <Button
+              disabled={!aiDeclarationAccepted}
+              onClick={() => {
+                setHasAcceptedDeclaration(true)
+                setShowAIDeclaration(false)
+              }}
+            >
+              <Check className="mr-2 h-4 w-4" />
+              确认并继续
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

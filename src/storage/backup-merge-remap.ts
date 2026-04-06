@@ -8,6 +8,7 @@ import type {
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  InspirationFragment,
   ReferenceChapterHead,
   ReferenceExcerpt,
   ReferenceExcerptTag,
@@ -16,7 +17,10 @@ import type {
   Volume,
   Work,
   WorkStyleCard,
+  WritingPromptTemplate,
+  WritingStyleSample,
 } from "../db/types";
+import { normalizeWorkTagList } from "../util/work-tags";
 import { normalizeImportRows } from "./import-normalize";
 
 export type MergeRemapResult = {
@@ -38,6 +42,9 @@ export type MergeRemapResult = {
   newChapterBible: ChapterBible[];
   newBibleGloss: BibleGlossaryTerm[];
   newStyleCards: WorkStyleCard[];
+  newInspirationFragments: InspirationFragment[];
+  newWritingPromptTemplates: WritingPromptTemplate[];
+  newWritingStyleSamples: WritingStyleSample[];
 };
 
 /**
@@ -64,6 +71,9 @@ export function remapImportMergePayload(
     chapterBible?: ChapterBible[];
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
+    inspirationFragments?: InspirationFragment[];
+    writingPromptTemplates?: WritingPromptTemplate[];
+    writingStyleSamples?: WritingStyleSample[];
   },
   now: () => number,
 ): MergeRemapResult {
@@ -82,6 +92,9 @@ export function remapImportMergePayload(
   const chapterBibleIn = data.chapterBible ?? [];
   const bibleGlossIn = data.bibleGlossaryTerms ?? [];
   const styleIn = data.workStyleCards ?? [];
+  const inspirationIn = data.inspirationFragments ?? [];
+  const writingPromptTplIn = data.writingPromptTemplates ?? [];
+  const writingStyleSamplesIn = data.writingStyleSamples ?? [];
 
   const workMap = new Map<string, string>();
   const volumeMap = new Map<string, string>();
@@ -254,6 +267,7 @@ export function remapImportMergePayload(
       id: crypto.randomUUID(),
       workId: nw,
       chapterId: nc,
+      characterStateText: c.characterStateText ?? "",
     });
   }
   const newBibleGloss: BibleGlossaryTerm[] = [];
@@ -281,6 +295,67 @@ export function remapImportMergePayload(
     });
   }
 
+  const newWritingPromptTemplates: WritingPromptTemplate[] = [];
+  for (const p of writingPromptTplIn) {
+    const nw = workMap.get(p.workId);
+    if (!nw) continue;
+    newWritingPromptTemplates.push({
+      ...p,
+      id: crypto.randomUUID(),
+      workId: nw,
+      category: (p.category ?? "").trim(),
+      title: (p.title ?? "").trim() || "未命名模板",
+      body: p.body ?? "",
+      sortOrder: p.sortOrder ?? 0,
+      createdAt: p.createdAt ?? now(),
+      updatedAt: p.updatedAt ?? now(),
+    });
+  }
+
+  const newWritingStyleSamples: WritingStyleSample[] = [];
+  for (const s of writingStyleSamplesIn) {
+    const nw = workMap.get(s.workId);
+    if (!nw) continue;
+    newWritingStyleSamples.push({
+      ...s,
+      id: crypto.randomUUID(),
+      workId: nw,
+      title: (s.title ?? "").trim() || "未命名样本",
+      body: s.body ?? "",
+      sortOrder: s.sortOrder ?? 0,
+      createdAt: s.createdAt ?? now(),
+      updatedAt: s.updatedAt ?? now(),
+    });
+  }
+
+  const newInspirationFragments: InspirationFragment[] = [];
+  for (const f of inspirationIn) {
+    const tags = normalizeWorkTagList(f.tags) ?? [];
+    if (f.workId) {
+      const nw = workMap.get(f.workId);
+      if (!nw) continue;
+      newInspirationFragments.push({
+        ...f,
+        id: crypto.randomUUID(),
+        workId: nw,
+        tags,
+        body: f.body ?? "",
+        createdAt: f.createdAt ?? now(),
+        updatedAt: f.updatedAt ?? now(),
+      });
+    } else {
+      newInspirationFragments.push({
+        ...f,
+        id: crypto.randomUUID(),
+        workId: null,
+        tags,
+        body: f.body ?? "",
+        createdAt: f.createdAt ?? now(),
+        updatedAt: f.updatedAt ?? now(),
+      });
+    }
+  }
+
   return {
     newWorks,
     newVolumes,
@@ -300,5 +375,8 @@ export function remapImportMergePayload(
     newChapterBible,
     newBibleGloss,
     newStyleCards,
+    newInspirationFragments,
+    newWritingPromptTemplates,
+    newWritingStyleSamples,
   };
 }

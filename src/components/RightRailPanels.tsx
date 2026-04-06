@@ -1,24 +1,32 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Chapter, ReferenceExcerpt, Work } from "../db/types";
-import { exportBibleMarkdown, updateChapter } from "../db/repo";
+import { isFirstAiGateCancelledError } from "../ai/client";
+import { generateChapterSummaryWithRetry } from "../ai/chapter-summary-generate";
+import { loadAiSettings } from "../ai/storage";
+import { exportBibleMarkdown, isChapterSaveConflictError, updateChapter } from "../db/repo";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
+import { formatSummaryUpdatedAt } from "../util/summary-meta";
 
 export function SummaryRightPanel(props: {
   workId: string;
   work: Work;
   chapter: Chapter | null;
+  /** 当前章在编辑器中的正文（与列表缓存同步，供 AI 概要生成） */
+  chapterEditorContent?: string;
   chapters: Chapter[];
   onJumpToChapter: (chapterId: string) => void;
+  /** 概要保存成功后合并进父级 `chapters`，以同步 `updatedAt`（步 25 乐观锁） */
+  onChapterPatch?: (chapterId: string, patch: Partial<Chapter>) => void;
 }) {
   const [saving, setSaving] = useState(false);
+  const [summaryAiBusy, setSummaryAiBusy] = useState(false);
   const [draft, setDraft] = useState("");
 
   const curId = props.chapter?.id ?? "";
-  useMemo(() => {
+  useEffect(() => {
     setDraft(props.chapter?.summary ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curId]);
+  }, [curId, props.chapter?.summary]);
 
   const recent = useMemo(() => {
     if (!props.chapter) return [];
@@ -53,12 +61,84 @@ export function SummaryRightPanel(props: {
               onBlur={() => {
                 if (!props.chapter) return;
                 const next = draft;
+                const exp = props.chapter.updatedAt;
                 setSaving(true);
-                void updateChapter(props.chapter.id, { summary: next }).finally(() => setSaving(false));
+                void (async () => {
+                  try {
+                    const t = Date.now();
+                    await updateChapter(
+                      props.chapter!.id,
+                      { summary: next, summaryUpdatedAt: t },
+                      { expectedUpdatedAt: exp },
+                    );
+                    props.onChapterPatch?.(props.chapter!.id, {
+                      summary: next,
+                      updatedAt: t,
+                      summaryUpdatedAt: t,
+                    });
+                  } catch (e) {
+                    if (isChapterSaveConflictError(e)) {
+                      window.alert("概要保存冲突：本章已在其它窗口更新。请打开章节概要总览或切换章节后重试。");
+                    }
+                  } finally {
+                    setSaving(false);
+                  }
+                })();
               }}
             />
+            <div className="rr-panel-row" style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <button
+                type="button"
+                className="btn small"
+                disabled={summaryAiBusy || saving}
+                onClick={() => {
+                  if (!props.chapter) return;
+                  const body = (props.chapterEditorContent ?? props.chapter.content ?? "").trim();
+                  if (!body) {
+                    window.alert("本章暂无正文，请先撰写后再生成概要。");
+                    return;
+                  }
+                  void (async () => {
+                    setSummaryAiBusy(true);
+                    try {
+                      const text = await generateChapterSummaryWithRetry({
+                        workTitle: props.work.title,
+                        chapterTitle: props.chapter!.title,
+                        chapterContent: body,
+                        settings: loadAiSettings(),
+                      });
+                      const t = Date.now();
+                      const exp = props.chapter!.updatedAt;
+                      await updateChapter(
+                        props.chapter!.id,
+                        { summary: text, summaryUpdatedAt: t },
+                        { expectedUpdatedAt: exp },
+                      );
+                      setDraft(text);
+                      props.onChapterPatch?.(props.chapter!.id, {
+                        summary: text,
+                        updatedAt: t,
+                        summaryUpdatedAt: t,
+                      });
+                    } catch (e) {
+                      if (isFirstAiGateCancelledError(e)) return;
+                      window.alert(e instanceof Error ? e.message : "生成失败");
+                    } finally {
+                      setSummaryAiBusy(false);
+                    }
+                  })();
+                }}
+              >
+                {summaryAiBusy ? "生成中…" : "AI 生成概要"}
+              </button>
+            </div>
             <div className="muted small" style={{ marginTop: 6 }}>
               {saving ? "保存中…" : "失焦自动保存"}
+              {formatSummaryUpdatedAt(props.chapter.summaryUpdatedAt) ? (
+                <span style={{ display: "block", marginTop: 4 }}>
+                  概要更新：{formatSummaryUpdatedAt(props.chapter.summaryUpdatedAt)}
+                </span>
+              ) : null}
             </div>
           </>
         ) : (

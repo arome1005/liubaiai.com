@@ -34,6 +34,11 @@ export function defaultAiSettings(): AiSettings {
     maxContextChars: 24000,
     // 各云端模型共用；与弹窗「神思」及字数消耗星级联动；默认落在 0.1–0.7 档（三颗星）
     geminiTemperature: 0.7,
+    injectApproxTokenThreshold: 12_000,
+    injectConfirmOnOversizeTokens: true,
+    injectConfirmCloudBible: true,
+    toneDriftHintEnabled: true,
+    aiSessionApproxTokenBudget: 0,
   };
 }
 
@@ -76,6 +81,28 @@ export function loadAiSettings(): AiSettings {
         typeof (parsed as any).geminiTemperature === "number" && Number.isFinite((parsed as any).geminiTemperature)
           ? Math.max(0.1, Math.min(2.0, (parsed as any).geminiTemperature))
           : d.geminiTemperature,
+      injectApproxTokenThreshold:
+        typeof (parsed as any).injectApproxTokenThreshold === "number" &&
+        Number.isFinite((parsed as any).injectApproxTokenThreshold)
+          ? Math.max(0, Math.min(500_000, Math.floor((parsed as any).injectApproxTokenThreshold)))
+          : d.injectApproxTokenThreshold,
+      injectConfirmOnOversizeTokens:
+        typeof (parsed as any).injectConfirmOnOversizeTokens === "boolean"
+          ? (parsed as any).injectConfirmOnOversizeTokens
+          : d.injectConfirmOnOversizeTokens,
+      injectConfirmCloudBible:
+        typeof (parsed as any).injectConfirmCloudBible === "boolean"
+          ? (parsed as any).injectConfirmCloudBible
+          : d.injectConfirmCloudBible,
+      toneDriftHintEnabled:
+        typeof (parsed as any).toneDriftHintEnabled === "boolean"
+          ? (parsed as any).toneDriftHintEnabled
+          : d.toneDriftHintEnabled,
+      aiSessionApproxTokenBudget:
+        typeof (parsed as any).aiSessionApproxTokenBudget === "number" &&
+        Number.isFinite((parsed as any).aiSessionApproxTokenBudget)
+          ? Math.max(0, Math.min(2_000_000, Math.floor((parsed as any).aiSessionApproxTokenBudget)))
+          : d.aiSessionApproxTokenBudget,
     };
   } catch {
     return defaultAiSettings();

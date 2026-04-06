@@ -2,10 +2,21 @@ import { Link } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { authMe, type AuthUser } from "../api/auth";
 import { postTestSave } from "../api/testSave";
-import { listWorks } from "../db/repo";
+import { Button } from "../components/ui/button";
+import { Card, CardContent } from "../components/ui/card";
+import { getWork, listWorks } from "../db/repo";
 import type { Work } from "../db/types";
+import { formatRelativeUpdateMs } from "../util/relativeTime";
+import { liuguangQuickCaptureShortcutLabel } from "../util/keyboardHints";
 
 const LS_LAST_WORK = "liubai:lastWorkId";
+
+type HubModule = {
+  to: string;
+  label: string;
+  hint: string;
+  desc: string;
+};
 
 export function HomePage() {
   const [cloudUser, setCloudUser] = useState<AuthUser | null | undefined>(undefined);
@@ -19,6 +30,8 @@ export function HomePage() {
       return null;
     }
   });
+  const [resumeWork, setResumeWork] = useState<Work | null>(null);
+  const [lastWorkResolved, setLastWorkResolved] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -46,44 +59,124 @@ export function HomePage() {
     };
   }, []);
 
-  const featureLinks = useMemo(() => {
-    const plotTo = lastWorkId ? `/work/${lastWorkId}/bible` : "/library";
-    return [
-      { to: "/library", label: "留白" },
-      { to: "/logic", label: "推演" },
-      { to: "/inspiration", label: "流光" },
-      { to: "/chat", label: "问策" },
-      { to: plotTo, label: "落笔" },
-      { to: "/sheng-hui", label: "生辉" },
-      { to: "/reference", label: "藏经" },
-    ];
+  useEffect(() => {
+    if (!lastWorkId) {
+      setResumeWork(null);
+      setLastWorkResolved(true);
+      return;
+    }
+    setLastWorkResolved(false);
+    let cancelled = false;
+    void getWork(lastWorkId).then((w) => {
+      if (cancelled) return;
+      setResumeWork(w ?? null);
+      setLastWorkResolved(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [lastWorkId]);
+
+  const hubModules: HubModule[] = useMemo(() => {
+    const staleRecord = Boolean(lastWorkId && lastWorkResolved && !resumeWork);
+    const plotTo = staleRecord
+      ? "/library"
+      : resumeWork
+        ? `/work/${resumeWork.id}/bible`
+        : lastWorkId
+          ? `/work/${lastWorkId}/bible`
+          : "/library";
+    const plotDesc = staleRecord
+      ? "上次记录的作品已不存在，请从作品库重新打开。"
+      : resumeWork
+        ? "当前作品的创作圣经与设定。"
+        : lastWorkId
+          ? "正在确认上次作品…"
+          : "请先在作品库打开或创建作品。";
+    return [
+      { to: "/library", label: "留白", hint: "1", desc: "作品库：新建、导入、封面与留白标签。" },
+      { to: "/logic", label: "推演", hint: "2", desc: "情节与结构推演（能力按路线图迭代）。" },
+      {
+        to: "/inspiration",
+        label: "流光",
+        hint: "3",
+        desc: `灵感与素材；${liuguangQuickCaptureShortcutLabel()} 速记、AI 扩容、转入章节。`,
+      },
+      { to: "/chat", label: "问策", hint: "4", desc: "对话与策问。" },
+      {
+        to: plotTo,
+        label: "落笔",
+        hint: "5",
+        desc: plotDesc,
+      },
+      { to: "/sheng-hui", label: "生辉", hint: "6", desc: "润色与生成相关能力。" },
+      { to: "/reference", label: "藏经", hint: "7", desc: "摘录、标签与检索。" },
+    ];
+  }, [lastWorkId, lastWorkResolved, resumeWork]);
+
+  function persistLastWork(id: string) {
+    try {
+      localStorage.setItem(LS_LAST_WORK, id);
+      setLastWorkId(id);
+    } catch {
+      /* ignore */
+    }
+  }
 
   return (
     <div className="page home-page">
-      <section className="home-hero">
+      <section className="home-hero rounded-xl border border-border/40 bg-card/30 px-4 py-6 sm:px-8 sm:py-8">
         <h1 className="home-title">留白写作</h1>
         <p className="home-sub muted">以空白起笔，让故事在安静里生长。</p>
+        <p className="home-hero-hint muted small">下方模块与顶栏顺序、快捷键提示 1～7 一致。</p>
         <div className="home-hero-actions">
-          <Link to="/library" className="btn primary">
-            进入作品库
-          </Link>
-          <Link to="/reference" className="btn ghost">
-            打开藏经
-          </Link>
+          <Button asChild variant="default">
+            <Link to="/library">进入作品库</Link>
+          </Button>
+          <Button asChild variant="ghost">
+            <Link to="/reference">打开藏经</Link>
+          </Button>
+          <Button asChild variant="ghost">
+            <Link to="/settings">设置</Link>
+          </Button>
         </div>
       </section>
 
+      {resumeWork ? (
+        <section className="home-section home-resume mt-6" aria-labelledby="home-resume-heading">
+          <h2 id="home-resume-heading" className="home-section-title">
+            继续创作
+          </h2>
+          <p className="muted small home-resume-lead">
+            上次打开的作品：<strong>{resumeWork.title}</strong>。与顶栏右侧「最近 · 书名」共用同一记录。
+          </p>
+          <div className="home-resume-actions">
+            <Button asChild variant="default">
+              <Link to={`/work/${resumeWork.id}`}>进入写作</Link>
+            </Button>
+            <Button asChild variant="ghost" size="sm">
+              <Link to={`/work/${resumeWork.id}/summary`}>概要</Link>
+            </Button>
+            <Button asChild variant="ghost" size="sm">
+              <Link to={`/work/${resumeWork.id}/bible`}>圣经</Link>
+            </Button>
+            <Button asChild variant="ghost" size="sm">
+              <Link to="/library">作品库</Link>
+            </Button>
+          </div>
+        </section>
+      ) : null}
+
       {cloudUser ? (
-        <section className="home-section">
+        <section className="home-section mt-6 rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6">
           <h2 className="home-section-title">云端同步测试</h2>
           <p className="muted small" style={{ marginTop: 0 }}>
             已登录为 <strong>{cloudUser.email}</strong>。点击下方按钮向服务器写入一条测试记录（需后端已启动）。
           </p>
           <div className="home-hero-actions">
-            <button
+            <Button
               type="button"
-              className="btn primary"
+              variant="default"
               disabled={syncBusy}
               onClick={() => {
                 setSyncMsg(null);
@@ -104,26 +197,42 @@ export function HomePage() {
               }}
             >
               {syncBusy ? "提交中…" : "同步测试"}
-            </button>
+            </Button>
           </div>
           {syncMsg ? <p className="muted small home-sync-msg">{syncMsg}</p> : null}
         </section>
       ) : null}
 
-      <section className="home-section">
-        <h2 className="home-section-title">快捷入口</h2>
-        <ul className="home-feature-grid">
-          {featureLinks.map((f) => (
-            <li key={f.label}>
-              <Link to={f.to} className="home-feature-card">
-                <span className="home-feature-label">{f.label}</span>
-              </Link>
+      <section
+        className="home-section mt-6 rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6"
+        aria-labelledby="home-modules-heading"
+      >
+        <h2 id="home-modules-heading" className="home-section-title">
+          模块入口
+        </h2>
+        <p className="muted small home-modules-intro">与主导航同一套路由，从首页也可直达。</p>
+        <ul className="home-hub-grid">
+          {hubModules.map((m) => (
+            <li key={m.label}>
+              <Card className="h-full gap-0 overflow-hidden border-border py-0 shadow-sm">
+                <CardContent className="p-0">
+                  <Link to={m.to} className="home-hub-card home-hub-card--flat">
+                    <div className="home-hub-card-top">
+                      <span className="home-hub-card-kbd" aria-hidden>
+                        {m.hint}
+                      </span>
+                      <span className="home-hub-card-label">{m.label}</span>
+                    </div>
+                    <p className="home-hub-card-desc">{m.desc}</p>
+                  </Link>
+                </CardContent>
+              </Card>
             </li>
           ))}
         </ul>
       </section>
 
-      <section className="home-section">
+      <section className="home-section mt-6 rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6">
         <div className="home-section-head">
           <h2 className="home-section-title">最近作品</h2>
           <Link to="/library" className="muted small">
@@ -139,17 +248,10 @@ export function HomePage() {
                 <Link
                   to={`/work/${w.id}`}
                   className="home-recent-card"
-                  onClick={() => {
-                    try {
-                      localStorage.setItem(LS_LAST_WORK, w.id);
-                      setLastWorkId(w.id);
-                    } catch {
-                      /* ignore */
-                    }
-                  }}
+                  onClick={() => persistLastWork(w.id)}
                 >
                   <span className="home-recent-title">{w.title}</span>
-                  <span className="muted small">更新 {new Date(w.updatedAt).toLocaleString()}</span>
+                  <span className="muted small home-recent-time">{formatRelativeUpdateMs(w.updatedAt)}</span>
                 </Link>
               </li>
             ))}
@@ -161,6 +263,8 @@ export function HomePage() {
         <Link to="/privacy">隐私</Link>
         <span aria-hidden> · </span>
         <Link to="/terms">协议</Link>
+        <span aria-hidden> · </span>
+        <Link to="/settings">设置</Link>
       </footer>
     </div>
   );

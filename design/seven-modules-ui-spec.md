@@ -2,7 +2,8 @@
 
 > **说明**：「七大功能区」= 顶栏 `app-masthead-center` 内 **留白 · 推演 · 流光 · 问策 · 落笔 · 生辉 · 藏经**。**设置** 在右侧齿轮，独立一档。  
 > **路由真源**：`src/App.tsx`。**壳与导航真源**：`src/components/AppShell.tsx`。**主题变量真源**：`src/index.css` `:root` + `:root[data-theme="dark"]`，逻辑在 `src/theme.ts`。  
-> **样式列**：下列数值为 **当前实现**；你大改视觉时只需替换 token / class，不必改本文「业务参数」列。
+> **样式列**：下列数值为 **当前实现**；你大改视觉时只需替换 token / class，不必改本文「业务参数」列。  
+> **高保真参考（v2.0）**：`design/v0-ui-reference/` + `design/v0-ui-reference/docs/ui-design-specification.md`（Next 子工程，渐进迁入 `src/`）。
 
 ---
 

@@ -68,6 +68,22 @@ export type AiSettings = {
   maxContextChars: number;
   /** 云端写作温度 0.1–2.0（各云端 API 的 temperature；观云弹窗内称「神思」） */
   geminiTemperature: number;
+  /**
+   * 侧栏预计注入粗估 token 超过该值时可要求确认（0=不按阈值触发「超量」确认）。
+   * 与 `injectConfirmOnOversizeTokens` 联用；见 `resolveInjectionConfirmPrompt`。
+   */
+  injectApproxTokenThreshold: number;
+  /** 粗估 tokens 超过阈值时，调用前是否 `window.confirm` */
+  injectConfirmOnOversizeTokens: boolean;
+  /** 向云端发送创作圣经（全文导出）前是否始终确认（高危） */
+  injectConfirmCloudBible: boolean;
+  /** §11 步 47：侧栏草稿与风格卡比对后展示轻量提示（禁用套话命中、句长对比） */
+  toneDriftHintEnabled: boolean;
+  /**
+   * §11 步 48：本会话（当前标签页）侧栏累计粗估 tokens 上限；0=不限制。
+   * 计入单次请求的 messages 与当次模型输出（粗估，非计费凭证）。
+   */
+  aiSessionApproxTokenBudget: number;
 };
 
 export type AiChatMessage = {

@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
+import { cn } from "../lib/utils";
+import { Dialog, DialogContent } from "./ui/dialog";
 import type { AiProviderId, AiProviderConfig, AiSettings } from "../ai/types";
 import { getProviderConfig, patchProviderConfig } from "../ai/storage";
-import { resolveOpenAiCompatibleBaseUrl } from "../ai/providers";
+import { resolveOpenAiCompatibleBaseUrl } from "../ai/client";
 
 type ProviderTestState =
   | { status: "idle" }
@@ -323,19 +325,17 @@ export function BackendModelConfigModal(props: {
     }
   }
 
-  if (!open) return null;
-
   return (
-    <div
-      className="backend-modal-overlay"
-      role="dialog"
-      aria-modal="true"
-      aria-label="高级后端配置"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) props.onClose();
-      }}
-    >
-      <div className="backend-modal">
+    <Dialog open={open} onOpenChange={(v) => !v && props.onClose()}>
+      <DialogContent
+        showCloseButton={false}
+        overlayClassName="work-form-modal-overlay"
+        aria-describedby={undefined}
+        className={cn(
+          "backend-modal-dialog z-[var(--z-modal-app-content)] flex h-[min(92vh,920px)] max-h-[min(92vh,920px)] w-[min(1200px,calc(100vw-2rem))] max-w-none flex-col gap-0 overflow-hidden border-border bg-[var(--surface)] p-0 shadow-xl sm:max-w-[min(1200px,calc(100vw-2rem))]",
+        )}
+      >
+        <div className="backend-modal backend-modal--dialog">
         <div className="backend-modal-head">
           <div>
             <div className="backend-modal-title">高级后端配置</div>
@@ -530,6 +530,81 @@ export function BackendModelConfigModal(props: {
                     />
                     <span className="muted small">字符</span>
                   </label>
+
+                  <div className="backend-field" style={{ borderTop: "1px solid var(--border, #e5e7eb)", paddingTop: 12 }}>
+                    <div className="backend-label muted small">侧栏注入确认（防误触 / 费用）</div>
+                    <p className="muted small" style={{ margin: "6px 0 10px" }}>
+                      在写作页侧栏点击生成前，可按粗估 tokens 或「云端发圣经」弹出浏览器确认。粗估非计费凭证。
+                    </p>
+                    <label className="row row--check">
+                      <input
+                        type="checkbox"
+                        checked={settings.injectConfirmOnOversizeTokens}
+                        onChange={(e) => onChange({ ...settings, injectConfirmOnOversizeTokens: e.target.checked })}
+                      />
+                      <span>粗估超过阈值时要求确认</span>
+                    </label>
+                    <label className="row" style={{ marginTop: 8 }}>
+                      <span>粗估 token 阈值</span>
+                      <input
+                        name="aiInjectTokenThreshold"
+                        type="number"
+                        min={0}
+                        max={500000}
+                        value={settings.injectApproxTokenThreshold}
+                        onChange={(e) =>
+                          onChange({
+                            ...settings,
+                            injectApproxTokenThreshold: Math.max(0, Math.min(500_000, Number(e.target.value) || 0)),
+                          })
+                        }
+                      />
+                      <span className="muted small">0=仅其它规则</span>
+                    </label>
+                    <label className="row row--check" style={{ marginTop: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={settings.injectConfirmCloudBible}
+                        onChange={(e) => onChange({ ...settings, injectConfirmCloudBible: e.target.checked })}
+                      />
+                      <span>向云端发送创作圣经前始终确认（建议开启）</span>
+                    </label>
+                  </div>
+
+                  <div className="backend-field" style={{ borderTop: "1px solid var(--border, #e5e7eb)", paddingTop: 12 }}>
+                    <div className="backend-label muted small">调性与本会话成本</div>
+                    <p className="muted small" style={{ margin: "6px 0 10px" }}>
+                      调性提示：对照风格卡里禁用套话与文风锚点句长，仅在草稿区展示参考。会话上限：按当前标签页累计粗估 tokens（关标签页即清零），与单次注入阈值不同。
+                    </p>
+                    <label className="row row--check">
+                      <input
+                        type="checkbox"
+                        checked={settings.toneDriftHintEnabled}
+                        onChange={(e) => onChange({ ...settings, toneDriftHintEnabled: e.target.checked })}
+                      />
+                      <span>侧栏草稿生成后显示调性漂移提示</span>
+                    </label>
+                    <label className="row" style={{ marginTop: 8 }}>
+                      <span>本会话侧栏累计上限（粗估 tokens）</span>
+                      <input
+                        name="aiSessionApproxTokenBudget"
+                        type="number"
+                        min={0}
+                        max={2000000}
+                        value={settings.aiSessionApproxTokenBudget}
+                        onChange={(e) =>
+                          onChange({
+                            ...settings,
+                            aiSessionApproxTokenBudget: Math.max(
+                              0,
+                              Math.min(2_000_000, Math.floor(Number(e.target.value) || 0)),
+                            ),
+                          })
+                        }
+                      />
+                      <span className="muted small">0=不限制</span>
+                    </label>
+                  </div>
                 </div>
               </section>
             ) : null}
@@ -1196,8 +1271,9 @@ export function BackendModelConfigModal(props: {
             ) : null}
           </main>
         </div>
-      </div>
-    </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

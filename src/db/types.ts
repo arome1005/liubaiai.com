@@ -13,6 +13,10 @@ export type Work = {
   updatedAt: number;
   /** @see ProgressCursor */
   progressCursor: ProgressCursor;
+  /** 书架封面：data URL（建议小于约 400KB）；未设置时用占位 §11 步 29 */
+  coverImage?: string | null;
+  /** 留白标签（§3.5）：短词列表，供 AI 上下文侧写；与参考库摘录标签无关 */
+  tags?: string[];
 };
 
 /** 全书级风格卡 / 调性锁（5.3），每部作品一份 */
@@ -40,6 +44,8 @@ export type Volume = {
   title: string;
   order: number;
   createdAt: number;
+  /** 卷级概要（规划 §11 步 19；可空） */
+  summary?: string;
 };
 
 /** 章节 */
@@ -52,6 +58,8 @@ export type Chapter = {
   content: string;
   /** 章节概要（供 AI 上下文与导航总览；可为空） */
   summary?: string;
+  /** 概要正文最后写入时间（毫秒）；步 19/22，与 `summary` 编辑/生成流水线对齐 */
+  summaryUpdatedAt?: number;
   order: number;
   updatedAt: number;
   /** 与 `wordCount(正文)` 同步，大目录全书统计时可避免重复扫描正文 */
@@ -133,7 +141,7 @@ export type BookSearchHit = {
 export type BookSearchScope = "full" | "beforeProgress";
 
 export const DB_NAME = "liubai-writing";
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 16;
 
 /** 第 4 组：人物卡（4.1） */
 export type BibleCharacter = {
@@ -191,6 +199,30 @@ export type BibleTimelineEvent = {
   updatedAt: number;
 };
 
+/** 写作侧栏「额外要求」可复用片段（§11 步 42） */
+export type WritingPromptTemplate = {
+  id: string;
+  workId: string;
+  /** 自由分类，如：扩写、润色、对话 */
+  category: string;
+  title: string;
+  body: string;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** 笔感样本：粘贴/摘抄的参考段落，注入写作侧栏 user 上下文（§11 步 43） */
+export type WritingStyleSample = {
+  id: string;
+  workId: string;
+  title: string;
+  body: string;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
 /** 章头/章尾模板（4.5） */
 export type BibleChapterTemplate = {
   id: string;
@@ -213,6 +245,8 @@ export type ChapterBible = {
   povText: string;
   /** 站位 / 持物 / 出口等，自由文本 */
   sceneStance: string;
+  /** §11 步 21：本章末主要人物状态备忘（注入装配器 user 上下文） */
+  characterStateText: string;
   updatedAt: number;
 };
 
@@ -223,6 +257,17 @@ export type BibleGlossaryTerm = {
   term: string;
   category: "name" | "term" | "dead";
   note: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** 流光碎片（§11 步 35）：正文 + 标签 + 时间；可选归属某部作品 */
+export type InspirationFragment = {
+  id: string;
+  /** 未归属全书时为 null */
+  workId: string | null;
+  body: string;
+  tags: string[];
   createdAt: number;
   updatedAt: number;
 };

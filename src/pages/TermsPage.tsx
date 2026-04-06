@@ -11,7 +11,7 @@ export function TermsPage() {
       </header>
 
       <section style={{ maxWidth: 860, lineHeight: 1.8 }}>
-        <p className="muted small">最后更新：2026-03-31</p>
+        <p className="muted small">最后更新：2026-04-02</p>
 
         <h2 style={{ marginTop: "1.25rem" }}>1. 软件定位</h2>
         <p>「留白写作」是一款本地优先的长篇写作工具。你对自己创作内容拥有完整权利与责任。</p>
@@ -23,7 +23,11 @@ export function TermsPage() {
 
         <h2 style={{ marginTop: "1.25rem" }}>3. AI 功能</h2>
         <p>
-          AI 生成内容仅供参考。你在使用云端 AI 提供方时，应确保拥有上传相关内容的权利，并自行判断生成内容的准确性与合规性。
+          写作侧栏、推演、问策、流光、生辉等模块在调用 AI 时，均受你在「设置」中选择的提供方与<strong>隐私 / 上传范围</strong>约束；生成内容仅供参考。
+          你在使用云端 AI 提供方时，应确保拥有上传相关内容的权利，并自行判断生成内容的准确性与合规性。
+        </p>
+        <p>
+          <strong>虚构创作：</strong>AI 输出视为虚构创作辅助；你承诺不将其用于现实违法、侵害他人合法权益或误导公众等行为。
         </p>
 
         <h2 style={{ marginTop: "1.25rem" }}>4. 免责声明</h2>

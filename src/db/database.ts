@@ -6,6 +6,8 @@ import Dexie, { type Table } from "dexie";
 import type {
   BibleCharacter,
   BibleChapterTemplate,
+  WritingPromptTemplate,
+  WritingStyleSample,
   BibleForeshadow,
   BibleGlossaryTerm,
   BibleTimelineEvent,
@@ -22,6 +24,7 @@ import type {
   ReferenceTokenPosting,
   Volume,
   Work,
+  InspirationFragment,
   WorkStyleCard,
 } from "./types";
 import {
@@ -53,10 +56,14 @@ export class LiubaiDB extends Dexie {
   bibleForeshadowing!: Table<BibleForeshadow, string>;
   bibleTimelineEvents!: Table<BibleTimelineEvent, string>;
   bibleChapterTemplates!: Table<BibleChapterTemplate, string>;
+  writingPromptTemplates!: Table<WritingPromptTemplate, string>;
+  writingStyleSamples!: Table<WritingStyleSample, string>;
   chapterBible!: Table<ChapterBible, string>;
   bibleGlossaryTerms!: Table<BibleGlossaryTerm, string>;
   /** 第 5 组：全书级风格卡 / 调性锁（每作品一份） */
   workStyleCards!: Table<WorkStyleCard, string>;
+  /** §11 步 35：流光碎片 */
+  inspirationFragments!: Table<InspirationFragment, string>;
 
   constructor() {
     super(DB_NAME);
@@ -317,6 +324,114 @@ export class LiubaiDB extends Dexie {
       chapterBible: "id, chapterId, workId, [chapterId+workId]",
       bibleGlossaryTerms: "id, workId, term, category, [workId+term]",
       workStyleCards: "id, workId, updatedAt",
+    });
+    this.version(13)
+      .stores({
+        works: "id, updatedAt",
+        chapters: "id, workId, order, volumeId",
+        volumes: "id, workId, order",
+        meta: "key",
+        chapterSnapshots: "id, chapterId, createdAt",
+        referenceLibrary: "id, updatedAt, category",
+        referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+        referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+        referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+        referenceTags: "id, name, createdAt",
+        referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+        referenceChapterHeads: "id, refWorkId, chunkId, ordinal, startOffset, [refWorkId+ordinal]",
+        bibleCharacters: "id, workId, sortOrder, name, [workId+sortOrder]",
+        bibleWorldEntries: "id, workId, entryKind, sortOrder, [workId+sortOrder]",
+        bibleForeshadowing: "id, workId, status, chapterId, sortOrder, [workId+status]",
+        bibleTimelineEvents: "id, workId, chapterId, sortOrder, [workId+sortOrder]",
+        bibleChapterTemplates: "id, workId, name, [workId+name]",
+        chapterBible: "id, chapterId, workId, [chapterId+workId]",
+        bibleGlossaryTerms: "id, workId, term, category, [workId+term]",
+        workStyleCards: "id, workId, updatedAt",
+      })
+      .upgrade(async (trans) => {
+        const volTable = trans.table("volumes");
+        await volTable.toCollection().modify((row: Record<string, unknown>) => {
+          if (row.summary === undefined) row.summary = "";
+        });
+        const chTable = trans.table("chapters");
+        await chTable.toCollection().modify((row: Record<string, unknown>) => {
+          const s = row.summary as string | undefined;
+          if (s != null && String(s).trim() && row.summaryUpdatedAt === undefined) {
+            row.summaryUpdatedAt = row.updatedAt as number;
+          }
+        });
+      });
+    this.version(14).stores({
+      works: "id, updatedAt",
+      chapters: "id, workId, order, volumeId",
+      volumes: "id, workId, order",
+      meta: "key",
+      chapterSnapshots: "id, chapterId, createdAt",
+      referenceLibrary: "id, updatedAt, category",
+      referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+      referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+      referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+      referenceTags: "id, name, createdAt",
+      referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+      referenceChapterHeads: "id, refWorkId, chunkId, ordinal, startOffset, [refWorkId+ordinal]",
+      bibleCharacters: "id, workId, sortOrder, name, [workId+sortOrder]",
+      bibleWorldEntries: "id, workId, entryKind, sortOrder, [workId+sortOrder]",
+      bibleForeshadowing: "id, workId, status, chapterId, sortOrder, [workId+status]",
+      bibleTimelineEvents: "id, workId, chapterId, sortOrder, [workId+sortOrder]",
+      bibleChapterTemplates: "id, workId, name, [workId+name]",
+      chapterBible: "id, chapterId, workId, [chapterId+workId]",
+      bibleGlossaryTerms: "id, workId, term, category, [workId+term]",
+      workStyleCards: "id, workId, updatedAt",
+      inspirationFragments: "id, workId, createdAt, [workId+createdAt]",
+    });
+    this.version(15).stores({
+      works: "id, updatedAt",
+      chapters: "id, workId, order, volumeId",
+      volumes: "id, workId, order",
+      meta: "key",
+      chapterSnapshots: "id, chapterId, createdAt",
+      referenceLibrary: "id, updatedAt, category",
+      referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+      referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+      referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+      referenceTags: "id, name, createdAt",
+      referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+      referenceChapterHeads: "id, refWorkId, chunkId, ordinal, startOffset, [refWorkId+ordinal]",
+      bibleCharacters: "id, workId, sortOrder, name, [workId+sortOrder]",
+      bibleWorldEntries: "id, workId, entryKind, sortOrder, [workId+sortOrder]",
+      bibleForeshadowing: "id, workId, status, chapterId, sortOrder, [workId+status]",
+      bibleTimelineEvents: "id, workId, chapterId, sortOrder, [workId+sortOrder]",
+      bibleChapterTemplates: "id, workId, name, [workId+name]",
+      writingPromptTemplates: "id, workId, category, sortOrder, [workId+sortOrder], [workId+category]",
+      chapterBible: "id, chapterId, workId, [chapterId+workId]",
+      bibleGlossaryTerms: "id, workId, term, category, [workId+term]",
+      workStyleCards: "id, workId, updatedAt",
+      inspirationFragments: "id, workId, createdAt, [workId+createdAt]",
+    });
+    this.version(16).stores({
+      works: "id, updatedAt",
+      chapters: "id, workId, order, volumeId",
+      volumes: "id, workId, order",
+      meta: "key",
+      chapterSnapshots: "id, chapterId, createdAt",
+      referenceLibrary: "id, updatedAt, category",
+      referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+      referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+      referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+      referenceTags: "id, name, createdAt",
+      referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+      referenceChapterHeads: "id, refWorkId, chunkId, ordinal, startOffset, [refWorkId+ordinal]",
+      bibleCharacters: "id, workId, sortOrder, name, [workId+sortOrder]",
+      bibleWorldEntries: "id, workId, entryKind, sortOrder, [workId+sortOrder]",
+      bibleForeshadowing: "id, workId, status, chapterId, sortOrder, [workId+status]",
+      bibleTimelineEvents: "id, workId, chapterId, sortOrder, [workId+sortOrder]",
+      bibleChapterTemplates: "id, workId, name, [workId+name]",
+      writingPromptTemplates: "id, workId, category, sortOrder, [workId+sortOrder], [workId+category]",
+      writingStyleSamples: "id, workId, sortOrder, [workId+sortOrder]",
+      chapterBible: "id, chapterId, workId, [chapterId+workId]",
+      bibleGlossaryTerms: "id, workId, term, category, [workId+term]",
+      workStyleCards: "id, workId, updatedAt",
+      inspirationFragments: "id, workId, createdAt, [workId+createdAt]",
     });
   }
 }

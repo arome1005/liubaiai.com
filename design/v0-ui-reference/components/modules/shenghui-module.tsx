@@ -92,6 +92,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { AIModelSelector, AI_MODELS } from "@/components/ai-model-selector"
 
 // 类型定义
 interface Message {
@@ -261,7 +262,9 @@ export function ShengHuiModule() {
   const [inputValue, setInputValue] = useState("")
   const [isContextExpanded, setIsContextExpanded] = useState(true)
   const [isPanelOpen, setIsPanelOpen] = useState(true)
-  const [selectedModel, setSelectedModel] = useState(modelOptions[0])
+  const [selectedModelId, setSelectedModelId] = useState("tingyu")
+  const [showModelSelector, setShowModelSelector] = useState(false)
+  const selectedModel = AI_MODELS.find(m => m.id === selectedModelId) || AI_MODELS[0]
   const [temperature, setTemperature] = useState([0.7])
   const [isGenerating, setIsGenerating] = useState(false)
   const [copiedId, setCopiedId] = useState<string | null>(null)
@@ -648,36 +651,17 @@ export function ShengHuiModule() {
 
               {/* Model Selector */}
               <div className="mt-3 flex items-center gap-2">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-8 gap-2 text-xs">
-                      <Zap className="h-3.5 w-3.5 text-amber-500" />
-                      {selectedModel.name}
-                      <ChevronDown className="h-3 w-3" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-56">
-                    {modelOptions.map((model) => (
-                      <DropdownMenuItem
-                        key={model.id}
-                        onClick={() => setSelectedModel(model)}
-                        className={cn(
-                          "flex-col items-start gap-1",
-                          selectedModel.id === model.id && "bg-primary/10"
-                        )}
-                      >
-                        <div className="flex w-full items-center justify-between">
-                          <span className="font-medium">{model.name}</span>
-                          <span className="text-xs text-muted-foreground">{model.price}</span>
-                        </div>
-                        <div className="flex gap-2 text-[10px] text-muted-foreground">
-                          <span>速度: {model.speed}</span>
-                          <span>质量: {model.quality}</span>
-                        </div>
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                <button
+                  onClick={() => setShowModelSelector(true)}
+                  className="flex items-center gap-2 rounded-lg border border-border/50 bg-card/50 px-3 py-1.5 text-left transition-colors hover:bg-muted/50"
+                >
+                  {selectedModel.icon}
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground">{selectedModel.name}</p>
+                    <p className="truncate text-xs text-muted-foreground">{selectedModel.subtitle}</p>
+                  </div>
+                  <ChevronDown className="h-3 w-3 text-muted-foreground" />
+                </button>
 
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -687,6 +671,15 @@ export function ShengHuiModule() {
                   </TooltipTrigger>
                   <TooltipContent>高级设置</TooltipContent>
                 </Tooltip>
+
+                {/* AI Model Selector Dialog */}
+                <AIModelSelector
+                  open={showModelSelector}
+                  onOpenChange={setShowModelSelector}
+                  selectedModelId={selectedModelId}
+                  onSelectModel={setSelectedModelId}
+                  title="选择模型"
+                />
               </div>
 
               {/* Context Items */}

@@ -11,6 +11,7 @@ import type {
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  InspirationFragment,
   ReferenceChapterHead,
   ReferenceChunk,
   ReferenceExcerpt,
@@ -20,9 +21,11 @@ import type {
   Volume,
   Work,
   WorkStyleCard,
+  WritingPromptTemplate,
+  WritingStyleSample,
 } from "../db/types";
 import { remapImportMergePayload } from "./backup-merge-remap";
-import type { WritingStore } from "./writing-store";
+import type { UpdateChapterOptions, WritingStore } from "./writing-store";
 import { WritingStoreIndexedDB } from "./writing-store-indexeddb";
 import { WritingStoreSupabase } from "./writing-store-supabase";
 
@@ -44,12 +47,12 @@ export class WritingStoreHybrid implements WritingStore {
   async getWork(id: string): Promise<Work | undefined> {
     return this.remote.getWork(id);
   }
-  async createWork(title: string): Promise<Work> {
-    return this.remote.createWork(title);
+  async createWork(title: string, opts?: { tags?: string[] }): Promise<Work> {
+    return this.remote.createWork(title, opts);
   }
   async updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags">>,
   ): Promise<void> {
     return this.remote.updateWork(id, patch);
   }
@@ -68,7 +71,7 @@ export class WritingStoreHybrid implements WritingStore {
   async createVolume(workId: string, title?: string): Promise<Volume> {
     return this.remote.createVolume(workId, title);
   }
-  async updateVolume(id: string, patch: Partial<Pick<Volume, "title" | "order">>): Promise<void> {
+  async updateVolume(id: string, patch: Partial<Pick<Volume, "title" | "order" | "summary">>): Promise<void> {
     return this.remote.updateVolume(id, patch);
   }
   async deleteVolume(volumeId: string): Promise<void> {
@@ -83,9 +86,10 @@ export class WritingStoreHybrid implements WritingStore {
   }
   async updateChapter(
     id: string,
-    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary">>,
+    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt">>,
+    options?: UpdateChapterOptions,
   ): Promise<void> {
-    return this.remote.updateChapter(id, patch);
+    return this.remote.updateChapter(id, patch, options);
   }
   async deleteChapter(id: string): Promise<void> {
     await this.remote.deleteChapter(id);
@@ -155,7 +159,7 @@ export class WritingStoreHybrid implements WritingStore {
   }
   async searchReferenceLibrary(
     query: string,
-    opts?: { refWorkId?: string; limit?: number },
+    opts?: { refWorkId?: string; limit?: number; mode?: "strict" | "hybrid" },
   ): Promise<ReferenceSearchHit[]> {
     return this.local.searchReferenceLibrary(query, opts);
   }
@@ -336,6 +340,50 @@ export class WritingStoreHybrid implements WritingStore {
     return this.remote.deleteBibleGlossaryTerm(id);
   }
 
+  async listWritingPromptTemplates(workId: string): Promise<WritingPromptTemplate[]> {
+    return this.remote.listWritingPromptTemplates(workId);
+  }
+  async addWritingPromptTemplate(
+    workId: string,
+    input: Partial<Omit<WritingPromptTemplate, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
+  ): Promise<WritingPromptTemplate> {
+    return this.remote.addWritingPromptTemplate(workId, input);
+  }
+  async updateWritingPromptTemplate(
+    id: string,
+    patch: Partial<Omit<WritingPromptTemplate, "id" | "workId">>,
+  ): Promise<void> {
+    return this.remote.updateWritingPromptTemplate(id, patch);
+  }
+  async deleteWritingPromptTemplate(id: string): Promise<void> {
+    return this.remote.deleteWritingPromptTemplate(id);
+  }
+  async reorderWritingPromptTemplates(workId: string, orderedIds: string[]): Promise<void> {
+    return this.remote.reorderWritingPromptTemplates(workId, orderedIds);
+  }
+
+  async listWritingStyleSamples(workId: string): Promise<WritingStyleSample[]> {
+    return this.remote.listWritingStyleSamples(workId);
+  }
+  async addWritingStyleSample(
+    workId: string,
+    input: Partial<Omit<WritingStyleSample, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
+  ): Promise<WritingStyleSample> {
+    return this.remote.addWritingStyleSample(workId, input);
+  }
+  async updateWritingStyleSample(
+    id: string,
+    patch: Partial<Omit<WritingStyleSample, "id" | "workId">>,
+  ): Promise<void> {
+    return this.remote.updateWritingStyleSample(id, patch);
+  }
+  async deleteWritingStyleSample(id: string): Promise<void> {
+    return this.remote.deleteWritingStyleSample(id);
+  }
+  async reorderWritingStyleSamples(workId: string, orderedIds: string[]): Promise<void> {
+    return this.remote.reorderWritingStyleSamples(workId, orderedIds);
+  }
+
   async getWorkStyleCard(workId: string): Promise<WorkStyleCard | undefined> {
     return this.remote.getWorkStyleCard(workId);
   }
@@ -344,6 +392,24 @@ export class WritingStoreHybrid implements WritingStore {
     patch: Partial<Omit<WorkStyleCard, "id" | "workId" | "updatedAt">>,
   ): Promise<WorkStyleCard> {
     return this.remote.upsertWorkStyleCard(workId, patch);
+  }
+
+  async listInspirationFragments(): Promise<InspirationFragment[]> {
+    return this.remote.listInspirationFragments();
+  }
+  async addInspirationFragment(
+    input: Partial<Omit<InspirationFragment, "id" | "createdAt" | "updatedAt">> & { body: string },
+  ): Promise<InspirationFragment> {
+    return this.remote.addInspirationFragment(input);
+  }
+  async updateInspirationFragment(
+    id: string,
+    patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId">>,
+  ): Promise<void> {
+    return this.remote.updateInspirationFragment(id, patch);
+  }
+  async deleteInspirationFragment(id: string): Promise<void> {
+    return this.remote.deleteInspirationFragment(id);
   }
 
   async exportAllData(): ReturnType<WritingStore["exportAllData"]> {

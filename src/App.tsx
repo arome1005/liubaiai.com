@@ -17,6 +17,9 @@ import { ResetPasswordPage } from "./pages/ResetPasswordPage";
 import { PrivacyPage } from "./pages/PrivacyPage";
 import { TermsPage } from "./pages/TermsPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { FirstAiGateHost } from "./components/FirstAiGateHost";
+import { InspirationGlobalCapture } from "./components/InspirationGlobalCapture";
+import { RegisterDemoPackEffect } from "./components/RegisterDemoPackEffect";
 import { AppShell } from "./components/AppShell";
 import { EditorShell } from "./components/EditorShell";
 import { applyThemePreference, readThemePreference, THEME_KEY } from "./theme";
@@ -46,6 +49,9 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      <FirstAiGateHost />
+      <InspirationGlobalCapture />
+      <RegisterDemoPackEffect />
       <Routes>
         <Route element={<EditorShell />}>
           <Route path="/work/:workId" element={<EditorPage />} />
