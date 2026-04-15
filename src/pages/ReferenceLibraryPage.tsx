@@ -2,6 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Spinner } from "../components/ui/spinner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../components/ui/alert-dialog";
 import {
   Dialog,
   DialogContent,
@@ -286,6 +297,121 @@ export function ReferenceLibraryPage() {
   const [extractLoading, setExtractLoading] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
   const [savedExtracts, setSavedExtracts] = useState<ReferenceExtract[]>([]);
+
+  type ConfirmKind =
+    | "delete-book"
+    | "delete-excerpt"
+    | "delete-tag"
+    | "clear-library"
+    | "delete-extract"
+    | "simple";
+  type ConfirmState =
+    | { open: false }
+    | {
+        open: true;
+        kind: ConfirmKind;
+        title: string;
+        description: string;
+        actionText: string;
+        destructive?: boolean;
+        payload: Record<string, unknown>;
+      };
+
+  const [confirmState, setConfirmState] = useState<ConfirmState>({ open: false });
+  const [confirmBusy, setConfirmBusy] = useState(false);
+  const confirmResolveRef = useRef<((ok: boolean) => void) | null>(null);
+
+  function openConfirm(next: Omit<Extract<ConfirmState, { open: true }>, "open">) {
+    setConfirmState({ open: true, ...next });
+  }
+
+  function confirmOnce(opts: { title: string; description: string; actionText: string; destructive?: boolean }) {
+    return new Promise<boolean>((resolve) => {
+      confirmResolveRef.current = resolve;
+      openConfirm({
+        kind: "simple",
+        title: opts.title,
+        description: opts.description,
+        actionText: opts.actionText,
+        destructive: opts.destructive,
+        payload: {},
+      });
+    });
+  }
+
+  async function runConfirmAction() {
+    if (!confirmState.open) return;
+    if (confirmBusy) return;
+    setConfirmBusy(true);
+    try {
+      switch (confirmState.kind) {
+        case "delete-book": {
+          const id = String(confirmState.payload.id ?? "");
+          if (!id) break;
+          await deleteReferenceLibraryEntry(id);
+          if (activeRefId === id) {
+            setActiveRefId(null);
+            setActiveChunkCount(0);
+            setLoadedChunks({});
+            setExcerpts([]);
+            setHighlight(null);
+          }
+          if (searchScopeRefId === id) setSearchScopeRefId(null);
+          await refresh();
+          break;
+        }
+        case "delete-excerpt": {
+          const id = String(confirmState.payload.id ?? "");
+          if (!id) break;
+          await deleteReferenceExcerpt(id);
+          if (activeRefId) await loadExcerpts(activeRefId);
+          if (editingExcerptId === id) setEditingExcerptId(null);
+          break;
+        }
+        case "delete-tag": {
+          const id = String(confirmState.payload.id ?? "");
+          if (!id) break;
+          await deleteReferenceTag(id);
+          if (excerptTagFilterId === id) setExcerptTagFilterId("");
+          await refresh();
+          if (activeRefId) await loadExcerpts(activeRefId);
+          break;
+        }
+        case "clear-library": {
+          setMaintainBusy(true);
+          try {
+            await clearAllReferenceLibraryData();
+            setActiveRefId(null);
+            setActiveChunkCount(0);
+            setLoadedChunks({});
+            setExcerpts([]);
+            setSearchHits([]);
+            await refresh();
+          } finally {
+            setMaintainBusy(false);
+          }
+          break;
+        }
+        case "delete-extract": {
+          const id = String(confirmState.payload.id ?? "");
+          if (!id) break;
+          await deleteReferenceExtract(id);
+          setSavedExtracts((prev) => prev.filter((e) => e.id !== id));
+          break;
+        }
+        case "simple": {
+          confirmResolveRef.current?.(true);
+          confirmResolveRef.current = null;
+          break;
+        }
+        default:
+          break;
+      }
+    } finally {
+      setConfirmBusy(false);
+      setConfirmState({ open: false });
+    }
+  }
   const [importWorkId, setImportWorkId] = useState<string>("");
   const [importBusy, setImportBusy] = useState<Record<string, boolean>>({});
   const extractAbortRef = useRef<AbortController | null>(null);
@@ -904,9 +1030,12 @@ export function ReferenceLibraryPage() {
       try {
         const { text, suspiciousEncoding } = await readUtf8TextFileWithCheck(file);
         if (suspiciousEncoding) {
-          const go = window.confirm(
-            "文本疑似非 UTF-8，或含较多无法解码字符；继续导入可能出现乱码。请将 .txt 另存为 UTF-8 后导入更稳妥。\n\n仍要继续导入吗？",
-          );
+          const go = await confirmOnce({
+            title: "继续导入？",
+            description:
+              "文本疑似非 UTF-8，或含较多无法解码字符；继续导入可能出现乱码。请将 .txt 另存为 UTF-8 后导入更稳妥。",
+            actionText: "继续导入",
+          });
           if (!go) return;
         }
         const title =
@@ -963,9 +1092,11 @@ export function ReferenceLibraryPage() {
           try {
             const { text, suspiciousEncoding } = await readUtf8TextFileWithCheck(file);
             if (suspiciousEncoding) {
-              const go = window.confirm(
-                `${file.name}：疑似非 UTF-8 或无法解码字符较多，继续导入可能乱码。仍要继续？`,
-              );
+              const go = await confirmOnce({
+                title: "继续导入？",
+                description: `${file.name}：疑似非 UTF-8 或无法解码字符较多，继续导入可能乱码。`,
+                actionText: "继续导入",
+              });
               if (!go) continue;
             }
             const stem = file.name.replace(/\.txt$/i, "").trim() || "未命名";
@@ -1271,17 +1402,14 @@ export function ReferenceLibraryPage() {
   }
 
   async function handleDelete(id: string, title: string) {
-    if (!window.confirm(`删除参考库「${title}」？（分块、索引与摘录一并删除）`)) return;
-    await deleteReferenceLibraryEntry(id);
-    if (activeRefId === id) {
-      setActiveRefId(null);
-      setActiveChunkCount(0);
-      setLoadedChunks({});
-      setExcerpts([]);
-      setHighlight(null);
-    }
-    if (searchScopeRefId === id) setSearchScopeRefId(null);
-    await refresh();
+    openConfirm({
+      kind: "delete-book",
+      title: "删除参考库",
+      description: `删除参考库「${title}」？分块、索引与摘录会一并删除（不可撤销）。`,
+      actionText: "确定删除",
+      destructive: true,
+      payload: { id },
+    });
   }
 
   async function onHitClick(hit: ReferenceSearchHit) {
@@ -1324,10 +1452,14 @@ export function ReferenceLibraryPage() {
   }
 
   async function removeExcerpt(id: string) {
-    if (!window.confirm("删除这条摘录？")) return;
-    await deleteReferenceExcerpt(id);
-    if (activeRefId) await loadExcerpts(activeRefId);
-    if (editingExcerptId === id) setEditingExcerptId(null);
+    openConfirm({
+      kind: "delete-excerpt",
+      title: "删除摘录",
+      description: "删除这条摘录？（不可撤销）",
+      actionText: "确定删除",
+      destructive: true,
+      payload: { id },
+    });
   }
 
   const beginEditExcerpt = useCallback((ex: ReferenceExcerpt & { tagIds: string[] }) => {
@@ -1649,26 +1781,6 @@ export function ReferenceLibraryPage() {
 
 
       </header>
-
-      {/* 导入进度条 */}
-      {importProgress && (
-        <div className="rounded-xl border border-border/40 bg-card/30 px-4 py-3 shadow-sm" role="status" aria-live="polite">
-          <div className="mb-2 flex items-center justify-between text-sm">
-            <span>正在导入 {importProgress.current} / {importProgress.total}</span>
-            {importProgress.fileName && (
-              <span className="ml-2 truncate text-muted-foreground" title={importProgress.fileName}>
-                {importProgress.fileName}
-              </span>
-            )}
-          </div>
-          <div className="h-1.5 overflow-hidden rounded-full bg-border">
-            <div
-              className="h-full rounded-full bg-primary transition-all"
-              style={{ width: `${Math.min(100, (importProgress.current / importProgress.total) * 100)}%` }}
-            />
-          </div>
-        </div>
-      )}
 
       {/* 主内容区（分栏布局） */}
       <div className="reference-page-layout">
@@ -2196,13 +2308,14 @@ export function ReferenceLibraryPage() {
                             type="button"
                             className="text-muted-foreground transition-colors hover:text-destructive"
                             onClick={() => {
-                              if (!window.confirm(`删除标签「${t.name}」？摘录上的该标签会一并移除。`)) return;
-                              void (async () => {
-                                await deleteReferenceTag(t.id);
-                                if (excerptTagFilterId === t.id) setExcerptTagFilterId("");
-                                await refresh();
-                                if (activeRefId) await loadExcerpts(activeRefId);
-                              })();
+                              openConfirm({
+                                kind: "delete-tag",
+                                title: "删除标签",
+                                description: `删除标签「${t.name}」？摘录上的该标签会一并移除（不可撤销）。`,
+                                actionText: "确定删除",
+                                destructive: true,
+                                payload: { id: t.id },
+                              });
                             }}
                           >
                             <X className="h-3 w-3" />
@@ -2274,21 +2387,15 @@ export function ReferenceLibraryPage() {
                   size="sm"
                   disabled={maintainBusy || busy}
                   onClick={() => {
-                    if (!window.confirm("将清空全部参考库（原著、索引、摘录），不影响作品与章节正文。此操作不可撤销。确定？")) return;
-                    void (async () => {
-                      setMaintainBusy(true);
-                      try {
-                        await clearAllReferenceLibraryData();
-                        setActiveRefId(null);
-                        setActiveChunkCount(0);
-                        setLoadedChunks({});
-                        setExcerpts([]);
-                        setSearchHits([]);
-                        await refresh();
-                      } finally {
-                        setMaintainBusy(false);
-                      }
-                    })();
+                    openConfirm({
+                      kind: "clear-library",
+                      title: "清空参考库",
+                      description:
+                        "将清空全部参考库（原著、索引、摘录），不影响作品与章节正文。此操作不可撤销，确定继续？",
+                      actionText: "确定清空",
+                      destructive: true,
+                      payload: {},
+                    });
                   }}
                 >
                   清空参考库
@@ -2749,9 +2856,14 @@ export function ReferenceLibraryPage() {
                                       variant="ghost"
                                       size="sm"
                                       onClick={async () => {
-                                        if (!window.confirm("删除此条提炼结果？")) return;
-                                        await deleteReferenceExtract(ex.id);
-                                        setSavedExtracts((prev) => prev.filter((e) => e.id !== ex.id));
+                                        openConfirm({
+                                          kind: "delete-extract",
+                                          title: "删除提炼结果",
+                                          description: "删除此条提炼结果？（不可撤销）",
+                                          actionText: "确定删除",
+                                          destructive: true,
+                                          payload: { id: ex.id },
+                                        });
                                       }}
                                     >
                                       删除
@@ -2873,6 +2985,92 @@ export function ReferenceLibraryPage() {
         bookChunks={aiChatBookChunks}
         refWorkId={activeRefId}
       />
+
+      <AlertDialog
+        open={confirmState.open}
+        onOpenChange={(o) => {
+          if (confirmBusy) return;
+          if (!o) {
+            confirmResolveRef.current?.(false);
+            confirmResolveRef.current = null;
+            setConfirmState({ open: false });
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{confirmState.open ? confirmState.title : "确认操作"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {confirmState.open ? confirmState.description : "请确认是否继续。"}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={confirmBusy}
+              onClick={() => {
+                confirmResolveRef.current?.(false);
+                confirmResolveRef.current = null;
+              }}
+            >
+              取消
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={confirmBusy}
+              className={
+                confirmState.open && confirmState.destructive
+                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  : undefined
+              }
+              onClick={(e) => {
+                e.preventDefault();
+                void runConfirmAction();
+              }}
+            >
+              {confirmState.open ? (confirmBusy ? "处理中…" : confirmState.actionText) : "确定"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {(importProgress || heavyJob) ? (
+        <div
+          className="fixed inset-0 z-[var(--z-blocking-layer)] flex items-center justify-center bg-black/25 backdrop-blur-sm"
+          role="alertdialog"
+          aria-busy="true"
+          aria-live="polite"
+        >
+          <div className="w-[min(26rem,calc(100vw-2rem))] rounded-2xl border border-border/40 bg-background/90 p-6 shadow-xl">
+            <div className="flex items-center gap-4">
+              <div className="relative grid h-14 w-14 place-items-center">
+                <Spinner className="size-14 text-primary" />
+                <div className="absolute inset-0 grid place-items-center text-sm font-semibold tabular-nums text-foreground">
+                  {Math.round(
+                    heavyJob
+                      ? heavyJob.percent
+                      : Math.min(100, (importProgress!.current / Math.max(1, importProgress!.total)) * 100),
+                  )}
+                  %
+                </div>
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-base font-semibold text-foreground">
+                  {heavyJob ? "正在处理" : `正在导入 ${importProgress!.current} / ${importProgress!.total}`}
+                </div>
+                <div className="mt-0.5 text-sm text-muted-foreground">
+                  {heavyJob
+                    ? (heavyJob.label ?? "…")
+                    : (importProgress!.fileName ? importProgress!.fileName : "…")}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-xl border border-border/40 bg-card/40 px-4 py-3 text-sm text-muted-foreground">
+              <div className="font-medium text-foreground">经书存于心，不留于云。</div>
+              <div className="mt-1">（您的书籍仅在本地解析，不上传服务器）</div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
