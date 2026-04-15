@@ -1,5 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
+import type { LucideIcon } from "lucide-react";
+import {
+  BookOpen,
+  Brain,
+  ChevronRight,
+  Database,
+  FileDown,
+  Lightbulb,
+  Palette,
+  PenTool,
+  Save,
+  Settings,
+  Shield,
+} from "lucide-react";
 import { cn } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import {
@@ -10,6 +24,13 @@ import {
 import { buildBackupZip, parseBackupZip } from "../storage/backup";
 import type { LineEndingMode } from "../util/lineEnding";
 import { readFictionCreationAcknowledged, writeFictionCreationAcknowledged } from "../ai/fiction-ack";
+import {
+  readLifetimeApproxTokens,
+  readSessionApproxTokens,
+  resetLifetimeApproxTokens,
+  resetSessionApproxTokens,
+} from "../ai/sidepanel-session-tokens";
+import { readTodayApproxTokens, resetTodayApproxTokens } from "../ai/daily-approx-tokens";
 import { loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiSettings } from "../ai/types";
 import { BackendModelConfigModal } from "../components/BackendModelConfigModal";
@@ -22,6 +43,28 @@ import {
   recordBackupExportSuccess,
   writeBackupReminderEnabled,
 } from "../util/backup-reminder";
+import {
+  applyEditorTypographyCssVars,
+  dispatchEditorTypographyChanged,
+  loadEditorTypography,
+  saveEditorTypography,
+  type EditorFontFamily,
+  type EditorLineHeightPreset,
+  type EditorPaperTint,
+  type EditorTypographyState,
+} from "../util/editor-typography";
+import {
+  defaultLiuguangQuickCaptureHotkey,
+  defaultZenToggleHotkey,
+  hotkeyConflictWith,
+  hotkeyToLabel,
+  readLiuguangQuickCaptureHotkey,
+  readZenToggleHotkey,
+  writeLiuguangQuickCaptureHotkey,
+  writeZenToggleHotkey,
+  type HotkeyCombo,
+} from "../util/hotkey-config";
+import { detectHotkeyConflicts } from "../util/hotkey-conflicts";
 
 const FONT_KEY = "liubai:fontSizePx";
 const LINE_ENDING_KEY = "liubai:exportLineEnding";
@@ -50,27 +93,92 @@ function readDiagnostic(): boolean {
   }
 }
 
-const SETTINGS_NAV = [
-  { id: "settings-appearance", label: "外观", hint: "主题与显示" },
-  { id: "settings-editor", label: "编辑器", hint: "正文字号" },
-  { id: "settings-export", label: "导出", hint: "换行符" },
-  { id: "settings-privacy", label: "隐私", hint: "诊断与协议" },
-  { id: "settings-storage", label: "存储", hint: "浏览器配额" },
-  { id: "backup-data", label: "数据", hint: "备份与恢复" },
-  { id: "settings-reference", label: "参考库", hint: "索引维护" },
-  { id: "fiction-creation", label: "虚构创作", hint: "AI 声明" },
-  { id: "ai-privacy", label: "AI 配置", hint: "本机与隐私" },
-] as const;
+const SETTINGS_NAV: readonly {
+  id: string;
+  label: string;
+  hint: string;
+  description: string;
+  icon: LucideIcon;
+}[] = [
+  {
+    id: "settings-appearance",
+    label: "外观",
+    hint: "主题与显示",
+    description: "主题与显示",
+    icon: Palette,
+  },
+  {
+    id: "settings-editor",
+    label: "编辑器",
+    hint: "字号与排版",
+    description: "写作界面与排版偏好",
+    icon: PenTool,
+  },
+  {
+    id: "settings-export",
+    label: "导出",
+    hint: "换行符",
+    description: "纯文本与 Markdown 导出换行",
+    icon: FileDown,
+  },
+  {
+    id: "settings-privacy",
+    label: "隐私",
+    hint: "诊断与协议",
+    description: "诊断模式与法律文档",
+    icon: Shield,
+  },
+  {
+    id: "settings-storage",
+    label: "存储",
+    hint: "浏览器配额",
+    description: "IndexedDB 占用与配额",
+    icon: Database,
+  },
+  {
+    id: "backup-data",
+    label: "数据",
+    hint: "备份与恢复",
+    description: "本机备份与导入",
+    icon: Save,
+  },
+  {
+    id: "settings-reference",
+    label: "参考库",
+    hint: "索引维护",
+    description: "参考库索引与自救",
+    icon: BookOpen,
+  },
+  {
+    id: "fiction-creation",
+    label: "虚构创作",
+    hint: "AI 声明",
+    description: "虚构创作与合规说明",
+    icon: Lightbulb,
+  },
+  {
+    id: "ai-privacy",
+    label: "AI 配置",
+    hint: "本机与隐私",
+    description: "本机 AI、用量与高危确认",
+    icon: Brain,
+  },
+];
 
 function navIdFromHash(hash: string): string {
   const h = hash.replace(/^#/, "");
   return SETTINGS_NAV.some((n) => n.id === h) ? h : "settings-appearance";
 }
 
+function scrollAppMainToTop() {
+  document.querySelector("main.app-main")?.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 export function SettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [fontSize, setFontSize] = useState(readFontSize);
+  const [typography, setTypography] = useState<EditorTypographyState>(() => loadEditorTypography());
   const [theme, setTheme] = useState<ThemePreference>(() => readThemePreference());
   const [lineEnding, setLineEnding] = useState(readLineEnding);
   const [diagnostic, setDiagnostic] = useState(readDiagnostic);
@@ -85,13 +193,37 @@ export function SettingsPage() {
   const [backupReminderOn, setBackupReminderOn] = useState(() => readBackupReminderEnabled());
   const [lastBackupExportMs, setLastBackupExportMs] = useState<number | null>(() => readLastBackupExportMs());
   const [activeNav, setActiveNav] = useState<string>(() => navIdFromHash(location.hash));
+  const [sidepanelUsageTick, setSidepanelUsageTick] = useState(0);
+  const [liuguangHotkey, setLiuguangHotkey] = useState<HotkeyCombo>(() => readLiuguangQuickCaptureHotkey());
+  const [hotkeyMsg, setHotkeyMsg] = useState<string | null>(null);
+  const [zenHotkey, setZenHotkey] = useState<HotkeyCombo>(() => readZenToggleHotkey());
+  const [zenHotkeyMsg, setZenHotkeyMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    const bump = () => setSidepanelUsageTick((n) => n + 1);
+    const id = window.setInterval(bump, 2500);
+    const onVis = () => {
+      if (document.visibilityState === "visible") bump();
+    };
+    window.addEventListener("focus", bump);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener("focus", bump);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
+
+  const sessionApproxDisplay = useMemo(() => readSessionApproxTokens(), [sidepanelUsageTick]);
+  const lifetimeApproxDisplay = useMemo(() => readLifetimeApproxTokens(), [sidepanelUsageTick]);
+  const todayApproxDisplay = useMemo(() => readTodayApproxTokens(), [sidepanelUsageTick]);
 
   useEffect(() => {
     const h = location.hash.replace(/^#/, "");
     if (!h || !SETTINGS_NAV.some((n) => n.id === h)) return;
     setActiveNav(h);
     const t = window.setTimeout(() => {
-      document.getElementById(h)?.scrollIntoView({ block: "start", behavior: "smooth" });
+      scrollAppMainToTop();
     }, 80);
     return () => window.clearTimeout(t);
   }, [location.hash]);
@@ -100,7 +232,7 @@ export function SettingsPage() {
     setActiveNav(id);
     navigate({ pathname: "/settings", hash: id }, { replace: true });
     window.requestAnimationFrame(() => {
-      document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+      scrollAppMainToTop();
     });
   }
 
@@ -131,6 +263,12 @@ export function SettingsPage() {
     document.documentElement.style.setProperty("--editor-font-size", `${fontSize}px`);
     localStorage.setItem(FONT_KEY, String(fontSize));
   }, [fontSize]);
+
+  useEffect(() => {
+    saveEditorTypography(typography);
+    applyEditorTypographyCssVars(typography);
+    dispatchEditorTypographyChanged();
+  }, [typography]);
 
   useEffect(() => {
     persistThemePreference(theme);
@@ -205,40 +343,94 @@ export function SettingsPage() {
     backupReminderOn &&
     (lastBackupExportMs == null || Date.now() - lastBackupExportMs >= BACKUP_NUDGE_INTERVAL_MS);
 
+  const navKey = useMemo(
+    () => (SETTINGS_NAV.some((n) => n.id === activeNav) ? activeNav : SETTINGS_NAV[0].id),
+    [activeNav],
+  );
+
+  const activeMeta = useMemo(
+    () => SETTINGS_NAV.find((n) => n.id === navKey) ?? SETTINGS_NAV[0],
+    [navKey],
+  );
+
   return (
-    <div className={cn("page settings-page flex flex-col gap-4")}>
-      <header
+    <div
+      className={cn(
+        "settings-page settings-page-v0 flex w-full max-w-none flex-col",
+        "-mx-4 -my-6 lg:-mx-6",
+      )}
+    >
+      <div
         className={cn(
-          "settings-page-header rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6",
-          "shadow-sm",
+          "flex min-h-0 flex-1 flex-col gap-0",
+          "md:min-h-[calc(100dvh-var(--masthead-h)-var(--shell-topbar-h)-3rem)] md:flex-row",
         )}
       >
-        <div className="settings-page-header-text">
-          <Link to="/" className="back-link settings-page-back">
-            ← 首页
-          </Link>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">设置</h1>
-          <p className="muted small settings-page-sub">外观与编辑器、数据备份、参考库维护、AI 与隐私偏好</p>
-        </div>
-      </header>
+        <aside
+          className={cn(
+            "w-full shrink-0 border-border/40 bg-card/30 md:w-64 md:border-r",
+            "border-b md:sticky md:top-0 md:self-start md:border-b-0",
+            "md:max-h-[calc(100dvh-var(--masthead-h)-var(--shell-topbar-h)-3rem)] md:overflow-y-auto",
+          )}
+          aria-label="设置分区"
+        >
+          <div className="p-4">
+            <h2 className="mb-4 flex items-center gap-2 text-lg font-semibold text-foreground">
+              <Settings className="h-5 w-5 shrink-0 text-primary" aria-hidden />
+              设置
+            </h2>
+            <div className="space-y-1">
+              {SETTINGS_NAV.map((n) => {
+                const Icon = n.icon;
+                const isActive = navKey === n.id;
+                return (
+                  <button
+                    key={n.id}
+                    type="button"
+                    onClick={() => goSettingsSection(n.id)}
+                    className={cn(
+                      "flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left transition-colors",
+                      isActive
+                        ? "bg-primary/10 text-primary"
+                        : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                    )}
+                    aria-current={isActive ? "true" : undefined}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium">{n.label}</p>
+                      <p className="text-xs opacity-60">{n.hint}</p>
+                    </div>
+                    <ChevronRight
+                      className={cn("h-4 w-4 shrink-0 transition-transform", isActive && "rotate-90")}
+                      aria-hidden
+                    />
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-4 border-t border-border/40 pt-4">
+              <Link
+                to="/"
+                className="text-muted-foreground hover:text-foreground text-sm font-medium no-underline transition-colors"
+              >
+                ← 返回首页
+              </Link>
+            </div>
+          </div>
+        </aside>
 
-      <div className={cn("settings-shell gap-4 sm:gap-6")}>
-        <nav className="settings-side-nav" aria-label="设置分区">
-          {SETTINGS_NAV.map((n) => (
-            <button
-              key={n.id}
-              type="button"
-              className={"settings-side-nav-item" + (activeNav === n.id ? " is-active" : "")}
-              aria-current={activeNav === n.id ? "true" : undefined}
-              onClick={() => goSettingsSection(n.id)}
-            >
-              <span className="settings-side-nav-label">{n.label}</span>
-              <span className="settings-side-nav-hint muted small">{n.hint}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="settings-main">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className="mx-auto w-full max-w-3xl p-6">
+            <div className="mb-6">
+              <h1 className="text-2xl font-bold text-foreground">{activeMeta.label}</h1>
+              <p className="text-muted-foreground">{activeMeta.description}</p>
+            </div>
+            <div className="settings-main">
+              {(() => {
+                switch (navKey) {
+                  case "settings-appearance":
+                    return (
       <section id="settings-appearance" className="settings-section settings-section-card">
         <h2>外观</h2>
         <label className="row">
@@ -260,9 +452,12 @@ export function SettingsPage() {
           「设备」跟随系统外观（含日出/日落或定时自动深色等）；系统切换后本页会随之更新。
         </p>
       </section>
-
+                    );
+                  case "settings-editor":
+                    return (
       <section id="settings-editor" className="settings-section settings-section-card">
-        <h2>编辑器字号</h2>
+        <h2>编辑器</h2>
+        <h3 className="settings-subheading">字号</h3>
         <label className="row">
           <span>{fontSize}px</span>
           <input
@@ -274,8 +469,209 @@ export function SettingsPage() {
             onChange={(e) => setFontSize(Number(e.target.value))}
           />
         </label>
-      </section>
+        <h3 className="settings-subheading">正文字体与行距</h3>
+        <label className="row">
+          <span>字体</span>
+          <select
+            name="editorFontFamily"
+            value={typography.fontFamily}
+            onChange={(e) =>
+              setTypography((t) => ({ ...t, fontFamily: e.target.value as EditorFontFamily }))
+            }
+          >
+            <option value="system">系统无衬线</option>
+            <option value="serif">宋体 / 衬线</option>
+            <option value="mono">等宽</option>
+            <option value="kaiti">楷体风格</option>
+          </select>
+        </label>
+        <label className="row">
+          <span>行高</span>
+          <select
+            name="editorLineHeight"
+            value={typography.lineHeight}
+            onChange={(e) =>
+              setTypography((t) => ({ ...t, lineHeight: e.target.value as EditorLineHeightPreset }))
+            }
+          >
+            <option value="1.5">紧凑 1.5</option>
+            <option value="1.65">标准 1.65</option>
+            <option value="1.8">默认 1.8</option>
+            <option value="2">宽松 2</option>
+          </select>
+        </label>
+        <h3 className="settings-subheading">纸面背景（写作页）</h3>
+        <label className="row">
+          <span>护眼底色</span>
+          <select
+            name="editorPaperTint"
+            value={typography.paperTint}
+            onChange={(e) =>
+              setTypography((t) => ({ ...t, paperTint: e.target.value as EditorPaperTint }))
+            }
+          >
+            <option value="none">默认（随主题）</option>
+            <option value="sepia">暖黄</option>
+            <option value="green">淡绿</option>
+          </select>
+        </label>
+        <p className="muted small" style={{ marginTop: 8, marginBottom: 0 }}>
+          字体与行高通过 CSS 作用于正文编辑器；纸面色仅覆盖写作页稿纸区域；沉浸写作为浏览器全屏 + 轻微主区样式，不隐藏顶栏与章栏。数据存于本机。
+        </p>
 
+        <h3 className="settings-subheading" style={{ marginTop: 18 }}>快捷键</h3>
+        <p className="muted small" style={{ marginTop: 6 }}>
+          可配置热键修改后立即生效；保存前会检测应用内冲突与常见系统/浏览器保留键。
+        </p>
+
+        {/* 流光速记 */}
+        <div className="card" style={{ padding: 12, marginTop: 8 }}>
+          <div className="row" style={{ alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontWeight: 600 }}>流光速记</span>
+            <span className="muted small">当前：<strong>{hotkeyToLabel(liuguangHotkey)}</strong></span>
+          </div>
+          <div className="row" style={{ flexWrap: "wrap" as const, gap: 12, marginTop: 10 }}>
+            {(["alt", "shift", "ctrl", "meta"] as const).map((mod) => (
+              <label key={mod} className="row row--check" style={{ margin: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={liuguangHotkey[mod]}
+                  onChange={(e) => setLiuguangHotkey((h) => ({ ...h, [mod]: e.target.checked }))}
+                />
+                <span>{{ alt: "Alt/⌥", shift: "Shift/⇧", ctrl: "Ctrl", meta: "⌘/Meta" }[mod]}</span>
+              </label>
+            ))}
+            <label className="row" style={{ margin: 0, gap: 6 }}>
+              <span>+</span>
+              <select
+                value={liuguangHotkey.code}
+                onChange={(e) => setLiuguangHotkey((h) => ({ ...h, code: e.target.value }))}
+              >
+                {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((ch) => (
+                  <option key={ch} value={`Key${ch}`}>{ch}</option>
+                ))}
+                {"0123456789".split("").map((d) => (
+                  <option key={d} value={`Digit${d}`}>{d}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {(() => {
+            const sys = detectHotkeyConflicts(liuguangHotkey);
+            const cross = hotkeyConflictWith(liuguangHotkey, [{ id: "zenToggle", label: "沉浸写作", combo: zenHotkey }]);
+            const all = [...sys, ...(cross ? [{ level: "error" as const, message: `与应用内快捷键冲突：${cross}` }] : [])];
+            return all.length ? (
+              <div style={{ marginTop: 8 }}>
+                {all.map((c, i) => (
+                  <p key={i} className="muted small" style={{ color: c.level === "error" ? "#b91c1c" : "#92400e", margin: "2px 0" }}>
+                    {c.level === "error" ? "冲突：" : "提示："}{c.message}
+                  </p>
+                ))}
+              </div>
+            ) : null;
+          })()}
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            <Button type="button" variant="outline" size="sm" onClick={() => {
+              setHotkeyMsg(null);
+              const d = defaultLiuguangQuickCaptureHotkey();
+              setLiuguangHotkey(d);
+              writeLiuguangQuickCaptureHotkey(d);
+            }}>恢复默认</Button>
+            <Button type="button" size="sm" onClick={() => {
+              setHotkeyMsg(null);
+              const r = writeLiuguangQuickCaptureHotkey(liuguangHotkey);
+              setHotkeyMsg(r.ok ? "已保存。" : r.error);
+            }}>保存</Button>
+            {hotkeyMsg ? <span className="muted small" style={{ alignSelf: "center" }}>{hotkeyMsg}</span> : null}
+          </div>
+        </div>
+
+        {/* 沉浸写作 */}
+        <div className="card" style={{ padding: 12, marginTop: 8 }}>
+          <div className="row" style={{ alignItems: "center", justifyContent: "space-between" }}>
+            <span style={{ fontWeight: 600 }}>沉浸写作</span>
+            <span className="muted small">当前：<strong>{hotkeyToLabel(zenHotkey)}</strong></span>
+          </div>
+          <div className="row" style={{ flexWrap: "wrap" as const, gap: 12, marginTop: 10 }}>
+            {(["alt", "shift", "ctrl", "meta"] as const).map((mod) => (
+              <label key={mod} className="row row--check" style={{ margin: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={zenHotkey[mod]}
+                  onChange={(e) => setZenHotkey((h) => ({ ...h, [mod]: e.target.checked }))}
+                />
+                <span>{{ alt: "Alt/⌥", shift: "Shift/⇧", ctrl: "Ctrl", meta: "⌘/Meta" }[mod]}</span>
+              </label>
+            ))}
+            <label className="row" style={{ margin: 0, gap: 6 }}>
+              <span>+</span>
+              <select
+                value={zenHotkey.code}
+                onChange={(e) => setZenHotkey((h) => ({ ...h, code: e.target.value }))}
+              >
+                {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((ch) => (
+                  <option key={ch} value={`Key${ch}`}>{ch}</option>
+                ))}
+                {"0123456789".split("").map((d) => (
+                  <option key={d} value={`Digit${d}`}>{d}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {(() => {
+            const sys = detectHotkeyConflicts(zenHotkey);
+            const cross = hotkeyConflictWith(zenHotkey, [{ id: "liuguangQuickCapture", label: "流光速记", combo: liuguangHotkey }]);
+            const all = [...sys, ...(cross ? [{ level: "error" as const, message: `与应用内快捷键冲突：${cross}` }] : [])];
+            return all.length ? (
+              <div style={{ marginTop: 8 }}>
+                {all.map((c, i) => (
+                  <p key={i} className="muted small" style={{ color: c.level === "error" ? "#b91c1c" : "#92400e", margin: "2px 0" }}>
+                    {c.level === "error" ? "冲突：" : "提示："}{c.message}
+                  </p>
+                ))}
+              </div>
+            ) : null;
+          })()}
+          <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            <Button type="button" variant="outline" size="sm" onClick={() => {
+              setZenHotkeyMsg(null);
+              const d = defaultZenToggleHotkey();
+              setZenHotkey(d);
+              writeZenToggleHotkey(d);
+            }}>恢复默认</Button>
+            <Button type="button" size="sm" onClick={() => {
+              setZenHotkeyMsg(null);
+              const r = writeZenToggleHotkey(zenHotkey);
+              setZenHotkeyMsg(r.ok ? "已保存。" : r.error);
+            }}>保存</Button>
+            {zenHotkeyMsg ? <span className="muted small" style={{ alignSelf: "center" }}>{zenHotkeyMsg}</span> : null}
+          </div>
+        </div>
+
+        {/* 固定快捷键（只读参考） */}
+        <div className="card" style={{ padding: 12, marginTop: 8 }}>
+          <p className="muted small" style={{ marginBottom: 8 }}>以下快捷键为系统固定，不可修改：</p>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <tbody>
+              {[
+                { label: "全局命令面板", key: "Mod+K" },
+                { label: "写作页保存/快照", key: "Mod+S" },
+              ].map(({ label, key }) => (
+                <tr key={label} style={{ borderBottom: "1px solid var(--border)" }}>
+                  <td style={{ padding: "6px 0", color: "var(--muted-foreground)" }}>{label}</td>
+                  <td style={{ padding: "6px 0", textAlign: "right" }}>
+                    <kbd style={{ background: "var(--secondary)", borderRadius: 4, padding: "1px 6px", fontSize: 12 }}>{key}</kbd>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted small" style={{ marginTop: 6 }}>Mod = Mac 上为 ⌘，其余为 Ctrl。</p>
+        </div>
+      </section>
+                    );
+                  case "settings-export":
+                    return (
       <section id="settings-export" className="settings-section settings-section-card">
         <h2>导出换行</h2>
         <p className="muted small">纯文本与 Markdown 导出时使用。</p>
@@ -291,7 +687,9 @@ export function SettingsPage() {
           </select>
         </label>
       </section>
-
+                    );
+                  case "settings-privacy":
+                    return (
       <section id="settings-privacy" className="settings-section settings-section-card">
         <h2>隐私与诊断</h2>
         <label className="row row--check">
@@ -307,7 +705,9 @@ export function SettingsPage() {
           <Link to="/privacy">查看隐私政策</Link> · <Link to="/terms">查看用户协议</Link>
         </p>
       </section>
-
+                    );
+                  case "settings-storage":
+                    return (
       <section id="settings-storage" className="settings-section settings-section-card">
         <h2>存储配额（IndexedDB）</h2>
         <p className="muted small">
@@ -344,7 +744,9 @@ export function SettingsPage() {
           刷新占用
         </Button>
       </section>
-
+                    );
+                  case "backup-data":
+                    return (
       <section id="backup-data" className="settings-section settings-section-card">
         <h2>数据</h2>
         <label className="row row--check" style={{ marginBottom: 10 }}>
@@ -392,7 +794,9 @@ export function SettingsPage() {
         </p>
         <p className="muted small">发布前自检可参考：`docs/发布检查清单.md`</p>
       </section>
-
+                    );
+                  case "settings-reference":
+                    return (
       <section id="settings-reference" className="settings-section settings-section-card">
         <h2>参考库（自救）</h2>
         <p className="muted small">
@@ -461,7 +865,9 @@ export function SettingsPage() {
           </div>
         ) : null}
       </section>
-
+                    );
+                  case "fiction-creation":
+                    return (
       <section id="fiction-creation" className="settings-section settings-section-card">
         <h2>虚构创作与 AI</h2>
         <p className="muted small">
@@ -486,7 +892,9 @@ export function SettingsPage() {
           </span>
         </label>
       </section>
-
+                    );
+                  case "ai-privacy":
+                    return (
       <section id="ai-privacy" className="settings-section settings-section-card">
         <h2>AI（本机）</h2>
         <p className="muted small">
@@ -494,12 +902,164 @@ export function SettingsPage() {
           `http://localhost:11434` 通常可用。
         </p>
 
+        <div className="settings-ai-usage" role="region" aria-label="AI 粗估用量">
+          <h3 className="settings-ai-usage-title">AI · 粗估 token（本地）</h3>
+          <p className="muted small" style={{ marginTop: 4 }}>
+            与写作页右侧 AI 面板「本会话」统计同源；按请求与输出<strong>粗算</strong>，非厂商计费、
+            <strong>不会上传</strong>。详见
+            <Link to="/privacy">隐私政策</Link> 中云端 AI 与提示词相关说明。
+          </p>
+          <ul className="settings-ai-usage-list muted small" style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem" }}>
+            <li>
+              本会话（当前标签页）：约{" "}
+              <strong>{sessionApproxDisplay.toLocaleString()}</strong> tokens
+            </li>
+            <li>
+              今日累计（本机）：约 <strong>{todayApproxDisplay.toLocaleString()}</strong> tokens
+            </li>
+            <li>
+              本机累计（此浏览器）：约{" "}
+              <strong>{lifetimeApproxDisplay.toLocaleString()}</strong> tokens
+            </li>
+          </ul>
+          <p className="muted small" style={{ marginTop: 6, fontSize: "0.72rem" }}>
+            刷新：切换回页签或等待数秒。关闭标签页后「本会话」清零；「本机累计」保留直至清除站点数据或手动清零。
+          </p>
+          <div className="row gap" style={{ marginTop: 10, flexWrap: "wrap" }}>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                resetSessionApproxTokens();
+                setSidepanelUsageTick((n) => n + 1);
+              }}
+            >
+              清零本会话累计
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                resetTodayApproxTokens();
+                setSidepanelUsageTick((n) => n + 1);
+              }}
+            >
+              清零今日累计
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                if (
+                  !window.confirm(
+                    "将清零「本机累计」粗估 tokens（仅本机显示，不影响作品数据）。确定？",
+                  )
+                ) {
+                  return;
+                }
+                resetLifetimeApproxTokens();
+                setSidepanelUsageTick((n) => n + 1);
+              }}
+            >
+              清零本机累计
+            </Button>
+          </div>
+        </div>
+
         <div className="row gap" style={{ marginTop: 8 }}>
           <Button type="button" variant="outline" onClick={() => setBackendOpen(true)}>
             后端模型配置
           </Button>
         </div>
+
+        {/* P1-04：成本预算 */}
+        <div className="settings-ai-usage" role="region" aria-label="成本预算" style={{ marginTop: 14 }}>
+          <h3 className="settings-ai-usage-title">成本预算 · 门控阈值</h3>
+          <p className="muted small" style={{ marginTop: 4 }}>
+            以粗估 token 数为单位设置预警阈值。超出后在写作侧栏弹出确认弹窗（可强行继续，非硬性拦截）。数值仅本机记录，不上传。
+          </p>
+
+          <label className="settings-label" style={{ display: "block", marginTop: 12 }}>
+            <span className="small" style={{ display: "block", marginBottom: 4 }}>
+              日预算（tokens）<span className="muted small" style={{ marginLeft: 6 }}>0 = 不限制</span>
+            </span>
+            <input
+              type="number"
+              className="input"
+              min={0}
+              max={10_000_000}
+              step={10_000}
+              value={aiSettings.dailyTokenBudget}
+              style={{ width: 160 }}
+              onChange={(e) => {
+                const v = Math.max(0, Math.min(10_000_000, Math.floor(Number(e.target.value) || 0)));
+                const next = { ...aiSettings, dailyTokenBudget: v };
+                setAiSettings(next);
+                try { saveAiSettings(next); setMsg("已保存 AI 设置。"); } catch { setMsg("保存失败。"); }
+              }}
+            />
+          </label>
+
+          <label className="settings-label" style={{ display: "block", marginTop: 10 }}>
+            <span className="small" style={{ display: "block", marginBottom: 4 }}>
+              单次调用预警（tokens）<span className="muted small" style={{ marginLeft: 6 }}>0 = 不预警</span>
+            </span>
+            <input
+              type="number"
+              className="input"
+              min={0}
+              max={500_000}
+              step={1_000}
+              value={aiSettings.singleCallWarnTokens}
+              style={{ width: 160 }}
+              onChange={(e) => {
+                const v = Math.max(0, Math.min(500_000, Math.floor(Number(e.target.value) || 0)));
+                const next = { ...aiSettings, singleCallWarnTokens: v };
+                setAiSettings(next);
+                try { saveAiSettings(next); setMsg("已保存 AI 设置。"); } catch { setMsg("保存失败。"); }
+              }}
+            />
+          </label>
+
+          <p className="muted small" style={{ marginTop: 8, fontSize: "0.74rem" }}>
+            写作侧栏底部始终显示「今日已用 N tokens」，方便实时感知消耗。
+            粗估仅供参考，非厂商计费凭证。
+          </p>
+        </div>
+
+        <div className="settings-ai-usage" role="region" aria-label="高危操作始终确认" style={{ marginTop: 14 }}>
+          <h3 className="settings-ai-usage-title">高危操作 · 始终确认（步 48）</h3>
+          <p className="muted small" style={{ marginTop: 4 }}>
+            用于整卷/多章/批量类操作（如全书语义扫描、流光五段扩容等）。开启后，这些操作会在发起前弹出“清单 + 数字确认”，避免误触与高额消耗。
+          </p>
+          <label className="row row--check" style={{ marginTop: 10 }}>
+            <input
+              type="checkbox"
+              checked={aiSettings.highRiskAlwaysConfirm}
+              onChange={(e) => {
+                const on = e.target.checked;
+                const next = { ...aiSettings, highRiskAlwaysConfirm: on };
+                setAiSettings(next);
+                try {
+                  saveAiSettings(next);
+                  setMsg("已保存 AI 设置。");
+                } catch {
+                  setMsg("保存失败。");
+                }
+              }}
+            />
+            <span>高危操作始终确认（建议开启）</span>
+          </label>
+        </div>
       </section>
+                    );
+                  default:
+                    return null;
+                }
+              })()}
 
       <BackendModelConfigModal
         open={backendOpen}
@@ -517,6 +1077,8 @@ export function SettingsPage() {
       />
 
       {msg ? <p className="settings-msg settings-section-card">{msg}</p> : null}
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -1,5 +1,5 @@
 /**
- * 步 24：本书圣经导出 / 章节正文 **运行时** 分块 + 混合打分（无持久倒排表）。
+ * 步 24：本书锦囊导出 / 章节正文 **运行时** 分块 + 混合打分（无持久倒排表）。
  * 参考库仍用 IndexedDB `referenceChunks` + `referenceTokenPostings`。
  */
 import type { Chapter, ReferenceChunk, ReferenceSearchHit } from "../db/types";
@@ -236,7 +236,7 @@ function allocateSlots(k: number, sources: WritingRagSources): { ref: number; bi
 }
 
 /**
- * 多源合并：参考库 hybrid + 本书圣经分块 + 本书正文分块；顺序为 **参考库 → 圣经 → 正文**，再整体 `slice(0, limit)`。
+ * 多源合并：参考库 hybrid + 本书锦囊分块 + 本书正文分块；顺序为 **参考库 → 锦囊 → 正文**，再整体 `slice(0, limit)`。
  */
 export async function searchWritingRagMerged(args: {
   workId: string;
@@ -246,7 +246,7 @@ export async function searchWritingRagMerged(args: {
   chapters: Chapter[];
   progressCursorChapterId?: string | null;
   excludeManuscriptChapterId?: string | null;
-  /** 已加载的圣经 Markdown（与「注入创作圣经」同源时可传入，避免二次聚合） */
+  /** 已加载的锦囊导出 Markdown（与「注入本书锦囊」同源时可传入，避免二次聚合） */
   bibleMarkdownOverride?: string;
 }): Promise<ReferenceSearchHit[]> {
   const q = args.query.trim();
@@ -276,7 +276,7 @@ export async function searchWritingRagMerged(args: {
         workId: args.workId,
         query: q,
         limit: slots.bible,
-        labelPrefix: "本书圣经",
+        labelPrefix: "本书锦囊",
         parts,
         ordinalOffset: 0,
       }),

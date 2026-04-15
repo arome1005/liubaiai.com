@@ -1,10 +1,26 @@
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
-import { addInspirationFragment, listWorks } from "../db/repo";
-import type { Work } from "../db/types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { addInspirationFragment, listInspirationCollections, listWorks } from "../db/repo";
+import type { InspirationCollection, Work } from "../db/types";
+import { cn } from "../lib/utils";
+import {
+  INSPIRATION_EXPAND_HANDOFF_KEY,
+  type InspirationExpandHandoffPayload,
+} from "../util/inspiration-expand-handoff";
 import { liuguangQuickCaptureShortcutLabel, shortcutModifierSymbol } from "../util/keyboardHints";
+import { HOTKEY_EVENT, matchHotkey, readLiuguangQuickCaptureHotkey } from "../util/hotkey-config";
+import { Button } from "./ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./ui/dialog";
 
 const LS_LAST_WORK = "liubai:lastWorkId";
+const LS_LAST_COLLECTION = "liubai:inspirationLastCollectionId";
 
 function isTypingSurfaceTarget(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -15,24 +31,28 @@ function isTypingSurfaceTarget(target: EventTarget | null): boolean {
 const AUTH_PREFIXES = ["/login", "/forgot-password", "/reset-password"];
 
 /**
- * §11 步 36：全局 Alt+S（Mac：⌥+S）唤起流光速记，写作页与 Hub 均可用。
+ * 全局 Alt+S（Mac：⌥+S）唤起流光速记（实施步骤 步 36）。
  * 在输入框/编辑器内不触发，避免与正文输入冲突。
  */
 export function InspirationGlobalCapture() {
   const { pathname } = useLocation();
-  const titleId = useId();
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [works, setWorks] = useState<Work[]>([]);
+  const [collections, setCollections] = useState<InspirationCollection[]>([]);
   const [body, setBody] = useState("");
   const [tagsLine, setTagsLine] = useState("");
   const [workId, setWorkId] = useState("");
+  const [collectionId, setCollectionId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const hotkeyRef = useRef(readLiuguangQuickCaptureHotkey());
 
   const loadWorks = useCallback(async () => {
-    const w = await listWorks();
+    const [w, cols] = await Promise.all([listWorks(), listInspirationCollections()]);
     setWorks(w);
+    setCollections(cols);
     let defaultWid = "";
     try {
       const saved = localStorage.getItem(LS_LAST_WORK);
@@ -41,6 +61,14 @@ export function InspirationGlobalCapture() {
       /* ignore */
     }
     setWorkId(defaultWid);
+    let defaultCid = "";
+    try {
+      const lc = localStorage.getItem(LS_LAST_COLLECTION);
+      if (lc && lc !== "__none__" && cols.some((c) => c.id === lc)) defaultCid = lc;
+    } catch {
+      /* ignore */
+    }
+    setCollectionId(defaultCid);
   }, []);
 
   const close = useCallback(() => {
@@ -52,10 +80,16 @@ export function InspirationGlobalCapture() {
   }, []);
 
   useEffect(() => {
+    function sync() {
+      hotkeyRef.current = readLiuguangQuickCaptureHotkey();
+    }
+    window.addEventListener(HOTKEY_EVENT, sync);
+    return () => window.removeEventListener(HOTKEY_EVENT, sync);
+  }, []);
+
+  useEffect(() => {
     function onGlobalKey(e: KeyboardEvent) {
-      if (e.repeat) return;
-      if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if (e.code !== "KeyS") return;
+      if (!matchHotkey(e, hotkeyRef.current)) return;
       if (isTypingSurfaceTarget(e.target)) return;
       for (const p of AUTH_PREFIXES) {
         if (pathname === p || pathname.startsWith(`${p}/`)) return;
@@ -70,8 +104,8 @@ export function InspirationGlobalCapture() {
   }, [loadWorks, pathname]);
 
   useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
+    close();
+  }, [pathname, close]);
 
   useEffect(() => {
     if (!open) return;
@@ -79,17 +113,27 @@ export function InspirationGlobalCapture() {
     return () => window.clearTimeout(t);
   }, [open]);
 
-  useEffect(() => {
-    if (!open) return;
-    function onDocKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        close();
-      }
+  function handoffExpandOnInspirationPage() {
+    const text = body.trim();
+    if (!text || busy) return;
+    const tagParts = tagsLine
+      .split(/[,，、\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const payload: InspirationExpandHandoffPayload = {
+      body: text,
+      tags: tagParts,
+      workId: workId || null,
+      collectionId: collectionId || null,
+    };
+    try {
+      sessionStorage.setItem(INSPIRATION_EXPAND_HANDOFF_KEY, JSON.stringify(payload));
+    } catch {
+      /* ignore */
     }
-    document.addEventListener("keydown", onDocKey);
-    return () => document.removeEventListener("keydown", onDocKey);
-  }, [open, close]);
+    close();
+    navigate("/inspiration?expandDraft=1");
+  }
 
   async function submit(e?: React.FormEvent) {
     e?.preventDefault();
@@ -106,7 +150,13 @@ export function InspirationGlobalCapture() {
         body: text,
         tags: tagParts,
         workId: workId || null,
+        collectionId: collectionId || null,
       });
+      try {
+        localStorage.setItem(LS_LAST_COLLECTION, collectionId ? collectionId : "__none__");
+      } catch {
+        /* ignore */
+      }
       close();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -115,39 +165,45 @@ export function InspirationGlobalCapture() {
     }
   }
 
-  if (!open) return null;
-
   const shortcutLabel = liuguangQuickCaptureShortcutLabel();
 
   return (
-    <div
-      className="inspiration-global-root"
-      role="presentation"
-      onMouseDown={(ev) => {
-        if (ev.target === ev.currentTarget) close();
+    <Dialog
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) close();
       }}
     >
-      <div
-        className="inspiration-global-dialog"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        onMouseDown={(e) => e.stopPropagation()}
+      <DialogContent
+        showCloseButton
+        overlayClassName="work-form-modal-overlay"
+        onOpenAutoFocus={(e) => {
+          e.preventDefault();
+          window.requestAnimationFrame(() => textareaRef.current?.focus());
+        }}
+        className={cn(
+          "inspiration-global-dialog-content z-[var(--z-modal-app-content)] max-h-[min(88vh,40rem)] max-w-[min(42rem,calc(100vw-2rem))] gap-0 overflow-hidden rounded-xl border border-border bg-[var(--surface)] p-0 shadow-lg ring-1 ring-border/40 sm:max-w-[42rem]",
+        )}
       >
-        <div className="inspiration-global-head">
-          <h2 id={titleId} className="inspiration-global-title">
-            流光速记
-          </h2>
-          <p className="muted small inspiration-global-hint">
-            <kbd className="inspiration-global-kbd">{shortcutLabel}</kbd> 随时唤起 ·{" "}
-            <kbd className="inspiration-global-kbd">Esc</kbd> 关闭 ·{" "}
-            <kbd className="inspiration-global-kbd">{shortcutModifierSymbol()}+Enter</kbd> 保存
-          </p>
+        <div className="border-b border-border/40 px-6 py-5">
+          <DialogHeader className="gap-1 text-left">
+            <DialogTitle className="text-left text-xl font-semibold">流光速记</DialogTitle>
+            <DialogDescription asChild>
+              <p className="inspiration-global-hint muted small m-0 text-left leading-relaxed">
+                <kbd className="inspiration-global-kbd">{shortcutLabel}</kbd> 随时唤起 ·{" "}
+                <kbd className="inspiration-global-kbd">Esc</kbd> 关闭 ·{" "}
+                <kbd className="inspiration-global-kbd">{shortcutModifierSymbol()}+Enter</kbd> 保存
+              </p>
+            </DialogDescription>
+          </DialogHeader>
         </div>
-        <form className="inspiration-global-form" onSubmit={(ev) => void submit(ev)}>
+        <form
+          className="inspiration-global-form flex max-h-[min(60vh,28rem)] flex-col gap-4 overflow-auto px-6 py-5"
+          onSubmit={(ev) => void submit(ev)}
+        >
           <textarea
             ref={textareaRef}
-            className="inspiration-global-textarea"
+            className="inspiration-global-textarea min-h-[7.5rem] shrink-0"
             value={body}
             onChange={(e) => setBody(e.target.value)}
             placeholder="闪念、对白、设定点…"
@@ -187,21 +243,51 @@ export function InspirationGlobalCapture() {
                 ))}
               </select>
             </label>
+            <label className="inspiration-global-field inspiration-global-field-grow">
+              <span className="muted small">集合（可选）</span>
+              <select
+                className="inspiration-select inspiration-select-grow"
+                value={collectionId}
+                onChange={(e) => setCollectionId(e.target.value)}
+                disabled={busy}
+              >
+                <option value="">未入集合</option>
+                {collections.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name || "未命名集合"}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           {error ? <p className="inspiration-global-error">{error}</p> : null}
-          <div className="inspiration-global-actions">
-            <button type="button" className="btn ghost small" onClick={close} disabled={busy}>
-              取消
-            </button>
-            <Link to="/inspiration" className="btn ghost small" onClick={close}>
-              打开流光
-            </Link>
-            <button type="submit" className="btn primary small" disabled={busy || !body.trim()}>
-              {busy ? "保存中…" : "保存"}
-            </button>
-          </div>
+          <DialogFooter className="mt-1 shrink-0 flex-col gap-2 border-t border-border/40 px-0 pt-4 sm:flex-row sm:justify-end">
+            <div className="flex w-full flex-wrap justify-end gap-2">
+              <Button type="button" variant="outline" size="sm" onClick={close} disabled={busy}>
+                取消
+              </Button>
+              <Button type="button" variant="outline" size="sm" asChild>
+                <Link to="/inspiration" onClick={close}>
+                  打开流光
+                </Link>
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={busy || !body.trim()}
+                title="跳转流光页并自动打开 AI 五段扩容（需模型与隐私门控与列表页一致）"
+                onClick={handoffExpandOnInspirationPage}
+              >
+                去流光扩容
+              </Button>
+              <Button type="submit" size="sm" disabled={busy || !body.trim()}>
+                {busy ? "保存中…" : "保存"}
+              </Button>
+            </div>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

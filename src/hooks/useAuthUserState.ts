@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { authMe, type AuthUser } from "../api/auth";
-import { getSessionStorageSupabase, getSupabase } from "../lib/supabase";
+import { getSupabase } from "../lib/supabase";
 
 /** 当前 Supabase 会话用户；订阅 auth 变化以便头像等元数据更新后刷新 */
 export function useAuthUserState(pathname?: string) {
@@ -26,13 +26,11 @@ export function useAuthUserState(pathname?: string) {
   }, [pathname]);
 
   useEffect(() => {
-    const subs = [getSupabase(), getSessionStorageSupabase()].map((sb) =>
-      sb.auth.onAuthStateChange(() => {
-        void authMe().then((r) => setAuthUser(r.user));
-      }),
-    );
+    const { data } = getSupabase().auth.onAuthStateChange(() => {
+      void authMe().then((r) => setAuthUser(r.user));
+    });
     return () => {
-      subs.forEach((s) => s.data.subscription.unsubscribe());
+      data.subscription.unsubscribe();
     };
   }, []);
 

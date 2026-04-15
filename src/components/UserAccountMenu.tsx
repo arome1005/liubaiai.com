@@ -1,7 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { authLogout, type AuthUser } from "../api/auth";
-import { uploadUserAvatar } from "../api/avatar";
+import { Link } from "react-router-dom";
+import type { AuthUser } from "../api/auth";
 
 function initialsFromEmail(email: string): string {
   const local = email.split("@")[0]?.trim() ?? "?";
@@ -20,62 +18,10 @@ function UserSilhouetteIcon() {
 
 type Props = {
   authUser: AuthUser | null | undefined;
-  onAuthUpdated: () => void;
+  onOpenCreatorCenter: () => void;
 };
 
-export function UserAccountMenu({ authUser, onAuthUpdated }: Props) {
-  const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onDocClick(e: MouseEvent) {
-      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  const onPickFile = useCallback(() => {
-    fileRef.current?.click();
-  }, []);
-
-  const onFileChange = useCallback(
-    async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      e.target.value = "";
-      if (!file) return;
-      setUploading(true);
-      try {
-        await uploadUserAvatar(file);
-        onAuthUpdated();
-        setOpen(true);
-      } catch (err) {
-        window.alert(err instanceof Error ? err.message : "上传失败");
-      } finally {
-        setUploading(false);
-      }
-    },
-    [onAuthUpdated],
-  );
-
-  const onLogout = useCallback(async () => {
-    setOpen(false);
-    await authLogout();
-    onAuthUpdated();
-    navigate("/login");
-  }, [navigate, onAuthUpdated]);
-
+export function UserAccountMenu({ authUser, onOpenCreatorCenter }: Props) {
   if (authUser === undefined) {
     return (
       <div className="user-account-menu">
@@ -102,23 +48,13 @@ export function UserAccountMenu({ authUser, onAuthUpdated }: Props) {
   const label = initialsFromEmail(email);
 
   return (
-    <div className="user-account-menu" ref={wrapRef}>
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/jpeg,image/png,image/webp,image/gif"
-        className="visually-hidden"
-        aria-hidden
-        onChange={(ev) => void onFileChange(ev)}
-      />
+    <div className="user-account-menu">
       <button
         type="button"
-        className={"user-account-trigger" + (open ? " is-open" : "")}
+        className="user-account-trigger"
         title={email}
-        aria-label="账户菜单"
-        aria-haspopup="true"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        aria-label="创作中心"
+        onClick={onOpenCreatorCenter}
       >
         <span className="user-account-avatar">
           {avatarUrl ? (
@@ -130,38 +66,6 @@ export function UserAccountMenu({ authUser, onAuthUpdated }: Props) {
           )}
         </span>
       </button>
-      {open ? (
-        <div className="user-account-dropdown" role="menu">
-          <div className="user-account-dropdown-head">
-            <div className="user-account-dropdown-avatar">
-              {avatarUrl ? <img src={avatarUrl} alt="" width={48} height={48} decoding="async" /> : <span>{label}</span>}
-            </div>
-            <div className="user-account-dropdown-meta">
-              <span className="user-account-dropdown-email">{email}</span>
-              <span className="muted small">个人信息与资料将汇总于此（陆续开放）</span>
-            </div>
-          </div>
-          <div className="user-account-dropdown-actions" role="none">
-            <button
-              type="button"
-              className="user-account-dropdown-item"
-              role="menuitem"
-              disabled={uploading}
-              onClick={() => {
-                if (!uploading) onPickFile();
-              }}
-            >
-              {uploading ? "上传中…" : "更换头像"}
-            </button>
-            <Link to="/settings" className="user-account-dropdown-item" role="menuitem" onClick={() => setOpen(false)}>
-              设置
-            </Link>
-            <button type="button" className="user-account-dropdown-item danger" role="menuitem" onClick={() => void onLogout()}>
-              退出登录
-            </button>
-          </div>
-        </div>
-      ) : null}
     </div>
   );
 }

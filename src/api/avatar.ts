@@ -1,4 +1,4 @@
-import { getSessionStorageSupabase, getSupabase } from "../lib/supabase";
+import { getSupabase } from "../lib/supabase";
 
 const ALLOWED_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
 const MAX_BYTES = 5 * 1024 * 1024;
@@ -27,10 +27,9 @@ async function resizeImageToJpeg(file: File): Promise<Blob> {
 }
 
 async function supabaseWithSession() {
-  for (const sb of [getSupabase(), getSessionStorageSupabase()]) {
-    const { data } = await sb.auth.getSession();
-    if (data.session) return sb;
-  }
+  const sb = getSupabase();
+  const { data } = await sb.auth.getSession();
+  if (data.session) return sb;
   return null;
 }
 

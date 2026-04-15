@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import {
@@ -17,7 +17,6 @@ import {
   deleteBibleWorldEntry,
   deleteWritingPromptTemplate,
   deleteWritingStyleSample,
-  exportBibleMarkdown,
   getWork,
   listBibleChapterTemplates,
   listBibleCharacters,
@@ -69,16 +68,21 @@ type Tab =
   | "prompts"
   | "penfeel";
 
-const BIBLE_TAB_DEF: readonly { id: Tab; label: string }[] = [
-  { id: "characters", label: "人物卡" },
-  { id: "world", label: "世界观" },
-  { id: "foreshadow", label: "伏笔" },
-  { id: "timeline", label: "时间线" },
-  { id: "templates", label: "章模板" },
-  { id: "glossary", label: "术语表" },
-  { id: "prompts", label: "提示词" },
-  { id: "penfeel", label: "笔感" },
-] as const;
+
+const TAB_IDS: Tab[] = [
+  "characters",
+  "world",
+  "foreshadow",
+  "timeline",
+  "templates",
+  "glossary",
+  "prompts",
+  "penfeel",
+];
+
+function isTab(s: string): s is Tab {
+  return (TAB_IDS as readonly string[]).includes(s);
+}
 
 function swapOrderIds<T extends { id: string }>(list: T[], id: string, dir: -1 | 1): string[] | null {
   const ix = list.findIndex((x) => x.id === id);
@@ -94,9 +98,14 @@ function swapOrderIds<T extends { id: string }>(list: T[], id: string, dir: -1 |
 export function BiblePage() {
   const { workId } = useParams<{ workId: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab: Tab = useMemo(() => {
+    const t = searchParams.get("tab");
+    if (t && isTab(t)) return t;
+    return "characters";
+  }, [searchParams]);
   const [work, setWork] = useState<Work | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
-  const [tab, setTab] = useState<Tab>("characters");
   const [characters, setCharacters] = useState<BibleCharacter[]>([]);
   const [world, setWorld] = useState<BibleWorldEntry[]>([]);
   const [foreshadow, setForeshadow] = useState<BibleForeshadow[]>([]);
@@ -145,111 +154,33 @@ export function BiblePage() {
     })();
   }, [workId, refresh]);
 
-  const tabCounts = useMemo(
-    () => ({
-      characters: characters.length,
-      world: world.length,
-      foreshadow: foreshadow.length,
-      timeline: timeline.length,
-      templates: templates.length,
-      glossary: glossary.length,
-      prompts: promptTemplates.length,
-      penfeel: styleSamples.length,
-    }),
-    [characters, world, foreshadow, timeline, templates, glossary, promptTemplates, styleSamples],
-  );
-
-  async function handleExportMd() {
-    if (!workId || !work) return;
-    const md = await exportBibleMarkdown(workId);
-    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    const safe = work.title.replace(/[/\\?%*:|"<>]/g, "_");
-    a.download = `${safe}-创作圣经.md`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }
 
   if (!workId) {
     return (
-      <div className="page bible-page">
-        <p>无效地址。</p>
-        <Link to="/library">返回</Link>
+      <div className="page bible-page flex flex-col gap-4">
+        <div className="rounded-xl border border-border/40 bg-card/30 px-4 py-6 shadow-sm sm:px-6">
+          <p>无效地址。</p>
+          <Link to="/library">返回</Link>
+        </div>
       </div>
     );
   }
 
   if (loading || !work) {
     return (
-      <div className="page bible-page">
-        <p className="muted">{loading ? "加载中…" : "作品不存在。"}</p>
-        <Link to="/library">返回作品库</Link>
+      <div className="page bible-page flex flex-col gap-4">
+        <div className="rounded-xl border border-border/40 bg-card/30 px-4 py-8 text-center shadow-sm sm:px-6">
+          <p className="muted">{loading ? "加载中…" : "作品不存在。"}</p>
+          <Link to="/library">返回作品库</Link>
+        </div>
       </div>
     );
   }
 
   return (
     <div className={cn("page bible-page flex flex-col gap-4")}>
-      <header
-        className={cn(
-          "bible-page-header rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6 shadow-sm",
-        )}
-      >
-        <div className="bible-header-text">
-          <Link to={`/work/${workId}`} className="back-link bible-back">
-            ← 返回写作
-          </Link>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">创作圣经</h1>
-          <p className="bible-work-title muted">{work.title}</p>
-          <p className="bible-stats muted small">
-            人物 <strong>{tabCounts.characters}</strong> · 世界观 <strong>{tabCounts.world}</strong> · 伏笔{" "}
-            <strong>{tabCounts.foreshadow}</strong> · 时间线 <strong>{tabCounts.timeline}</strong> · 章模板{" "}
-            <strong>{tabCounts.templates}</strong> · 术语 <strong>{tabCounts.glossary}</strong> · 提示词{" "}
-            <strong>{tabCounts.prompts}</strong> · 笔感 <strong>{tabCounts.penfeel}</strong>
-          </p>
-          <p className="muted small bible-lead">
-            与章节侧栏「本章约束」联动；以下为全书级设定，可按分区维护。提示词可一键填入写作页「额外要求」；笔感样本会进入 AI
-            侧栏请求的 user 上下文（与「文风锚点」相邻）。
-          </p>
-        </div>
-        <div className="header-actions flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" asChild>
-            <Link to={`/work/${workId}`}>写作</Link>
-          </Button>
-          <Button variant="outline" size="sm" asChild>
-            <Link to={`/work/${workId}/summary`}>概要</Link>
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={() => void handleExportMd()}>
-            导出 Markdown
-          </Button>
-        </div>
-      </header>
-
-      <nav className="bible-tab-bar" role="tablist" aria-label="圣经分区">
-        <div className="bible-tab-seg">
-          {BIBLE_TAB_DEF.map(({ id: k, label }) => (
-            <Button
-              key={k}
-              type="button"
-              role="tab"
-              variant="ghost"
-              size="sm"
-              aria-selected={tab === k}
-              className={cn("bible-tab-btn", tab === k && "is-on")}
-              onClick={() => setTab(k)}
-            >
-              <span className="bible-tab-label">{label}</span>
-              <span className="bible-tab-badge" aria-hidden>
-                {tabCounts[k]}
-              </span>
-            </Button>
-          ))}
-        </div>
-      </nav>
-
       {tab === "characters" ? (
-        <section className="bible-section bible-section-panel" aria-labelledby="bible-char-h">
+        <section className="bible-section bible-section-panel card" aria-labelledby="bible-char-h">
           <h2 id="bible-char-h" className="bible-section-title">
             人物卡
           </h2>
@@ -374,7 +305,7 @@ export function BiblePage() {
       ) : null}
 
       {tab === "world" ? (
-        <section className="bible-section bible-section-panel">
+        <section className="bible-section bible-section-panel card">
           <h2 className="bible-section-title">世界观条目</h2>
           <Button
             type="button"
@@ -471,7 +402,7 @@ export function BiblePage() {
       ) : null}
 
       {tab === "foreshadow" ? (
-        <section className="bible-section bible-section-panel">
+        <section className="bible-section bible-section-panel card">
           <h2 className="bible-section-title">伏笔</h2>
           <Button
             type="button"
@@ -615,7 +546,7 @@ export function BiblePage() {
       ) : null}
 
       {tab === "timeline" ? (
-        <section className="bible-section bible-section-panel">
+        <section className="bible-section bible-section-panel card">
           <h2 className="bible-section-title">时间线</h2>
           <Button
             type="button"
@@ -718,7 +649,7 @@ export function BiblePage() {
       ) : null}
 
       {tab === "templates" ? (
-        <section className="bible-section bible-section-panel">
+        <section className="bible-section bible-section-panel card">
           <h2 className="bible-section-title">章头 / 章尾模板</h2>
           <Button
             type="button"
@@ -801,7 +732,7 @@ export function BiblePage() {
       ) : null}
 
       {tab === "glossary" ? (
-        <section className="bible-section bible-section-panel">
+        <section className="bible-section bible-section-panel card">
           <h2 className="bible-section-title">术语 / 人名表</h2>
           <p className="muted small">
             编辑器侧栏会提示正文中出现的术语（字面匹配）；生成请求时也会把本表注入 AI 上下文（云端需打开「元数据」上传许可）。
@@ -872,7 +803,7 @@ export function BiblePage() {
       ) : null}
 
       {tab === "prompts" ? (
-        <section className="bible-section bible-section-panel">
+        <section className="bible-section bible-section-panel card">
           <h2 className="bible-section-title">Prompt 模板</h2>
           <p className="muted small">
             维护可复用的「额外要求」类片段；在写作页打开 AI 侧栏后，内容会写入「额外要求」文本框（覆盖当前框内文字）。
@@ -987,7 +918,7 @@ export function BiblePage() {
       ) : null}
 
       {tab === "penfeel" ? (
-        <section className="bible-section bible-section-panel">
+        <section className="bible-section bible-section-panel card">
           <h2 className="bible-section-title">笔感样本</h2>
           <p className="muted small">
             粘贴或摘抄参考段落（可为名家片段或自己喜欢的章节）。保存后，写作页 AI 侧栏组装请求时会附带这些文本，用于模仿语气与节奏；请勿依赖其中的具体情节当作本书设定。

@@ -9,12 +9,18 @@ import type {
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  GlobalPromptTemplate,
+  InspirationCollection,
   InspirationFragment,
+  PromptStatus,
+  PromptType,
   Volume,
   Work,
   WorkStyleCard,
   WritingPromptTemplate,
   WritingStyleSample,
+  LogicPlaceEvent,
+  LogicPlaceNode,
 } from "../db/types";
 import { normalizeWorkTagList } from "../util/work-tags";
 import type { MergeRemapResult } from "./backup-merge-remap";
@@ -24,6 +30,8 @@ type Json = Record<string, unknown>;
 export function parseWorkRow(r: Json): Work {
   const cov = r.cover_image;
   const tg = r.tags;
+  const desc = r.description;
+  const status = r.status;
   let tags: string[] | undefined;
   if (Array.isArray(tg)) {
     const t = tg.filter((x): x is string => typeof x === "string");
@@ -35,6 +43,11 @@ export function parseWorkRow(r: Json): Work {
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
     progressCursor: (r.progress_cursor as string | null) ?? null,
+    description: typeof desc === "string" && desc.trim().length ? desc : undefined,
+    status:
+      status === "serializing" || status === "completed" || status === "archived"
+        ? (status as Work["status"])
+        : undefined,
     coverImage: typeof cov === "string" && cov.length > 0 ? cov : undefined,
     tags,
   };
@@ -61,9 +74,15 @@ export function parseChapterRow(r: Json): Chapter {
     summary: (r.summary as string | null) ?? "",
     summaryUpdatedAt:
       r.summary_updated_at != null ? Number(r.summary_updated_at as number | string) : undefined,
+    summaryScopeFromOrder:
+      r.summary_scope_from != null ? Number(r.summary_scope_from as number | string) : undefined,
+    summaryScopeToOrder: r.summary_scope_to != null ? Number(r.summary_scope_to as number | string) : undefined,
     order: Number(r.order),
     updatedAt: Number(r.updated_at),
     wordCountCache: r.word_count_cache != null ? Number(r.word_count_cache) : undefined,
+    outlineDraft: typeof r.outline_draft === "string" && r.outline_draft.length > 0 ? r.outline_draft : undefined,
+    outlineNodeId: typeof r.outline_node_id === "string" && r.outline_node_id.length > 0 ? r.outline_node_id : undefined,
+    outlinePushedAt: r.outline_pushed_at != null ? Number(r.outline_pushed_at) : undefined,
   };
 }
 
@@ -82,11 +101,36 @@ export function parseInspirationFragmentRow(r: Json): InspirationFragment {
     (Array.isArray(tg)
       ? normalizeWorkTagList(tg.filter((x): x is string => typeof x === "string"))
       : undefined) ?? [];
+  const cid = r.collection_id as string | null | undefined;
+  const rawLinks = r.links;
+  const links = Array.isArray(rawLinks) ? (rawLinks as InspirationFragment["links"]) : [];
   return {
     id: r.id as string,
     workId: (r.work_id as string | null) ?? null,
+    collectionId: cid != null && String(cid).trim() ? String(cid) : null,
+    title: (r.title as string | null) ?? undefined,
+    sourceName: (r.source_name as string | null) ?? undefined,
+    sourceUrl: (r.source_url as string | null) ?? undefined,
+    urlTitle: (r.url_title as string | null) ?? undefined,
+    urlSite: (r.url_site as string | null) ?? undefined,
+    urlDescription: (r.url_description as string | null) ?? undefined,
+    urlFetchedAt: r.url_fetched_at != null ? Number(r.url_fetched_at as number | string) : undefined,
+    links,
     body: (r.body as string) ?? "",
     tags,
+    isFavorite: !!r.is_favorite,
+    isPrivate: !!r.is_private,
+    archived: !!r.archived,
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
+  };
+}
+
+export function parseInspirationCollectionRow(r: Json): InspirationCollection {
+  return {
+    id: r.id as string,
+    name: (r.name as string) ?? "",
+    sortOrder: Number(r.sort_order ?? 0),
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
   };
@@ -163,6 +207,58 @@ export function parseBibleTimelineRow(r: Json): BibleTimelineEvent {
   };
 }
 
+export function parseLogicPlaceNodeRow(r: Json): LogicPlaceNode {
+  return {
+    id: r.id as string,
+    workId: r.work_id as string,
+    name: (r.name as string) ?? "",
+    note: (r.note as string) ?? "",
+    x: Number(r.x ?? 50),
+    y: Number(r.y ?? 50),
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
+  };
+}
+
+export function parseLogicPlaceEventRow(r: Json): LogicPlaceEvent {
+  return {
+    id: r.id as string,
+    workId: r.work_id as string,
+    placeId: r.place_id as string,
+    label: (r.label as string) ?? "",
+    note: (r.note as string) ?? "",
+    chapterId: (r.chapter_id as string | null) ?? null,
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
+  };
+}
+
+export function toLogicPlaceNodeInsert(p: LogicPlaceNode): Json {
+  return {
+    id: p.id,
+    work_id: p.workId,
+    name: p.name,
+    note: p.note ?? "",
+    x: p.x ?? 50,
+    y: p.y ?? 50,
+    created_at: p.createdAt,
+    updated_at: p.updatedAt,
+  };
+}
+
+export function toLogicPlaceEventInsert(e: LogicPlaceEvent): Json {
+  return {
+    id: e.id,
+    work_id: e.workId,
+    place_id: e.placeId,
+    label: e.label,
+    note: e.note ?? "",
+    chapter_id: e.chapterId ?? null,
+    created_at: e.createdAt,
+    updated_at: e.updatedAt,
+  };
+}
+
 export function parseBibleTplRow(r: Json): BibleChapterTemplate {
   return {
     id: r.id as string,
@@ -227,12 +323,31 @@ export function parseWritingStyleSampleRow(r: Json): WritingStyleSample {
   };
 }
 
+export function parseGlobalPromptTemplateRow(r: Json): GlobalPromptTemplate {
+  const reviewNote = (r.review_note as string | null | undefined) ?? undefined;
+  return {
+    id: r.id as string,
+    title: (r.title as string) ?? "",
+    type: ((r.type as string) ?? "continue") as PromptType,
+    tags: Array.isArray(r.tags) ? (r.tags as string[]) : [],
+    body: (r.body as string) ?? "",
+    status: ((r.status as string) ?? "draft") as PromptStatus,
+    ...(reviewNote ? { reviewNote } : {}),
+    userId: (r.user_id as string) ?? undefined,
+    sortOrder: Number(r.sort_order),
+    createdAt: Number(r.created_at),
+    updatedAt: Number(r.updated_at),
+  };
+}
+
 export function toWorkInsert(uid: string, w: Work): Json {
   const tagRow = normalizeWorkTagList(w.tags) ?? [];
   return {
     id: w.id,
     user_id: uid,
     title: w.title,
+    description: w.description && w.description.trim().length ? w.description.trim() : null,
+    status: w.status ?? "serializing",
     created_at: w.createdAt,
     updated_at: w.updatedAt,
     progress_cursor: w.progressCursor,
@@ -264,6 +379,11 @@ export function toChapterInsert(c: Chapter): Json {
     updated_at: c.updatedAt,
     word_count_cache: c.wordCountCache ?? null,
     summary_updated_at: c.summaryUpdatedAt ?? null,
+    summary_scope_from: c.summaryScopeFromOrder ?? null,
+    summary_scope_to: c.summaryScopeToOrder ?? null,
+    outline_draft: c.outlineDraft ?? null,
+    outline_node_id: c.outlineNodeId ?? null,
+    outline_pushed_at: c.outlinePushedAt ?? null,
   };
 }
 
@@ -314,9 +434,12 @@ export function mergeWritingRowsToInserts(uid: string, m: MergeRemapResult): {
   chapterBible: Json[];
   bibleGloss: Json[];
   styleCards: Json[];
+  inspirationCollections: Json[];
   inspirationFrags: Json[];
   writingPromptTpl: Json[];
   writingStyleSamples: Json[];
+  logicPlaceNodes: Json[];
+  logicPlaceEvents: Json[];
 } {
   const works = m.newWorks.map((w) => toWorkInsert(uid, w));
   const volumes = m.newVolumes.map(toVolumeInsert);
@@ -407,12 +530,32 @@ export function mergeWritingRowsToInserts(uid: string, m: MergeRemapResult): {
     extra_rules: s.extraRules,
     updated_at: s.updatedAt,
   }));
+  const inspirationCollections = (m.newInspirationCollections ?? []).map((c) => ({
+    id: c.id,
+    user_id: uid,
+    name: c.name,
+    sort_order: c.sortOrder,
+    created_at: c.createdAt,
+    updated_at: c.updatedAt,
+  }));
   const inspirationFrags = m.newInspirationFragments.map((f) => ({
     id: f.id,
     user_id: uid,
     work_id: f.workId,
+    collection_id: f.collectionId ?? null,
+    title: f.title ?? null,
+    source_name: f.sourceName ?? null,
+    source_url: f.sourceUrl ?? null,
+    url_title: f.urlTitle ?? null,
+    url_site: f.urlSite ?? null,
+    url_description: f.urlDescription ?? null,
+    url_fetched_at: f.urlFetchedAt ?? null,
+    links: f.links ?? [],
     body: f.body,
     tags: normalizeWorkTagList(f.tags) ?? [],
+    is_favorite: !!f.isFavorite,
+    is_private: !!f.isPrivate,
+    archived: !!f.archived,
     created_at: f.createdAt,
     updated_at: f.updatedAt,
   }));
@@ -435,6 +578,12 @@ export function mergeWritingRowsToInserts(uid: string, m: MergeRemapResult): {
     created_at: s.createdAt,
     updated_at: s.updatedAt,
   }));
+  const logicPlaceNodes = (m as unknown as { newLogicPlaceNodes?: LogicPlaceNode[] }).newLogicPlaceNodes
+    ? (m as unknown as { newLogicPlaceNodes: LogicPlaceNode[] }).newLogicPlaceNodes.map(toLogicPlaceNodeInsert)
+    : [];
+  const logicPlaceEvents = (m as unknown as { newLogicPlaceEvents?: LogicPlaceEvent[] }).newLogicPlaceEvents
+    ? (m as unknown as { newLogicPlaceEvents: LogicPlaceEvent[] }).newLogicPlaceEvents.map(toLogicPlaceEventInsert)
+    : [];
   return {
     works,
     volumes,
@@ -448,8 +597,11 @@ export function mergeWritingRowsToInserts(uid: string, m: MergeRemapResult): {
     chapterBible,
     bibleGloss,
     styleCards,
+    inspirationCollections,
     inspirationFrags,
     writingPromptTpl,
     writingStyleSamples,
+    logicPlaceNodes,
+    logicPlaceEvents,
   };
 }

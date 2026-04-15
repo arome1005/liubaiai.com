@@ -27,20 +27,20 @@ npm run dev
 > **同步**：与主应用路由/能力对照随版本更新；`design/master-checklist.md` **§E.4** 发版前可再扫一眼本表与备注。
 
 
-| 参考组件                                     | 主应用落点（现状）                                         | 备注                                                                 |
-| ---------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------ |
-| `components/app-shell.tsx`               | `AppShell.tsx`、`GlobalCommandPalette`             | §E.2.1：顶栏层级/毛玻璃与命令面板「标题 + 搜索行」布局已与参考对齐（现网路由与收纳逻辑不变）                |
-| `components/modules/liubai-module.tsx`   | `LibraryPage` / `HomePage`                        | 作品库卡片、筛选等                                                          |
-| `components/modules/cangjing-module.tsx` | `ReferenceLibraryPage`                            | 藏经                                                                 |
-| `components/modules/luobi-module.tsx`    | `BiblePage` + 写作相关                                | 落笔 / 圣经                                                            |
-| `components/modules/tuiyan-module.tsx`   | `LogicPage` `/logic`                              | 主应用已接规则扫描、三分支、时间轴/世界观极简；与参考 **结构** 对照即可                            |
-| `components/modules/liuguang-module.tsx` | `InspirationPage` `/inspiration`                  | 主应用已接碎片、速记、五段扩容、转入章节                                               |
-| `components/modules/wence-module.tsx`    | `ChatPage` `/chat`                                | 主应用已接多轮问策 MVP                                                      |
-| `components/modules/shenghui-module.tsx` | `ShengHuiPage` `/sheng-hui`                       | 主应用已接按纲仿写 MVP（`sheng-hui-generate.ts`）；**整页** v0 级 §E **E.2.8** 仍待 |
-| `components/modules/settings-module.tsx` | `SettingsPage`                                    | 可参考信息架构与分区                                                         |
-| `components/immersive-editor.tsx`        | `EditorPage` + `EditorShell`                      | 沉浸编辑、双栏等 **仅参考**                                                   |
-| `components/ai-model-selector.tsx`       | `AiPanel` / 设置模型选择                                | 人设化模型卡等为产品设计参考                                                     |
-| `components/ui/*`                        | `src/components/ui/*`（Button/Card/Input/Dialog 等） | 主应用已接 Tailwind v4 + Radix primitive；参考工程仅作对照                       |
+| 参考组件                                     | 主应用落点（现状）                                         | 备注                                                                                    |
+| ---------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `components/app-shell.tsx`               | `AppShell.tsx`、`GlobalCommandPalette`             | §E.2.1：顶栏层级/毛玻璃与命令面板「标题 + 搜索行」布局已与参考对齐（现网路由与收纳逻辑不变）                                   |
+| `components/modules/liubai-module.tsx`   | `LibraryPage` / `HomePage`                        | 作品库卡片、筛选等                                                                             |
+| `components/modules/cangjing-module.tsx` | `ReferenceLibraryPage`                            | 藏经                                                                                    |
+| `components/modules/luobi-module.tsx`    | `BiblePage` + 写作相关                                | 落笔 / 本书锦囊                                                                               |
+| `components/modules/tuiyan-module.tsx`   | `LogicPage` `/logic`                              | 主应用已接规则扫描、三分支、时间轴/世界观极简；与参考 **结构** 对照即可                                               |
+| `components/modules/liuguang-module.tsx` | `InspirationPage` `/inspiration`                  | 主应用已接碎片、速记、五段扩容、转入章节                                                                  |
+| `components/modules/wence-module.tsx`    | `ChatPage` `/chat`                                | 主应用已接多轮问策 MVP                                                                         |
+| `components/modules/shenghui-module.tsx` | `ShengHuiPage` `/sheng-hui`                       | 主应用已接按纲仿写 MVP（`sheng-hui-generate.ts`）；**整页** v0 级同源渲染 **§E.2.8** 已验收（页眉壳 + `Button`） |
+| `components/modules/settings-module.tsx` | `SettingsPage`                                    | 可参考信息架构与分区                                                                            |
+| `components/immersive-editor.tsx`        | `EditorPage` + `EditorShell`                      | 沉浸编辑、双栏等 **仅参考**                                                                      |
+| `components/ai-model-selector.tsx`       | `AiPanel` / 设置模型选择                                | 人设化模型卡等为产品设计参考                                                                        |
+| `components/ui/*`                        | `src/components/ui/*`（Button/Card/Input/Dialog 等） | 主应用已接 Tailwind v4 + Radix primitive；参考工程仅作对照                                          |
 
 
 ## 迁移原则（给实现侧）

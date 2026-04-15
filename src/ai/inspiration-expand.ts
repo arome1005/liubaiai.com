@@ -1,6 +1,8 @@
 import { generateWithProvider } from "./client";
+import { isLocalAiProvider } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
+import { approxTotalTokensForMessages } from "../util/ai-injection-confirm";
 
 const MAX_FRAGMENT_CHARS = 8000;
 
@@ -26,7 +28,7 @@ export class InspirationExpandError extends Error {
 }
 
 function assertCanSendInspirationExpand(settings: AiSettings): void {
-  const cloud = settings.provider !== "ollama";
+  const cloud = !isLocalAiProvider(settings.provider);
   if (!cloud) return;
   if (!settings.privacy.consentAccepted || !settings.privacy.allowCloudProviders) {
     throw new InspirationExpandError("请先在设置中同意云端 AI 并允许调用。");
@@ -36,6 +38,61 @@ function assertCanSendInspirationExpand(settings: AiSettings): void {
       "流光 AI 扩容需将碎片正文上传至模型，请在隐私设置中允许章节正文（创作内容上云）。",
     );
   }
+}
+
+/**
+ * 与 {@link generateInspirationFiveExpansions} 实际发送内容一致（用于粗估与确认门控）。
+ */
+export function buildInspirationExpandChatMessages(args: {
+  fragmentBody: string;
+  tags?: string[];
+  workTitle?: string;
+  userHint?: string;
+  settings?: AiSettings;
+}): AiChatMessage[] {
+  const settings = args.settings ?? loadAiSettings();
+  assertCanSendInspirationExpand(settings);
+  const body = args.fragmentBody.trim();
+  if (!body) {
+    throw new InspirationExpandError("碎片正文为空，无法扩容。");
+  }
+  const excerpt = body.length <= MAX_FRAGMENT_CHARS ? body : body.slice(0, MAX_FRAGMENT_CHARS);
+  const metaOk = settings.privacy.allowMetadata;
+  const workLine =
+    metaOk && args.workTitle?.trim() ? `所属作品：${args.workTitle.trim()}\n\n` : "";
+  const tagLine =
+    args.tags && args.tags.length > 0 ? `标签：${args.tags.join("、")}\n\n` : "";
+  const hint = (args.userHint ?? "").trim();
+  const user =
+    workLine +
+    tagLine +
+    `下列为灵感碎片，请生成五段扩写：\n\n${excerpt}` +
+    (hint ? `\n\n作者补充说明（可忽略若与扩写无关）：${hint}` : "");
+  return [
+    { role: "system", content: SYSTEM_PROMPT },
+    { role: "user", content: user },
+  ];
+}
+
+/** 五段扩写输出体量粗估（非计费；略保守以便阈值门控）。 */
+export const INSPIRATION_EXPAND_OUTPUT_ESTIMATE_TOKENS = 2400;
+
+export type InspirationExpandRoughEstimate = {
+  inputApprox: number;
+  outputEstimateApprox: number;
+  totalApprox: number;
+};
+
+/** §11 步 37 后续：与生辉 {@link estimateShengHuiRoughTokens} 同口径（输入 messages + 输出预留）。 */
+export function estimateInspirationExpandRoughTokens(
+  messages: AiChatMessage[],
+): InspirationExpandRoughEstimate {
+  const inputApprox = approxTotalTokensForMessages(messages);
+  return {
+    inputApprox,
+    outputEstimateApprox: INSPIRATION_EXPAND_OUTPUT_ESTIMATE_TOKENS,
+    totalApprox: inputApprox + INSPIRATION_EXPAND_OUTPUT_ESTIMATE_TOKENS,
+  };
 }
 
 function parseFiveSegments(raw: string): string[] {
@@ -80,31 +137,17 @@ export async function generateInspirationFiveExpansions(args: {
   signal?: AbortSignal;
 }): Promise<{ segments: string[]; rawText: string }> {
   const settings = args.settings ?? loadAiSettings();
-  assertCanSendInspirationExpand(settings);
+  const messages = buildInspirationExpandChatMessages({
+    fragmentBody: args.fragmentBody,
+    tags: args.tags,
+    workTitle: args.workTitle,
+    userHint: args.userHint,
+    settings,
+  });
   const cfg = getProviderConfig(settings, settings.provider);
-  if (settings.provider !== "ollama" && !cfg.apiKey?.trim()) {
+  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
     throw new InspirationExpandError("请先在设置中填写当前模型的 API Key。");
   }
-  const body = args.fragmentBody.trim();
-  if (!body) {
-    throw new InspirationExpandError("碎片正文为空，无法扩容。");
-  }
-  const excerpt = body.length <= MAX_FRAGMENT_CHARS ? body : body.slice(0, MAX_FRAGMENT_CHARS);
-  const metaOk = settings.privacy.allowMetadata;
-  const workLine =
-    metaOk && args.workTitle?.trim() ? `所属作品：${args.workTitle.trim()}\n\n` : "";
-  const tagLine =
-    args.tags && args.tags.length > 0 ? `标签：${args.tags.join("、")}\n\n` : "";
-  const hint = (args.userHint ?? "").trim();
-  const user =
-    workLine +
-    tagLine +
-    `下列为灵感碎片，请生成五段扩写：\n\n${excerpt}` +
-    (hint ? `\n\n作者补充说明（可忽略若与扩写无关）：${hint}` : "");
-  const messages: AiChatMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: user },
-  ];
   const r = await generateWithProvider({
     provider: settings.provider,
     config: cfg,

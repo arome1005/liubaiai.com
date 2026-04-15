@@ -104,12 +104,48 @@ function buildStaticRows(workId: string | null): CommandRow[] {
       hint: "4",
     },
     {
+      id: "luobi-hub",
+      label: "落笔 · 创作工具箱",
+      keywords: "提示词 锦囊 世界观 风格卡 词典 落笔",
+      path: "/luobi",
+      group: "创作工具",
+      hint: "5",
+    },
+    {
+      id: "luobi-gen-title",
+      label: "落笔 · 书名生成器",
+      keywords: "书名 起名 标题",
+      path: "/luobi/generate/book-title",
+      group: "创作工具",
+    },
+    {
+      id: "luobi-gen-blurb",
+      label: "落笔 · 简介生成器",
+      keywords: "简介 文案 卖点",
+      path: "/luobi/generate/blurb",
+      group: "创作工具",
+    },
+    {
+      id: "luobi-gen-names",
+      label: "落笔 · NPC 命名",
+      keywords: "人名 地名 势力 命名 NPC",
+      path: "/luobi/generate/names",
+      group: "创作工具",
+    },
+    {
       id: "sheng-hui",
       label: "生辉",
       keywords: "设定 约束",
       path: "/sheng-hui",
       group: "创作工具",
       hint: "6",
+    },
+    {
+      id: "prompts",
+      label: "提示词库",
+      keywords: "提示词 模板 prompt template 续写 大纲 风格",
+      path: "/prompts",
+      group: "创作工具",
     },
     {
       id: "login",
@@ -150,7 +186,7 @@ function buildStaticRows(workId: string | null): CommandRow[] {
     });
     base.splice(4, 0, {
       id: "bible",
-      label: "创作圣经",
+      label: "本书锦囊",
       keywords: "落笔 设定 人物 术语",
       path: `/work/${workId}/bible`,
       group: "当前作品",

@@ -6,11 +6,15 @@ import type {
   BibleGlossaryTerm,
   BibleTimelineEvent,
   BibleWorldEntry,
+  GlobalPromptTemplate,
+  LogicPlaceEvent,
+  LogicPlaceNode,
   BookSearchHit,
   BookSearchScope,
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  InspirationCollection,
   InspirationFragment,
   ReferenceChapterHead,
   ReferenceChunk,
@@ -23,6 +27,7 @@ import type {
   WorkStyleCard,
   WritingPromptTemplate,
   WritingStyleSample,
+  TuiyanState,
 } from "../db/types";
 import { remapImportMergePayload } from "./backup-merge-remap";
 import type { UpdateChapterOptions, WritingStore } from "./writing-store";
@@ -30,11 +35,28 @@ import { WritingStoreIndexedDB } from "./writing-store-indexeddb";
 import { WritingStoreSupabase } from "./writing-store-supabase";
 
 /**
- * Web + Supabase：作品 / 章节 / 圣经 / 风格卡走云端；参考库（藏经）仍 IndexedDB。
+ * Web + Supabase：作品 / 章节 / 本书锦囊 / 风格卡走云端；参考库（藏经）仍 IndexedDB。
  */
 export class WritingStoreHybrid implements WritingStore {
   private readonly local = new WritingStoreIndexedDB();
   private readonly remote = new WritingStoreSupabase();
+
+  /**
+   * 读取时优先走云端；网络失联或未登录时降级到本地 IndexedDB 缓存，
+   * 保障锦囊/风格卡等数据在离线状态下可读。
+   */
+  private async tryRemote<T>(remote: () => Promise<T>, local: () => Promise<T>): Promise<T> {
+    try {
+      return await remote();
+    } catch {
+      return local();
+    }
+  }
+
+  /** 写操作成功后，静默更新本地 IndexedDB 缓存（不阻塞主流程，失败忽略）。 */
+  private warmLocal(op: () => Promise<unknown>): void {
+    op().catch(() => {});
+  }
 
   async init(): Promise<void> {
     await this.local.init();
@@ -47,12 +69,12 @@ export class WritingStoreHybrid implements WritingStore {
   async getWork(id: string): Promise<Work | undefined> {
     return this.remote.getWork(id);
   }
-  async createWork(title: string, opts?: { tags?: string[] }): Promise<Work> {
+  async createWork(title: string, opts?: { tags?: string[]; description?: string; status?: Work["status"] }): Promise<Work> {
     return this.remote.createWork(title, opts);
   }
   async updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status">>,
   ): Promise<void> {
     return this.remote.updateWork(id, patch);
   }
@@ -86,7 +108,12 @@ export class WritingStoreHybrid implements WritingStore {
   }
   async updateChapter(
     id: string,
-    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt">>,
+    patch: Partial<
+      Pick<
+        Chapter,
+        "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder"
+      >
+    >,
     options?: UpdateChapterOptions,
   ): Promise<void> {
     return this.remote.updateChapter(id, patch, options);
@@ -103,8 +130,8 @@ export class WritingStoreHybrid implements WritingStore {
     return this.remote.reorderChapters(workId, orderedIds);
   }
 
-  async searchWork(workId: string, query: string, scope?: BookSearchScope): Promise<BookSearchHit[]> {
-    return this.remote.searchWork(workId, query, scope);
+  async searchWork(workId: string, query: string, scope?: BookSearchScope, isRegex?: boolean): Promise<BookSearchHit[]> {
+    return this.remote.searchWork(workId, query, scope, isRegex);
   }
 
   async listChapterSnapshots(chapterId: string): Promise<ChapterSnapshot[]> {
@@ -218,180 +245,304 @@ export class WritingStoreHybrid implements WritingStore {
   }
 
   async listBibleCharacters(workId: string): Promise<BibleCharacter[]> {
-    return this.remote.listBibleCharacters(workId);
+    return this.tryRemote(
+      () => this.remote.listBibleCharacters(workId),
+      () => this.local.listBibleCharacters(workId),
+    );
   }
   async addBibleCharacter(
     workId: string,
     input: Partial<Omit<BibleCharacter, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
   ): Promise<BibleCharacter> {
-    return this.remote.addBibleCharacter(workId, input);
+    const entity = await this.remote.addBibleCharacter(workId, input);
+    this.warmLocal(() => getDB().bibleCharacters.put(entity));
+    return entity;
   }
   async updateBibleCharacter(id: string, patch: Partial<Omit<BibleCharacter, "id" | "workId">>): Promise<void> {
-    return this.remote.updateBibleCharacter(id, patch);
+    await this.remote.updateBibleCharacter(id, patch);
+    this.warmLocal(() => getDB().bibleCharacters.update(id, { ...patch, updatedAt: Date.now() }));
   }
   async deleteBibleCharacter(id: string): Promise<void> {
-    return this.remote.deleteBibleCharacter(id);
+    await this.remote.deleteBibleCharacter(id);
+    this.warmLocal(() => getDB().bibleCharacters.delete(id));
   }
   async reorderBibleCharacters(workId: string, orderedIds: string[]): Promise<void> {
     return this.remote.reorderBibleCharacters(workId, orderedIds);
   }
 
   async listBibleWorldEntries(workId: string): Promise<BibleWorldEntry[]> {
-    return this.remote.listBibleWorldEntries(workId);
+    return this.tryRemote(
+      () => this.remote.listBibleWorldEntries(workId),
+      () => this.local.listBibleWorldEntries(workId),
+    );
   }
   async addBibleWorldEntry(
     workId: string,
     input: Partial<Omit<BibleWorldEntry, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
   ): Promise<BibleWorldEntry> {
-    return this.remote.addBibleWorldEntry(workId, input);
+    const entity = await this.remote.addBibleWorldEntry(workId, input);
+    this.warmLocal(() => getDB().bibleWorldEntries.put(entity));
+    return entity;
   }
   async updateBibleWorldEntry(id: string, patch: Partial<Omit<BibleWorldEntry, "id" | "workId">>): Promise<void> {
-    return this.remote.updateBibleWorldEntry(id, patch);
+    await this.remote.updateBibleWorldEntry(id, patch);
+    this.warmLocal(() => getDB().bibleWorldEntries.update(id, { ...patch, updatedAt: Date.now() }));
   }
   async deleteBibleWorldEntry(id: string): Promise<void> {
-    return this.remote.deleteBibleWorldEntry(id);
+    await this.remote.deleteBibleWorldEntry(id);
+    this.warmLocal(() => getDB().bibleWorldEntries.delete(id));
   }
   async reorderBibleWorldEntries(workId: string, orderedIds: string[]): Promise<void> {
     return this.remote.reorderBibleWorldEntries(workId, orderedIds);
   }
 
   async listBibleForeshadowing(workId: string): Promise<BibleForeshadow[]> {
-    return this.remote.listBibleForeshadowing(workId);
+    return this.tryRemote(
+      () => this.remote.listBibleForeshadowing(workId),
+      () => this.local.listBibleForeshadowing(workId),
+    );
   }
   async addBibleForeshadow(
     workId: string,
     input: Partial<Omit<BibleForeshadow, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
   ): Promise<BibleForeshadow> {
-    return this.remote.addBibleForeshadow(workId, input);
+    const entity = await this.remote.addBibleForeshadow(workId, input);
+    this.warmLocal(() => getDB().bibleForeshadowing.put(entity));
+    return entity;
   }
   async updateBibleForeshadow(id: string, patch: Partial<Omit<BibleForeshadow, "id" | "workId">>): Promise<void> {
-    return this.remote.updateBibleForeshadow(id, patch);
+    await this.remote.updateBibleForeshadow(id, patch);
+    this.warmLocal(() => getDB().bibleForeshadowing.update(id, { ...patch, updatedAt: Date.now() }));
   }
   async deleteBibleForeshadow(id: string): Promise<void> {
-    return this.remote.deleteBibleForeshadow(id);
+    await this.remote.deleteBibleForeshadow(id);
+    this.warmLocal(() => getDB().bibleForeshadowing.delete(id));
   }
   async reorderBibleForeshadowing(workId: string, orderedIds: string[]): Promise<void> {
     return this.remote.reorderBibleForeshadowing(workId, orderedIds);
   }
 
   async listBibleTimelineEvents(workId: string): Promise<BibleTimelineEvent[]> {
-    return this.remote.listBibleTimelineEvents(workId);
+    return this.tryRemote(
+      () => this.remote.listBibleTimelineEvents(workId),
+      () => this.local.listBibleTimelineEvents(workId),
+    );
   }
   async addBibleTimelineEvent(
     workId: string,
     input: Partial<Omit<BibleTimelineEvent, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
   ): Promise<BibleTimelineEvent> {
-    return this.remote.addBibleTimelineEvent(workId, input);
+    const entity = await this.remote.addBibleTimelineEvent(workId, input);
+    this.warmLocal(() => getDB().bibleTimelineEvents.put(entity));
+    return entity;
   }
   async updateBibleTimelineEvent(
     id: string,
     patch: Partial<Omit<BibleTimelineEvent, "id" | "workId">>,
   ): Promise<void> {
-    return this.remote.updateBibleTimelineEvent(id, patch);
+    await this.remote.updateBibleTimelineEvent(id, patch);
+    this.warmLocal(() => getDB().bibleTimelineEvents.update(id, { ...patch, updatedAt: Date.now() }));
   }
   async deleteBibleTimelineEvent(id: string): Promise<void> {
-    return this.remote.deleteBibleTimelineEvent(id);
+    await this.remote.deleteBibleTimelineEvent(id);
+    this.warmLocal(() => getDB().bibleTimelineEvents.delete(id));
   }
   async reorderBibleTimelineEvents(workId: string, orderedIds: string[]): Promise<void> {
     return this.remote.reorderBibleTimelineEvents(workId, orderedIds);
   }
 
+  async listLogicPlaceNodes(workId: string): Promise<LogicPlaceNode[]> {
+    return this.remote.listLogicPlaceNodes(workId);
+  }
+  async addLogicPlaceNode(
+    workId: string,
+    input: Partial<Omit<LogicPlaceNode, "id" | "workId" | "createdAt" | "updatedAt">> & { name: string },
+  ): Promise<LogicPlaceNode> {
+    return this.remote.addLogicPlaceNode(workId, input);
+  }
+  async updateLogicPlaceNode(id: string, patch: Partial<Omit<LogicPlaceNode, "id" | "workId">>): Promise<void> {
+    return this.remote.updateLogicPlaceNode(id, patch);
+  }
+  async deleteLogicPlaceNode(id: string): Promise<void> {
+    return this.remote.deleteLogicPlaceNode(id);
+  }
+
+  async listLogicPlaceEvents(workId: string): Promise<LogicPlaceEvent[]> {
+    return this.remote.listLogicPlaceEvents(workId);
+  }
+  async addLogicPlaceEvent(
+    workId: string,
+    input: Partial<Omit<LogicPlaceEvent, "id" | "workId" | "createdAt" | "updatedAt">> & { placeId: string; label: string },
+  ): Promise<LogicPlaceEvent> {
+    return this.remote.addLogicPlaceEvent(workId, input);
+  }
+  async updateLogicPlaceEvent(id: string, patch: Partial<Omit<LogicPlaceEvent, "id" | "workId">>): Promise<void> {
+    return this.remote.updateLogicPlaceEvent(id, patch);
+  }
+  async deleteLogicPlaceEvent(id: string): Promise<void> {
+    return this.remote.deleteLogicPlaceEvent(id);
+  }
+
+  async getTuiyanState(workId: string): Promise<TuiyanState | undefined> {
+    const [local, remote] = await Promise.allSettled([
+      this.local.getTuiyanState(workId),
+      this.remote.getTuiyanState(workId),
+    ]);
+    const l = local.status === "fulfilled" ? local.value : undefined;
+    const r = remote.status === "fulfilled" ? remote.value : undefined;
+    if (!l) return r;
+    if (!r) return l;
+    return (r.updatedAt ?? 0) >= (l.updatedAt ?? 0) ? r : l;
+  }
+
+  async upsertTuiyanState(
+    workId: string,
+    patch: Partial<Omit<TuiyanState, "id" | "workId" | "updatedAt">> & { updatedAt?: number },
+  ): Promise<TuiyanState> {
+    // Always persist locally first for offline refresh-safety; then best-effort sync to cloud.
+    const local = await this.local.upsertTuiyanState(workId, patch);
+    try {
+      const remote = await this.remote.upsertTuiyanState(workId, patch);
+      return remote.updatedAt >= local.updatedAt ? remote : local;
+    } catch {
+      return local;
+    }
+  }
+
   async listBibleChapterTemplates(workId: string): Promise<BibleChapterTemplate[]> {
-    return this.remote.listBibleChapterTemplates(workId);
+    return this.tryRemote(
+      () => this.remote.listBibleChapterTemplates(workId),
+      () => this.local.listBibleChapterTemplates(workId),
+    );
   }
   async addBibleChapterTemplate(
     workId: string,
     input: Partial<Omit<BibleChapterTemplate, "id" | "workId" | "createdAt" | "updatedAt">>,
   ): Promise<BibleChapterTemplate> {
-    return this.remote.addBibleChapterTemplate(workId, input);
+    const entity = await this.remote.addBibleChapterTemplate(workId, input);
+    this.warmLocal(() => getDB().bibleChapterTemplates.put(entity));
+    return entity;
   }
   async updateBibleChapterTemplate(
     id: string,
     patch: Partial<Omit<BibleChapterTemplate, "id" | "workId">>,
   ): Promise<void> {
-    return this.remote.updateBibleChapterTemplate(id, patch);
+    await this.remote.updateBibleChapterTemplate(id, patch);
+    this.warmLocal(() => getDB().bibleChapterTemplates.update(id, { ...patch, updatedAt: Date.now() }));
   }
   async deleteBibleChapterTemplate(id: string): Promise<void> {
-    return this.remote.deleteBibleChapterTemplate(id);
+    await this.remote.deleteBibleChapterTemplate(id);
+    this.warmLocal(() => getDB().bibleChapterTemplates.delete(id));
   }
 
   async getChapterBible(chapterId: string): Promise<ChapterBible | undefined> {
-    return this.remote.getChapterBible(chapterId);
+    return this.tryRemote(
+      () => this.remote.getChapterBible(chapterId),
+      () => this.local.getChapterBible(chapterId),
+    );
   }
   async upsertChapterBible(
     input: Omit<ChapterBible, "id" | "updatedAt"> & { id?: string },
   ): Promise<ChapterBible> {
-    return this.remote.upsertChapterBible(input);
+    const entity = await this.remote.upsertChapterBible(input);
+    this.warmLocal(() => getDB().chapterBible.put(entity));
+    return entity;
   }
 
   async listBibleGlossaryTerms(workId: string): Promise<BibleGlossaryTerm[]> {
-    return this.remote.listBibleGlossaryTerms(workId);
+    return this.tryRemote(
+      () => this.remote.listBibleGlossaryTerms(workId),
+      () => this.local.listBibleGlossaryTerms(workId),
+    );
   }
   async addBibleGlossaryTerm(
     workId: string,
     input: Partial<Omit<BibleGlossaryTerm, "id" | "workId" | "createdAt" | "updatedAt">>,
   ): Promise<BibleGlossaryTerm> {
-    return this.remote.addBibleGlossaryTerm(workId, input);
+    const entity = await this.remote.addBibleGlossaryTerm(workId, input);
+    this.warmLocal(() => getDB().bibleGlossaryTerms.put(entity));
+    return entity;
   }
   async updateBibleGlossaryTerm(id: string, patch: Partial<Omit<BibleGlossaryTerm, "id" | "workId">>): Promise<void> {
-    return this.remote.updateBibleGlossaryTerm(id, patch);
+    await this.remote.updateBibleGlossaryTerm(id, patch);
+    this.warmLocal(() => getDB().bibleGlossaryTerms.update(id, { ...patch, updatedAt: Date.now() }));
   }
   async deleteBibleGlossaryTerm(id: string): Promise<void> {
-    return this.remote.deleteBibleGlossaryTerm(id);
+    await this.remote.deleteBibleGlossaryTerm(id);
+    this.warmLocal(() => getDB().bibleGlossaryTerms.delete(id));
   }
 
   async listWritingPromptTemplates(workId: string): Promise<WritingPromptTemplate[]> {
-    return this.remote.listWritingPromptTemplates(workId);
+    return this.tryRemote(
+      () => this.remote.listWritingPromptTemplates(workId),
+      () => this.local.listWritingPromptTemplates(workId),
+    );
   }
   async addWritingPromptTemplate(
     workId: string,
     input: Partial<Omit<WritingPromptTemplate, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
   ): Promise<WritingPromptTemplate> {
-    return this.remote.addWritingPromptTemplate(workId, input);
+    const entity = await this.remote.addWritingPromptTemplate(workId, input);
+    this.warmLocal(() => getDB().writingPromptTemplates.put(entity));
+    return entity;
   }
   async updateWritingPromptTemplate(
     id: string,
     patch: Partial<Omit<WritingPromptTemplate, "id" | "workId">>,
   ): Promise<void> {
-    return this.remote.updateWritingPromptTemplate(id, patch);
+    await this.remote.updateWritingPromptTemplate(id, patch);
+    this.warmLocal(() => getDB().writingPromptTemplates.update(id, { ...patch, updatedAt: Date.now() }));
   }
   async deleteWritingPromptTemplate(id: string): Promise<void> {
-    return this.remote.deleteWritingPromptTemplate(id);
+    await this.remote.deleteWritingPromptTemplate(id);
+    this.warmLocal(() => getDB().writingPromptTemplates.delete(id));
   }
   async reorderWritingPromptTemplates(workId: string, orderedIds: string[]): Promise<void> {
     return this.remote.reorderWritingPromptTemplates(workId, orderedIds);
   }
 
   async listWritingStyleSamples(workId: string): Promise<WritingStyleSample[]> {
-    return this.remote.listWritingStyleSamples(workId);
+    return this.tryRemote(
+      () => this.remote.listWritingStyleSamples(workId),
+      () => this.local.listWritingStyleSamples(workId),
+    );
   }
   async addWritingStyleSample(
     workId: string,
     input: Partial<Omit<WritingStyleSample, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
   ): Promise<WritingStyleSample> {
-    return this.remote.addWritingStyleSample(workId, input);
+    const entity = await this.remote.addWritingStyleSample(workId, input);
+    this.warmLocal(() => getDB().writingStyleSamples.put(entity));
+    return entity;
   }
   async updateWritingStyleSample(
     id: string,
     patch: Partial<Omit<WritingStyleSample, "id" | "workId">>,
   ): Promise<void> {
-    return this.remote.updateWritingStyleSample(id, patch);
+    await this.remote.updateWritingStyleSample(id, patch);
+    this.warmLocal(() => getDB().writingStyleSamples.update(id, { ...patch, updatedAt: Date.now() }));
   }
   async deleteWritingStyleSample(id: string): Promise<void> {
-    return this.remote.deleteWritingStyleSample(id);
+    await this.remote.deleteWritingStyleSample(id);
+    this.warmLocal(() => getDB().writingStyleSamples.delete(id));
   }
   async reorderWritingStyleSamples(workId: string, orderedIds: string[]): Promise<void> {
     return this.remote.reorderWritingStyleSamples(workId, orderedIds);
   }
 
   async getWorkStyleCard(workId: string): Promise<WorkStyleCard | undefined> {
-    return this.remote.getWorkStyleCard(workId);
+    return this.tryRemote(
+      () => this.remote.getWorkStyleCard(workId),
+      () => this.local.getWorkStyleCard(workId),
+    );
   }
   async upsertWorkStyleCard(
     workId: string,
     patch: Partial<Omit<WorkStyleCard, "id" | "workId" | "updatedAt">>,
   ): Promise<WorkStyleCard> {
-    return this.remote.upsertWorkStyleCard(workId, patch);
+    const entity = await this.remote.upsertWorkStyleCard(workId, patch);
+    this.warmLocal(() => getDB().workStyleCards.put(entity));
+    return entity;
   }
 
   async listInspirationFragments(): Promise<InspirationFragment[]> {
@@ -404,13 +555,85 @@ export class WritingStoreHybrid implements WritingStore {
   }
   async updateInspirationFragment(
     id: string,
-    patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId">>,
+    patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId" | "collectionId">>,
   ): Promise<void> {
     return this.remote.updateInspirationFragment(id, patch);
   }
   async deleteInspirationFragment(id: string): Promise<void> {
     return this.remote.deleteInspirationFragment(id);
   }
+
+  async listInspirationCollections(): Promise<InspirationCollection[]> {
+    return this.remote.listInspirationCollections();
+  }
+  async addInspirationCollection(
+    input: Partial<Omit<InspirationCollection, "id" | "createdAt" | "updatedAt">> & { name: string },
+  ): Promise<InspirationCollection> {
+    return this.remote.addInspirationCollection(input);
+  }
+  async updateInspirationCollection(
+    id: string,
+    patch: Partial<Pick<InspirationCollection, "name" | "sortOrder">>,
+  ): Promise<void> {
+    return this.remote.updateInspirationCollection(id, patch);
+  }
+  async deleteInspirationCollection(id: string): Promise<void> {
+    return this.remote.deleteInspirationCollection(id);
+  }
+
+  // ── 全局提示词库（Sprint 1）─────────────────────────────────────────────────
+
+  async listGlobalPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+    return this.tryRemote(
+      () => this.remote.listGlobalPromptTemplates(),
+      () => this.local.listGlobalPromptTemplates(),
+    );
+  }
+
+  async addGlobalPromptTemplate(
+    input: Omit<GlobalPromptTemplate, "id" | "sortOrder" | "createdAt" | "updatedAt">,
+  ): Promise<GlobalPromptTemplate> {
+    const entity = await this.remote.addGlobalPromptTemplate(input);
+    this.warmLocal(() => getDB().globalPromptTemplates.put(entity));
+    return entity;
+  }
+
+  async updateGlobalPromptTemplate(
+    id: string,
+    patch: Partial<Omit<GlobalPromptTemplate, "id" | "createdAt">>,
+  ): Promise<void> {
+    await this.remote.updateGlobalPromptTemplate(id, patch);
+    this.warmLocal(() =>
+      getDB().globalPromptTemplates.update(id, { ...patch, updatedAt: Date.now() }),
+    );
+  }
+
+  async deleteGlobalPromptTemplate(id: string): Promise<void> {
+    await this.remote.deleteGlobalPromptTemplate(id);
+    this.warmLocal(() => getDB().globalPromptTemplates.delete(id));
+  }
+
+  async reorderGlobalPromptTemplates(orderedIds: string[]): Promise<void> {
+    return this.remote.reorderGlobalPromptTemplates(orderedIds);
+  }
+
+  async listApprovedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+    // 已发布模板必须从远端获取（本地无他人数据）；离线时退化为本地 approved
+    return this.tryRemote(
+      () => this.remote.listApprovedPromptTemplates(),
+      () => this.local.listApprovedPromptTemplates(),
+    );
+  }
+
+  async listSubmittedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+    // 待审核模板需从远端获取（Supabase RLS 需配套管理员策略）；离线时退化为本地
+    return this.tryRemote(
+      () => this.remote.listSubmittedPromptTemplates(),
+      () => this.local.listSubmittedPromptTemplates(),
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
 
   async exportAllData(): ReturnType<WritingStore["exportAllData"]> {
     const base = await this.remote.exportAllData();

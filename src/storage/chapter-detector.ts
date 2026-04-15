@@ -2,7 +2,8 @@
  * 参考库正文：识别常见网文章节标题行（Parser 层，与分块存储配合）。
  * 与 `ReferenceChunk` 的 `isChapterHead` / `chapterTitle` 及 `referenceChapterHeads` 表一致。
  */
-export const CHAPTER_HEAD_LINE_REGEX = /^\s*第[一二三四五六七八九十百千万\d]+[章节回卷].*/gm;
+import { CHAPTER_HEAD_LINE_REGEX } from "../util/chapter-heading-pattern";
+export { CHAPTER_HEAD_LINE_REGEX };
 
 /** 倒排索引中的保留 token：命中表示该块含章节标题行（见 `buildPostingRowsForChunk`） */
 export const REFERENCE_CHAPTER_HEAD_POSTING_TOKEN = "__REF_CHAPTER_HEAD__";

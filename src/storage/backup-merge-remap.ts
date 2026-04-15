@@ -8,6 +8,7 @@ import type {
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  InspirationCollection,
   InspirationFragment,
   ReferenceChapterHead,
   ReferenceExcerpt,
@@ -42,6 +43,7 @@ export type MergeRemapResult = {
   newChapterBible: ChapterBible[];
   newBibleGloss: BibleGlossaryTerm[];
   newStyleCards: WorkStyleCard[];
+  newInspirationCollections: InspirationCollection[];
   newInspirationFragments: InspirationFragment[];
   newWritingPromptTemplates: WritingPromptTemplate[];
   newWritingStyleSamples: WritingStyleSample[];
@@ -71,6 +73,7 @@ export function remapImportMergePayload(
     chapterBible?: ChapterBible[];
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
+    inspirationCollections?: InspirationCollection[];
     inspirationFragments?: InspirationFragment[];
     writingPromptTemplates?: WritingPromptTemplate[];
     writingStyleSamples?: WritingStyleSample[];
@@ -92,6 +95,7 @@ export function remapImportMergePayload(
   const chapterBibleIn = data.chapterBible ?? [];
   const bibleGlossIn = data.bibleGlossaryTerms ?? [];
   const styleIn = data.workStyleCards ?? [];
+  const collectionsIn = data.inspirationCollections ?? [];
   const inspirationIn = data.inspirationFragments ?? [];
   const writingPromptTplIn = data.writingPromptTemplates ?? [];
   const writingStyleSamplesIn = data.writingStyleSamples ?? [];
@@ -103,6 +107,7 @@ export function remapImportMergePayload(
   const chunkIdMap = new Map<string, string>();
   const tagMap = new Map<string, string>();
   const excerptOldToNew = new Map<string, string>();
+  const collectionMap = new Map<string, string>();
 
   for (const w of normalized.works) {
     workMap.set(w.id, crypto.randomUUID());
@@ -118,6 +123,9 @@ export function remapImportMergePayload(
   }
   for (const t of tagsIn) {
     tagMap.set(t.id, crypto.randomUUID());
+  }
+  for (const c of collectionsIn) {
+    collectionMap.set(c.id, crypto.randomUUID());
   }
 
   const newWorks = normalized.works.map((w) => ({
@@ -328,16 +336,32 @@ export function remapImportMergePayload(
     });
   }
 
+  const newInspirationCollections: InspirationCollection[] = [];
+  for (const c of collectionsIn) {
+    newInspirationCollections.push({
+      ...c,
+      id: collectionMap.get(c.id)!,
+      name: (c.name ?? "").trim() || "未命名集合",
+      sortOrder: c.sortOrder ?? 0,
+      createdAt: c.createdAt ?? now(),
+      updatedAt: c.updatedAt ?? now(),
+    });
+  }
+
   const newInspirationFragments: InspirationFragment[] = [];
   for (const f of inspirationIn) {
     const tags = normalizeWorkTagList(f.tags) ?? [];
+    const rawColl = f.collectionId as string | null | undefined;
+    const nc =
+      rawColl && collectionMap.has(rawColl) ? (collectionMap.get(rawColl) ?? null) : null;
     if (f.workId) {
       const nw = workMap.get(f.workId);
-      if (!nw) continue;
       newInspirationFragments.push({
         ...f,
         id: crypto.randomUUID(),
-        workId: nw,
+        // 如果导入包未包含对应作品（比如仅导入“流光碎片”），降级为未归属作品，而不是丢弃该碎片
+        workId: nw ?? null,
+        collectionId: nc,
         tags,
         body: f.body ?? "",
         createdAt: f.createdAt ?? now(),
@@ -348,6 +372,7 @@ export function remapImportMergePayload(
         ...f,
         id: crypto.randomUUID(),
         workId: null,
+        collectionId: nc,
         tags,
         body: f.body ?? "",
         createdAt: f.createdAt ?? now(),
@@ -375,6 +400,7 @@ export function remapImportMergePayload(
     newChapterBible,
     newBibleGloss,
     newStyleCards,
+    newInspirationCollections,
     newInspirationFragments,
     newWritingPromptTemplates,
     newWritingStyleSamples,

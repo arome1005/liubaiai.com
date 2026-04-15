@@ -1,6 +1,7 @@
 import type { AiChatMessage, AiSettings } from "./types";
 import type { WritingRagSources } from "../util/work-rag-runtime";
 import { DEFAULT_WRITING_RAG_SOURCES } from "../util/work-rag-runtime";
+import { defaultWorkBibleSectionMask, filterWorkBibleMarkdownBySections } from "./work-bible-sections";
 
 /**
  * 总体规划 §11 步 9：上下文装配器 v1 的 **输入草案**（简版 / 占位拼接）。
@@ -26,7 +27,7 @@ export function assembleChatMessagesPlaceholder(input: AssembleContextInputV1): 
   if (input.workMeta?.title) blocks.push(`【作品】${input.workMeta.title}`);
   if (input.tagProfileText?.trim()) blocks.push(`【写作侧写】\n${input.tagProfileText.trim()}`);
   if (input.styleCardText?.trim()) blocks.push(`【风格卡】\n${input.styleCardText.trim()}`);
-  if (input.bibleExcerpts?.length) blocks.push(`【圣经摘录】\n${input.bibleExcerpts.join("\n---\n")}`);
+  if (input.bibleExcerpts?.length) blocks.push(`【锦囊摘录】\n${input.bibleExcerpts.join("\n---\n")}`);
   if (input.neighborChapterSummaries?.length) {
     blocks.push(`【邻章摘要】\n${input.neighborChapterSummaries.join("\n---\n")}`);
   }
@@ -67,6 +68,41 @@ export type WritingChapterBibleSlice = {
   /** §11 步 21：本章末主要人物状态备忘 */
   characterStateText: string;
 };
+
+export type ChapterBibleFieldKey = keyof WritingChapterBibleSlice;
+
+/** 本章锦囊各字段在 user 上下文中的勾选；缺省为全选 */
+export function defaultChapterBibleInjectMask(): Record<ChapterBibleFieldKey, boolean> {
+  return {
+    goalText: true,
+    forbidText: true,
+    povText: true,
+    sceneStance: true,
+    characterStateText: true,
+  };
+}
+
+export const CHAPTER_BIBLE_FIELD_LABELS: Record<ChapterBibleFieldKey, string> = {
+  goalText: "本章目标",
+  forbidText: "禁止",
+  povText: "视角/口吻",
+  sceneStance: "场景状态",
+  characterStateText: "本章人物状态",
+};
+
+export function applyChapterBibleInjectMask(
+  slice: WritingChapterBibleSlice,
+  mask?: Partial<Record<ChapterBibleFieldKey, boolean>>,
+): WritingChapterBibleSlice {
+  const m = { ...defaultChapterBibleInjectMask(), ...mask };
+  return {
+    goalText: m.goalText ? slice.goalText : "",
+    forbidText: m.forbidText ? slice.forbidText : "",
+    povText: m.povText ? slice.povText : "",
+    sceneStance: m.sceneStance ? slice.sceneStance : "",
+    characterStateText: m.characterStateText ? slice.characterStateText : "",
+  };
+}
 
 export type WritingContextMode = "full" | "summary" | "selection" | "none";
 
@@ -121,7 +157,7 @@ export type WritingLinkedExcerptSlice = { refTitle: string; text: string };
 /** 装配器用的笔感样本切片（§11 步 43） */
 export type WritingStyleSampleSlice = { title: string; body: string };
 
-/** 装配器用的术语表切片（§11 步 44；与圣经「术语表」同源） */
+/** 装配器用的术语表切片（§11 步 44；与锦囊「术语表」同源） */
 export type WritingGlossaryTermSlice = {
   term: string;
   category: "name" | "term" | "dead";
@@ -154,7 +190,7 @@ export type WritingSidepanelAssembleInput = {
   isCloudProvider: boolean;
   privacy: AiSettings["privacy"];
   includeBible: boolean;
-  /** 运行前已抓取的全书圣经 Markdown；未加载可为 "" */
+  /** 运行前已抓取的全书锦囊 Markdown；未加载可为 "" */
   bibleMarkdown: string;
   recentSummaryText: string;
   includeRecentSummaries: boolean;
@@ -162,7 +198,7 @@ export type WritingSidepanelAssembleInput = {
   ragQuery: string;
   ragK: number;
   ragHits: SidepanelRagHit[];
-  /** 步 24：多源 RAG（参考库 / 本书圣经分块 / 本书正文分块） */
+  /** 步 24：多源 RAG（参考库 / 本书锦囊分块 / 本书正文分块） */
   ragSources?: WritingRagSources;
   chapterContent: string;
   chapterSummary?: string;
@@ -172,10 +208,16 @@ export type WritingSidepanelAssembleInput = {
   mode: WritingSkillMode;
   /** 用于材料预览标题「最近 N 章」 */
   recentN: number;
+  /** 邻章概要：在「最近 N 章」窗口内实际纳入的章数（与勾选一致；缺省与旧行为一致） */
+  neighborSummaryIncludedCount?: number;
   /** 笔感参考段落；与「文风锚点」同走 user 上下文块 */
   styleSamples: WritingStyleSampleSlice[];
   /** 全书术语表；云端仅当 `privacy.allowMetadata` 时注入（与作品名/章名同档） */
   glossaryTerms: WritingGlossaryTermSlice[];
+  /** 本章锦囊字段子集；缺省全注入 */
+  chapterBibleInjectMask?: Partial<Record<ChapterBibleFieldKey, boolean>>;
+  /** 全书锦囊 Markdown 板块子集；缺省全注入 */
+  workBibleSectionMask?: Record<string, boolean>;
 };
 
 function writingSidepanelTask(mode: WritingSkillMode, selectedText: string): { task: string; appendSelectedForRewrite: boolean } {
@@ -209,7 +251,7 @@ function appendWorkStyleAndTagProfileLines(
   if (workStyle.extraRules.trim()) parts.push("额外硬约束：\n" + workStyle.extraRules.trim());
   if (tagProfileText?.trim()) {
     parts.push(
-      "作品标签侧写（内部技法约束，保持简短；若与上文风格卡或圣经冲突，以圣经与风格卡为准）：\n" + tagProfileText.trim(),
+      "作品标签侧写与题材约束（含防串台；若与上文风格卡或本书锦囊冲突，以本书锦囊与风格卡为准）：\n" + tagProfileText.trim(),
     );
   }
 }
@@ -232,6 +274,7 @@ export function buildWritingSidepanelSystemContent(input: Pick<WritingSidepanelA
   const sysParts: string[] = [
     "你是一个严谨的中文小说写作助手。你必须遵守用户提供的约束与设定，不要编造设定外事实。",
     "输出要求：中文；尽量具体可执行；不要输出与任务无关的解释。",
+    "世界观一致性（底层）：续写、扩写、抽卡须与上文及本书已确立的时代/世界一致。若无正文、锦囊或用户本轮明示，禁止将玄幻/古代/异世界背景擅自写成现代都市日常（或相反）；禁止无铺垫切换主舞台类型。若已选留白标签，须优先满足标签对应的题材与世界观约束。",
   ];
   appendWorkStyleAndTagProfileLines(sysParts, input.workStyle, input.tagProfileText);
   return sysParts.join("\n");
@@ -241,6 +284,7 @@ export function buildWritingSidepanelSystemContent(input: Pick<WritingSidepanelA
 export function buildWritingSidepanelCtxParts(input: WritingSidepanelAssembleInput): string[] {
   const ctxParts: string[] = [];
   const { isCloudProvider, privacy } = input;
+  const chapterBible = applyChapterBibleInjectMask(input.chapterBible, input.chapterBibleInjectMask);
   if (!isCloudProvider || privacy.allowMetadata) {
     ctxParts.push(`作品：${input.workTitle}`);
     ctxParts.push(`章节：${input.chapterTitle}`);
@@ -263,12 +307,12 @@ export function buildWritingSidepanelCtxParts(input: WritingSidepanelAssembleInp
   if (input.storyBackground.trim()) ctxParts.push(`故事背景：\n${input.storyBackground.trim()}`);
   if (input.characters.trim()) ctxParts.push(`角色清单：\n${input.characters.trim()}`);
   if (input.relations.trim()) ctxParts.push(`角色关系：\n${input.relations.trim()}`);
-  if (input.chapterBible.goalText.trim()) ctxParts.push(`本章目标：\n${input.chapterBible.goalText.trim()}`);
-  if (input.chapterBible.forbidText.trim()) ctxParts.push(`禁止：\n${input.chapterBible.forbidText.trim()}`);
-  if (input.chapterBible.povText.trim()) ctxParts.push(`视角/口吻：\n${input.chapterBible.povText.trim()}`);
-  if (input.chapterBible.sceneStance.trim()) ctxParts.push(`场景状态：\n${input.chapterBible.sceneStance.trim()}`);
-  if (input.chapterBible.characterStateText.trim()) {
-    ctxParts.push(`本章人物状态（备忘，可与全书人物卡对照）：\n${input.chapterBible.characterStateText.trim()}`);
+  if (chapterBible.goalText.trim()) ctxParts.push(`本章目标：\n${chapterBible.goalText.trim()}`);
+  if (chapterBible.forbidText.trim()) ctxParts.push(`禁止：\n${chapterBible.forbidText.trim()}`);
+  if (chapterBible.povText.trim()) ctxParts.push(`视角/口吻：\n${chapterBible.povText.trim()}`);
+  if (chapterBible.sceneStance.trim()) ctxParts.push(`场景状态：\n${chapterBible.sceneStance.trim()}`);
+  if (chapterBible.characterStateText.trim()) {
+    ctxParts.push(`本章人物状态（备忘，可与全书人物卡对照）：\n${chapterBible.characterStateText.trim()}`);
   }
   if (input.skillPresetText) ctxParts.push(input.skillPresetText);
 
@@ -322,9 +366,13 @@ export function buildWritingSidepanelUserContent(input: WritingSidepanelAssemble
     );
   }
 
-  const bible = input.bibleMarkdown.trim();
+  const bibleRaw = input.bibleMarkdown.trim();
+  const bible =
+    bibleRaw && input.workBibleSectionMask
+      ? filterWorkBibleMarkdownBySections(bibleRaw, input.workBibleSectionMask)
+      : bibleRaw;
   if (input.includeBible && bible && (!cloud || p.allowBible)) {
-    userParts.push("创作圣经（如与正文冲突，以圣经为准）：\n" + clampContextText(bible, Math.floor(max * 0.45)));
+    userParts.push("本书锦囊（如与正文冲突，以锦囊为准）：\n" + clampContextText(bible, Math.floor(max * 0.45)));
   }
 
   if (input.ragEnabled && input.ragQuery.trim() && (!cloud || p.allowRagSnippets)) {
@@ -333,7 +381,7 @@ export function buildWritingSidepanelUserContent(input: WritingSidepanelAssemble
       const rs = input.ragSources ?? DEFAULT_WRITING_RAG_SOURCES;
       const srcLbl = [
         rs.referenceLibrary && "参考库",
-        rs.workBibleExport && "本书圣经",
+        rs.workBibleExport && "本书锦囊",
         rs.workManuscript && "本书正文",
       ]
         .filter(Boolean)
@@ -405,7 +453,7 @@ export function buildWritingSidepanelMessages(input: WritingSidepanelAssembleInp
 
 /**
  * 与 {@link buildWritingSidepanelUserContent} 同步的材料块列表（用于侧栏折叠预览字数/内容）。
- * `bibleRawLength`：未截断的圣经长度，用于 note；`bibleMarkdown` 为当前预览文本（可与运行前抓取结果一致）。
+ * `bibleRawLength`：未截断的锦囊导出长度，用于 note；`bibleMarkdown` 为当前预览文本（可与运行前抓取结果一致）。
  */
 export function buildWritingSidepanelInjectBlocks(
   input: WritingSidepanelAssembleInput,
@@ -434,13 +482,17 @@ export function buildWritingSidepanelInjectBlocks(
 
   if (input.includeBible) {
     const raw = input.bibleMarkdown.trim();
-    const shown = raw
-      ? "创作圣经（如与正文冲突，以圣经为准）：\n" + clampContextText(raw, Math.floor(max * 0.45))
-      : "创作圣经（如与正文冲突，以圣经为准）：\n（预览未加载；运行时会抓取并按上限截断）";
+    const filtered =
+      raw && input.workBibleSectionMask ? filterWorkBibleMarkdownBySections(raw, input.workBibleSectionMask) : raw;
+    const shown = filtered
+      ? "本书锦囊（如与正文冲突，以锦囊为准）：\n" + clampContextText(filtered, Math.floor(max * 0.45))
+      : raw
+        ? "本书锦囊（如与正文冲突，以锦囊为准）：\n（当前板块勾选下无内容；请勾选板块或刷新预览）"
+        : "本书锦囊（如与正文冲突，以锦囊为准）：\n（预览未加载；运行时会抓取并按上限截断）";
     const rawLen = options?.bibleRawLength ?? (raw ? raw.length : 0);
     blocks.push({
       id: "bible",
-      title: "创作圣经（导出 Markdown）",
+      title: "本书锦囊（导出 Markdown）",
       chars: shown.length,
       content: shown,
       note: raw ? `预览已加载：${rawLen.toLocaleString()} 字` : undefined,
@@ -459,7 +511,7 @@ export function buildWritingSidepanelInjectBlocks(
       const key = input.ragQuery.trim();
       const picked = input.ragHits.slice(0, Math.max(0, Math.min(20, input.ragK)));
       const rs = input.ragSources ?? DEFAULT_WRITING_RAG_SOURCES;
-      const srcLbl = [rs.referenceLibrary && "参考库", rs.workBibleExport && "本书圣经", rs.workManuscript && "本书正文"]
+      const srcLbl = [rs.referenceLibrary && "参考库", rs.workBibleExport && "本书锦囊", rs.workManuscript && "本书正文"]
         .filter(Boolean)
         .join("·");
       const s = key
@@ -555,8 +607,16 @@ export type WritingMaterialsSummaryParams = {
   tagCount?: number;
   /** 非空正文的笔感样本条数 */
   styleSampleCount?: number;
-  /** 非空词条数（圣经术语表） */
+  /** 非空词条数（锦囊术语表） */
   glossaryTermCount?: number;
+  /** 「最近 N 章」窗口内有概要的章数 */
+  neighborSummaryPoolCount?: number;
+  /** 本请求实际纳入的邻章概要数（勾选子集） */
+  neighborSummaryIncludedCount?: number;
+  /** 本章锦囊字段勾选（与装配器一致） */
+  chapterBibleInjectMask?: Partial<Record<ChapterBibleFieldKey, boolean>>;
+  /** 全书锦囊板块勾选 */
+  workBibleSectionMask?: Record<string, boolean>;
   approxInjectChars: number;
   approxInjectTokens: number;
 };
@@ -584,24 +644,52 @@ export function buildWritingSidepanelMaterialsSummaryLines(p: WritingMaterialsSu
     lines.push(`术语表：${gc} 条（user 上下文，本章约束之后）`);
   }
 
-  const cb = [
+  const cbFilled = [
     p.chapterBible.goalText,
     p.chapterBible.forbidText,
     p.chapterBible.povText,
     p.chapterBible.sceneStance,
     p.chapterBible.characterStateText,
   ].filter((x) => (x ?? "").trim()).length;
-  lines.push(`本章圣经块：已填 ${cb}/5（含人物状态备忘）`);
+  const mcb = { ...defaultChapterBibleInjectMask(), ...p.chapterBibleInjectMask };
+  const cbInject = (
+    [
+      ["goalText", p.chapterBible.goalText],
+      ["forbidText", p.chapterBible.forbidText],
+      ["povText", p.chapterBible.povText],
+      ["sceneStance", p.chapterBible.sceneStance],
+      ["characterStateText", p.chapterBible.characterStateText],
+    ] as const
+  ).filter(([k, v]) => mcb[k] && (v ?? "").trim()).length;
+  lines.push(`本章锦囊块：已填 ${cbFilled}/5；本请求注入其中 ${cbInject} 项（含人物状态备忘）`);
   const bibleOn = p.includeBible;
+  const wMask = p.workBibleSectionMask;
+  const wTotal = Object.keys(defaultWorkBibleSectionMask()).length;
+  const wOn =
+    wMask && bibleOn
+      ? Object.values({ ...defaultWorkBibleSectionMask(), ...wMask }).filter(Boolean).length
+      : bibleOn
+        ? wTotal
+        : 0;
   lines.push(
-    `全书圣经：${bibleOn ? "注入" : "不注入"}` + (cloud && bibleOn ? `（云端${pr.allowBible ? "允许" : "禁止"}）` : ""),
+    `全书锦囊：${bibleOn ? `注入 · 板块 ${wOn}/${wTotal}` : "不注入"}` +
+      (cloud && bibleOn ? `（云端${pr.allowBible ? "允许" : "禁止"}）` : ""),
   );
   lines.push(
     `关联摘录：${p.includeLinkedExcerpts ? `注入 · 本章关联 ${p.linkedExcerptCount} 条` : "不注入"}` +
       (cloud && p.includeLinkedExcerpts ? `（云端${pr.allowLinkedExcerpts ? "允许" : "禁止"}）` : ""),
   );
+  const nMax = Math.max(0, Math.min(12, p.recentN));
+  const pool = p.neighborSummaryPoolCount;
+  const inc = p.neighborSummaryIncludedCount;
+  const neighborLab =
+    p.includeRecentSummaries && pool != null && inc != null
+      ? `注入 · 窗口 ${nMax} 章 · 本请求含 ${inc}/${pool} 章概要`
+      : p.includeRecentSummaries
+        ? `注入 · 最近 ${nMax} 章`
+        : "不注入";
   lines.push(
-    `最近章节概要：${p.includeRecentSummaries ? `注入 · 最近 ${Math.max(0, Math.min(12, p.recentN))} 章` : "不注入"}` +
+    `最近章节概要：${neighborLab}` +
       (cloud && p.includeRecentSummaries ? `（云端${pr.allowRecentSummaries ? "允许" : "禁止"}）` : ""),
   );
 
@@ -625,7 +713,7 @@ export function buildWritingSidepanelMaterialsSummaryLines(p: WritingMaterialsSu
     const shortQ = q.length > 28 ? q.slice(0, 28) + "..." : q || "（空 query）";
     const ragKClamped = Math.max(0, Math.min(20, p.ragK));
     const rs = p.ragSources ?? DEFAULT_WRITING_RAG_SOURCES;
-    const srcLbl = [rs.referenceLibrary && "参考库", rs.workBibleExport && "本书圣经", rs.workManuscript && "本书正文"]
+    const srcLbl = [rs.referenceLibrary && "参考库", rs.workBibleExport && "本书锦囊", rs.workManuscript && "本书正文"]
       .filter(Boolean)
       .join("·");
     lines.push(

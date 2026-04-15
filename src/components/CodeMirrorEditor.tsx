@@ -13,9 +13,16 @@ export type CodeMirrorEditorHandle = {
   appendTextToEnd: (text: string) => void;
   getSelectedText: () => string;
   replaceSelection: (text: string) => void;
+  /**
+   * 滚动到第一个匹配位置并高亮选中。
+   * @param query   搜索词（字面量或正则字符串）
+   * @param isRegex 是否当作正则解析（默认 false）
+   * @param fromOffset 从该偏移量开始搜索（默认 0）
+   */
+  scrollToMatch: (query: string, isRegex?: boolean, fromOffset?: number) => void;
 };
 
-export function normalizeDocNewlines(s: string): string {
+function normalizeDocNewlines(s: string): string {
   return s.replace(/\r\n/g, "\n");
 }
 
@@ -139,6 +146,31 @@ export const CodeMirrorEditor = forwardRef<
           changes: { from: sel.from, to: sel.to, insert: text },
           selection: { anchor: sel.from + text.length },
           scrollIntoView: true,
+        });
+        view.focus();
+      },
+      scrollToMatch: (query: string, isRegex = false, fromOffset = 0) => {
+        const view = viewRef.current;
+        if (!view || !query.trim()) return;
+        const text = view.state.doc.toString();
+        let matchFrom = -1;
+        let matchTo = -1;
+        if (isRegex) {
+          try {
+            const re = new RegExp(query, "g");
+            re.lastIndex = fromOffset;
+            const m = re.exec(text);
+            if (m) { matchFrom = m.index; matchTo = m.index + m[0].length; }
+          } catch { /* invalid regex, skip */ }
+        } else {
+          const i = text.indexOf(query, fromOffset);
+          if (i >= 0) { matchFrom = i; matchTo = i + query.length; }
+        }
+        if (matchFrom < 0) return;
+        view.dispatch({
+          selection: { anchor: matchFrom, head: matchTo },
+          scrollIntoView: true,
+          effects: EditorView.scrollIntoView(matchFrom, { y: "center" }),
         });
         view.focus();
       },

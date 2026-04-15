@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
+import { cn } from "../lib/utils";
 import { authMe, type AuthUser } from "../api/auth";
 import { postTestSave } from "../api/testSave";
 import { Button } from "../components/ui/button";
@@ -77,23 +78,8 @@ export function HomePage() {
     };
   }, [lastWorkId]);
 
-  const hubModules: HubModule[] = useMemo(() => {
-    const staleRecord = Boolean(lastWorkId && lastWorkResolved && !resumeWork);
-    const plotTo = staleRecord
-      ? "/library"
-      : resumeWork
-        ? `/work/${resumeWork.id}/bible`
-        : lastWorkId
-          ? `/work/${lastWorkId}/bible`
-          : "/library";
-    const plotDesc = staleRecord
-      ? "上次记录的作品已不存在，请从作品库重新打开。"
-      : resumeWork
-        ? "当前作品的创作圣经与设定。"
-        : lastWorkId
-          ? "正在确认上次作品…"
-          : "请先在作品库打开或创建作品。";
-    return [
+  const hubModules: HubModule[] = useMemo(
+    () => [
       { to: "/library", label: "留白", hint: "1", desc: "作品库：新建、导入、封面与留白标签。" },
       { to: "/logic", label: "推演", hint: "2", desc: "情节与结构推演（能力按路线图迭代）。" },
       {
@@ -104,15 +90,16 @@ export function HomePage() {
       },
       { to: "/chat", label: "问策", hint: "4", desc: "对话与策问。" },
       {
-        to: plotTo,
+        to: "/luobi",
         label: "落笔",
         hint: "5",
-        desc: plotDesc,
+        desc: "创作工具箱：提示词、锦囊、世界观、风格卡、词典等（无需先选作品即可进入）。",
       },
       { to: "/sheng-hui", label: "生辉", hint: "6", desc: "润色与生成相关能力。" },
       { to: "/reference", label: "藏经", hint: "7", desc: "摘录、标签与检索。" },
-    ];
-  }, [lastWorkId, lastWorkResolved, resumeWork]);
+    ],
+    [],
+  );
 
   function persistLastWork(id: string) {
     try {
@@ -124,8 +111,8 @@ export function HomePage() {
   }
 
   return (
-    <div className="page home-page">
-      <section className="home-hero rounded-xl border border-border/40 bg-card/30 px-4 py-6 sm:px-8 sm:py-8">
+    <div className={cn("page home-page flex flex-col gap-6")}>
+      <section className="home-hero rounded-xl border border-border/40 bg-card/30 px-4 py-6 sm:px-8 sm:py-8 shadow-sm">
         <h1 className="home-title">留白写作</h1>
         <p className="home-sub muted">以空白起笔，让故事在安静里生长。</p>
         <p className="home-hero-hint muted small">下方模块与顶栏顺序、快捷键提示 1～7 一致。</p>
@@ -143,7 +130,7 @@ export function HomePage() {
       </section>
 
       {resumeWork ? (
-        <section className="home-section home-resume mt-6" aria-labelledby="home-resume-heading">
+        <section className="home-section home-resume" aria-labelledby="home-resume-heading">
           <h2 id="home-resume-heading" className="home-section-title">
             继续创作
           </h2>
@@ -158,7 +145,7 @@ export function HomePage() {
               <Link to={`/work/${resumeWork.id}/summary`}>概要</Link>
             </Button>
             <Button asChild variant="ghost" size="sm">
-              <Link to={`/work/${resumeWork.id}/bible`}>圣经</Link>
+              <Link to={`/work/${resumeWork.id}/bible`}>锦囊</Link>
             </Button>
             <Button asChild variant="ghost" size="sm">
               <Link to="/library">作品库</Link>
@@ -168,7 +155,7 @@ export function HomePage() {
       ) : null}
 
       {cloudUser ? (
-        <section className="home-section mt-6 rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6">
+        <section className="home-section rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6 shadow-sm">
           <h2 className="home-section-title">云端同步测试</h2>
           <p className="muted small" style={{ marginTop: 0 }}>
             已登录为 <strong>{cloudUser.email}</strong>。点击下方按钮向服务器写入一条测试记录（需后端已启动）。
@@ -204,7 +191,7 @@ export function HomePage() {
       ) : null}
 
       <section
-        className="home-section mt-6 rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6"
+        className="home-section rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6 shadow-sm"
         aria-labelledby="home-modules-heading"
       >
         <h2 id="home-modules-heading" className="home-section-title">
@@ -232,7 +219,7 @@ export function HomePage() {
         </ul>
       </section>
 
-      <section className="home-section mt-6 rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6">
+      <section className="home-section rounded-xl border border-border/40 bg-card/30 px-4 py-5 sm:px-6 shadow-sm">
         <div className="home-section-head">
           <h2 className="home-section-title">最近作品</h2>
           <Link to="/library" className="muted small">

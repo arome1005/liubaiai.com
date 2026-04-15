@@ -1,4 +1,6 @@
-import mammoth from "mammoth";
+type MammothRaw = {
+  extractRawText: (input: { arrayBuffer: ArrayBuffer }) => Promise<{ value: string }>;
+};
 
 /**
  * 浏览器端从 Word .docx（Office 2007+）提取纯文本；本地解析，不上传。
@@ -7,6 +9,7 @@ import mammoth from "mammoth";
 export async function extractPlainTextFromDocx(data: ArrayBuffer): Promise<string> {
   let value: string;
   try {
+    const mammoth = (await import("mammoth")) as unknown as MammothRaw;
     const result = await mammoth.extractRawText({ arrayBuffer: data });
     value = result.value;
   } catch (e) {

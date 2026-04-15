@@ -1,5 +1,5 @@
 /**
- * 推演 · 一致性扫描（步 32 MVP）：正文 vs 圣经/风格卡规则，纯本地规则、无 LLM。
+ * 推演 · 一致性扫描（步 32 MVP）：正文 vs 锦囊/风格卡规则，纯本地规则、无 LLM。
  */
 
 export type ConsistencySeverity = "warn" | "info";
@@ -15,7 +15,7 @@ export type ConsistencyAlert = {
 
 export type BibleConsistencyScanInput = {
   chapterContent: string;
-  /** 本章圣经 · forbidText */
+  /** 本章锦囊 · forbidText */
   chapterBibleForbid: string;
   /** 作品风格卡 · bannedPhrases */
   styleBannedPhrases: string;

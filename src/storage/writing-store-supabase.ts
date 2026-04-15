@@ -6,11 +6,15 @@ import type {
   BibleGlossaryTerm,
   BibleTimelineEvent,
   BibleWorldEntry,
+  GlobalPromptTemplate,
+  LogicPlaceEvent,
+  LogicPlaceNode,
   BookSearchHit,
   BookSearchScope,
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  InspirationCollection,
   InspirationFragment,
   ReferenceChapterHead,
   ReferenceChunk,
@@ -25,6 +29,7 @@ import type {
   WorkStyleCard,
   WritingPromptTemplate,
   WritingStyleSample,
+  TuiyanState,
 } from "../db/types";
 import { SNAPSHOT_CAP_PER_CHAPTER, SNAPSHOT_MAX_AGE_MS } from "../db/types";
 import { normalizeWorkTagList } from "../util/work-tags";
@@ -39,7 +44,11 @@ import {
   parseBibleForeRow,
   parseBibleTplRow,
   parseBibleTimelineRow,
+  parseLogicPlaceEventRow,
+  parseLogicPlaceNodeRow,
   parseBibleWorldRow,
+  parseGlobalPromptTemplateRow,
+  parseInspirationCollectionRow,
   parseInspirationFragmentRow,
   parseChapterBibleRow,
   parseChapterRow,
@@ -55,6 +64,8 @@ import {
   toStyleCardUpsert,
   toVolumeInsert,
   toWorkInsert,
+  toLogicPlaceEventInsert,
+  toLogicPlaceNodeInsert,
 } from "./supabase-writing-rows";
 
 type Json = Record<string, unknown>;
@@ -92,7 +103,7 @@ function refOnly(): never {
 }
 
 /**
- * 写作 / 圣经 / 风格卡存 Supabase；不包含参考库表。
+ * 写作 / 本书锦囊 / 风格卡存 Supabase；不包含参考库表。
  * 生产环境请通过 {@link WritingStoreHybrid} 与 IndexedDB 组合使用。
  */
 export class WritingStoreSupabase implements WritingStore {
@@ -115,9 +126,101 @@ export class WritingStoreSupabase implements WritingStore {
     await chunkedInsert("chapter_bible", rows.chapterBible);
     await chunkedInsert("bible_glossary_term", rows.bibleGloss);
     await chunkedInsert("work_style_card", rows.styleCards);
+    await chunkedInsert("inspiration_collection", rows.inspirationCollections);
     await chunkedInsert("inspiration_fragment", rows.inspirationFrags);
     await chunkedInsert("writing_prompt_template", rows.writingPromptTpl);
     await chunkedInsert("writing_style_sample", rows.writingStyleSamples);
+  }
+
+  async getTuiyanState(workId: string): Promise<TuiyanState | undefined> {
+    const uid = await maybeUid();
+    if (!uid) return undefined;
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from("tuiyan_state")
+      .select("*")
+      .eq("user_id", uid)
+      .eq("work_id", workId)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return undefined;
+    const row = data as Json;
+    return {
+      id: String(row.id),
+      workId: String(row.work_id),
+      updatedAt: Number(row.updated_at ?? 0) || now(),
+      chatHistory: (row.chat_history as TuiyanState["chatHistory"]) ?? [],
+      wenCe: (row.wence as TuiyanState["wenCe"]) ?? [],
+      finalizedNodeIds: (row.finalized_node_ids as string[]) ?? [],
+      statusByNodeId: (row.status_by_node_id as Record<string, any>) ?? {},
+      linkedRefWorkIds: (row.linked_ref_work_ids as string[]) ?? [],
+      mindmap: (row.mindmap as TuiyanState["mindmap"]) ?? undefined,
+      scenes: (row.scenes as TuiyanState["scenes"]) ?? [],
+    };
+  }
+
+  async upsertTuiyanState(
+    workId: string,
+    patch: Partial<Omit<TuiyanState, "id" | "workId" | "updatedAt">> & { updatedAt?: number },
+  ): Promise<TuiyanState> {
+    const uid = await requireUid();
+    const sb = getSupabase();
+    const t = Number.isFinite(patch.updatedAt) ? Number(patch.updatedAt) : now();
+
+    const { data: existing, error: e0 } = await sb
+      .from("tuiyan_state")
+      .select("*")
+      .eq("user_id", uid)
+      .eq("work_id", workId)
+      .maybeSingle();
+    if (e0) throw new Error(e0.message);
+
+    const prev = existing as Json | null;
+    const chatHistory = (patch.chatHistory ?? (prev?.chat_history as TuiyanState["chatHistory"]) ?? []) as TuiyanState["chatHistory"];
+    const wenCe = (patch.wenCe ?? (prev?.wence as TuiyanState["wenCe"]) ?? []) as TuiyanState["wenCe"];
+    const finalizedNodeIds = (patch.finalizedNodeIds ?? (prev?.finalized_node_ids as string[]) ?? []) as string[];
+    const statusByNodeId = (patch.statusByNodeId ?? (prev?.status_by_node_id as Record<string, any>) ?? {}) as Record<
+      string,
+      "draft" | "refining" | "locked"
+    >;
+    const linkedRefWorkIds = (patch.linkedRefWorkIds ?? (prev?.linked_ref_work_ids as string[]) ?? []) as string[];
+    const mindmap = (patch.mindmap ?? (prev?.mindmap as TuiyanState["mindmap"]) ?? undefined) as
+      | TuiyanState["mindmap"]
+      | undefined;
+    const scenes = (patch.scenes ?? (prev?.scenes as TuiyanState["scenes"]) ?? []) as TuiyanState["scenes"];
+
+    const payload = {
+      user_id: uid,
+      work_id: workId,
+      updated_at: t,
+      chat_history: chatHistory as unknown,
+      wence: wenCe as unknown,
+      finalized_node_ids: finalizedNodeIds as unknown,
+      status_by_node_id: statusByNodeId as unknown,
+      linked_ref_work_ids: linkedRefWorkIds as unknown,
+      mindmap: (mindmap ?? {}) as unknown,
+      scenes: (scenes ?? []) as unknown,
+    };
+
+    const { data, error } = await sb
+      .from("tuiyan_state")
+      .upsert(payload as never, { onConflict: "user_id,work_id" })
+      .select("*")
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const row = (data ?? payload) as unknown as Json;
+    return {
+      id: String((row as any).id ?? `${uid}:${workId}`),
+      workId,
+      updatedAt: Number((row as any).updated_at ?? t) || t,
+      chatHistory,
+      wenCe,
+      finalizedNodeIds,
+      statusByNodeId,
+      linkedRefWorkIds,
+      mindmap: mindmap ?? undefined,
+      scenes,
+    };
   }
 
   async listWorks(): Promise<Work[]> {
@@ -148,18 +251,22 @@ export class WritingStoreSupabase implements WritingStore {
     return parseWorkRow(data as Json);
   }
 
-  async createWork(title: string, opts?: { tags?: string[] }): Promise<Work> {
+  async createWork(title: string, opts?: { tags?: string[]; description?: string; status?: Work["status"] }): Promise<Work> {
     const uid = await requireUid();
     const sb = getSupabase();
     const id = crypto.randomUUID();
     const t = now();
     const tags = normalizeWorkTagList(opts?.tags);
+    const desc = (opts?.description ?? "").trim();
+    const status = opts?.status ?? "serializing";
     const work: Work = {
       id,
       title: title.trim() || "未命名作品",
       createdAt: t,
       updatedAt: t,
       progressCursor: null,
+      ...(desc ? { description: desc } : {}),
+      ...(status ? { status } : {}),
       ...(tags?.length ? { tags } : {}),
     };
     const { error: e1 } = await sb.from("work").insert(toWorkInsert(uid, work) as never);
@@ -180,12 +287,14 @@ export class WritingStoreSupabase implements WritingStore {
 
   async updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status">>,
   ): Promise<void> {
     const uid = await requireUid();
     const sb = getSupabase();
     const row: Json = { updated_at: now() };
     if (patch.title !== undefined) row.title = patch.title;
+    if (patch.description !== undefined) row.description = String(patch.description ?? "").trim();
+    if (patch.status !== undefined) row.status = patch.status ?? "serializing";
     if (patch.progressCursor !== undefined) row.progress_cursor = patch.progressCursor;
     if (patch.coverImage !== undefined) row.cover_image = patch.coverImage === "" ? null : patch.coverImage;
     if (patch.tags !== undefined) row.tags = normalizeWorkTagList(patch.tags) ?? [];
@@ -276,7 +385,8 @@ export class WritingStoreSupabase implements WritingStore {
       .from("chapter")
       .select("*")
       .eq("work_id", workId)
-      .order("order", { ascending: true });
+      .order("order", { ascending: true })
+      .limit(100_000);
     if (error) throw new Error(error.message);
     return (data as Json[]).map(parseChapterRow);
   }
@@ -311,7 +421,12 @@ export class WritingStoreSupabase implements WritingStore {
 
   async updateChapter(
     id: string,
-    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt">>,
+    patch: Partial<
+      Pick<
+        Chapter,
+        "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder" | "outlineDraft" | "outlineNodeId" | "outlinePushedAt"
+      >
+    >,
     options?: UpdateChapterOptions,
   ): Promise<void> {
     await requireUid();
@@ -326,10 +441,15 @@ export class WritingStoreSupabase implements WritingStore {
     } else if (patch.summaryUpdatedAt !== undefined) {
       row.summary_updated_at = patch.summaryUpdatedAt;
     }
+    if (patch.summaryScopeFromOrder !== undefined) row.summary_scope_from = patch.summaryScopeFromOrder;
+    if (patch.summaryScopeToOrder !== undefined) row.summary_scope_to = patch.summaryScopeToOrder;
     if (patch.content !== undefined) {
       row.content = patch.content;
       row.word_count_cache = wordCount(patch.content);
     }
+    if (patch.outlineDraft !== undefined) row.outline_draft = patch.outlineDraft ?? null;
+    if (patch.outlineNodeId !== undefined) row.outline_node_id = patch.outlineNodeId ?? null;
+    if (patch.outlinePushedAt !== undefined) row.outline_pushed_at = patch.outlinePushedAt ?? null;
     let qb = sb.from("chapter").update(row as never).eq("id", id);
     if (options?.expectedUpdatedAt !== undefined) {
       qb = qb.eq("updated_at", options.expectedUpdatedAt);
@@ -381,9 +501,15 @@ export class WritingStoreSupabase implements WritingStore {
     await sb.from("work").update({ updated_at: t } as never).eq("id", workId);
   }
 
-  async searchWork(workId: string, query: string, scope?: BookSearchScope): Promise<BookSearchHit[]> {
+  async searchWork(workId: string, query: string, scope?: BookSearchScope, isRegex?: boolean): Promise<BookSearchHit[]> {
     const q = query.trim();
     if (!q) return [];
+    let re: RegExp;
+    try {
+      re = isRegex ? new RegExp(q, "g") : new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+    } catch {
+      re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+    }
     const work = await this.getWork(workId);
     let chapters = await this.listChapters(workId);
     if (scope === "beforeProgress" && work?.progressCursor) {
@@ -391,26 +517,31 @@ export class WritingStoreSupabase implements WritingStore {
       const curOrder = cur?.order ?? Infinity;
       chapters = chapters.filter((c) => c.order < curOrder);
     }
+    const CONTEXT = 60;
+    const MAX_CONTEXTS = 3;
     const hits: BookSearchHit[] = [];
     for (const ch of chapters) {
-      let count = 0;
-      let pos = 0;
-      while (true) {
-        const i = ch.content.indexOf(q, pos);
-        if (i < 0) break;
-        count++;
-        pos = i + q.length;
+      const text = ch.content;
+      const offsets: number[] = [];
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text)) !== null) { offsets.push(m.index); if (offsets.length > 500) break; }
+      if (offsets.length === 0) continue;
+      const firstOffset = offsets[0];
+      const start0 = Math.max(0, firstOffset - 40);
+      const preview = text.slice(start0, start0 + 120).replace(/\s+/g, " ").trim();
+      const contexts: string[] = [];
+      let lastEnd = -1;
+      for (const off of offsets) {
+        if (off < lastEnd) continue;
+        const cStart = Math.max(0, off - CONTEXT);
+        const cEnd = Math.min(text.length, off + CONTEXT + q.length);
+        const snippet = text.slice(cStart, cEnd).replace(/\s+/g, " ").trim();
+        contexts.push(`${cStart > 0 ? "…" : ""}${snippet}${cEnd < text.length ? "…" : ""}`);
+        lastEnd = off + q.length;
+        if (contexts.length >= MAX_CONTEXTS) break;
       }
-      if (count === 0) continue;
-      const first = ch.content.indexOf(q);
-      const start = Math.max(0, first - 40);
-      const preview = ch.content.slice(start, start + 120).replace(/\s+/g, " ").trim();
-      hits.push({
-        chapterId: ch.id,
-        chapterTitle: ch.title,
-        matchCount: count,
-        preview: preview.length ? `…${preview}…` : "…",
-      });
+      hits.push({ chapterId: ch.id, chapterTitle: ch.title, matchCount: offsets.length, preview: preview.length ? `…${preview}…` : "…", contexts, firstMatchOffset: firstOffset });
     }
     return hits;
   }
@@ -837,6 +968,100 @@ export class WritingStoreSupabase implements WritingStore {
     }
   }
 
+  async listLogicPlaceNodes(workId: string): Promise<LogicPlaceNode[]> {
+    await requireUid();
+    const { data, error } = await getSupabase()
+      .from("logic_place_node")
+      .select("*")
+      .eq("work_id", workId)
+      .order("updated_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data as Json[]).map(parseLogicPlaceNodeRow);
+  }
+
+  async addLogicPlaceNode(
+    workId: string,
+    input: Partial<Omit<LogicPlaceNode, "id" | "workId" | "createdAt" | "updatedAt">> & { name: string },
+  ): Promise<LogicPlaceNode> {
+    const t = now();
+    const x = Number.isFinite(input.x as number) ? Number(input.x) : 50;
+    const y = Number.isFinite(input.y as number) ? Number(input.y) : 50;
+    const row: LogicPlaceNode = {
+      id: crypto.randomUUID(),
+      workId,
+      name: (input.name ?? "").trim() || "地点",
+      note: input.note ?? "",
+      x: Math.max(0, Math.min(100, Math.round(x))),
+      y: Math.max(0, Math.min(100, Math.round(y))),
+      createdAt: t,
+      updatedAt: t,
+    };
+    const { error } = await getSupabase().from("logic_place_node").insert(toLogicPlaceNodeInsert(row) as never);
+    if (error) throw new Error(error.message);
+    return row;
+  }
+
+  async updateLogicPlaceNode(id: string, patch: Partial<Omit<LogicPlaceNode, "id" | "workId">>): Promise<void> {
+    const row: Json = { updated_at: now() };
+    if (patch.name !== undefined) row.name = (patch.name ?? "").trim() || "地点";
+    if (patch.note !== undefined) row.note = patch.note ?? "";
+    if (patch.x !== undefined) row.x = Math.max(0, Math.min(100, Math.round(Number(patch.x))));
+    if (patch.y !== undefined) row.y = Math.max(0, Math.min(100, Math.round(Number(patch.y))));
+    const { error } = await getSupabase().from("logic_place_node").update(row as never).eq("id", id);
+    if (error) throw new Error(error.message);
+  }
+
+  async deleteLogicPlaceNode(id: string): Promise<void> {
+    const { error } = await getSupabase().from("logic_place_node").delete().eq("id", id);
+    if (error) throw new Error(error.message);
+  }
+
+  async listLogicPlaceEvents(workId: string): Promise<LogicPlaceEvent[]> {
+    await requireUid();
+    const { data, error } = await getSupabase()
+      .from("logic_place_event")
+      .select("*")
+      .eq("work_id", workId)
+      .order("updated_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data as Json[]).map(parseLogicPlaceEventRow);
+  }
+
+  async addLogicPlaceEvent(
+    workId: string,
+    input: Partial<Omit<LogicPlaceEvent, "id" | "workId" | "createdAt" | "updatedAt">> & { placeId: string; label: string },
+  ): Promise<LogicPlaceEvent> {
+    const t = now();
+    const row: LogicPlaceEvent = {
+      id: crypto.randomUUID(),
+      workId,
+      placeId: input.placeId,
+      label: (input.label ?? "").trim() || "事件",
+      note: input.note ?? "",
+      chapterId: input.chapterId ?? null,
+      createdAt: t,
+      updatedAt: t,
+    };
+    const { error } = await getSupabase().from("logic_place_event").insert(toLogicPlaceEventInsert(row) as never);
+    if (error) throw new Error(error.message);
+    return row;
+  }
+
+  async updateLogicPlaceEvent(id: string, patch: Partial<Omit<LogicPlaceEvent, "id" | "workId">>): Promise<void> {
+    const row: Json = { updated_at: now() };
+    if (patch.placeId !== undefined) row.place_id = patch.placeId;
+    if (patch.label !== undefined) row.label = (patch.label ?? "").trim() || "事件";
+    if (patch.note !== undefined) row.note = patch.note ?? "";
+    if (patch.chapterId !== undefined) row.chapter_id = patch.chapterId;
+    const { error } = await getSupabase().from("logic_place_event").update(row as never).eq("id", id);
+    if (error) throw new Error(error.message);
+  }
+
+  async deleteLogicPlaceEvent(id: string): Promise<void> {
+    const { error } = await getSupabase().from("logic_place_event").delete().eq("id", id);
+    if (error) throw new Error(error.message);
+  }
+
   async listBibleChapterTemplates(workId: string): Promise<BibleChapterTemplate[]> {
     await requireUid();
     const { data, error } = await getSupabase()
@@ -1222,46 +1447,154 @@ export class WritingStoreSupabase implements WritingStore {
       if (!w) throw new Error("作品不存在或无权访问");
     }
     const t = now();
+    const cid = input.collectionId ?? null;
+    if (cid) {
+      const { data: col, error: ce } = await getSupabase()
+        .from("inspiration_collection")
+        .select("id")
+        .eq("id", cid)
+        .eq("user_id", uid)
+        .maybeSingle();
+      if (ce) throw new Error(ce.message);
+      if (!col) throw new Error("集合不存在");
+    }
     const row: InspirationFragment = {
       id: crypto.randomUUID(),
       workId: wid,
+      collectionId: cid,
+      title: input.title?.trim() || undefined,
+      sourceName: input.sourceName?.trim() || undefined,
+      sourceUrl: input.sourceUrl?.trim() || undefined,
+      urlTitle: input.urlTitle?.trim() || undefined,
+      urlSite: input.urlSite?.trim() || undefined,
+      urlDescription: input.urlDescription?.trim() || undefined,
+      urlFetchedAt: typeof input.urlFetchedAt === "number" ? input.urlFetchedAt : undefined,
+      links: Array.isArray(input.links) ? input.links : [],
       body: input.body.trim() || "（空碎片）",
       tags: normalizeWorkTagList(input.tags) ?? [],
+      isFavorite: input.isFavorite ?? false,
+      isPrivate: input.isPrivate ?? false,
+      archived: input.archived ?? false,
       createdAt: t,
       updatedAt: t,
     };
-    const { error } = await getSupabase().from("inspiration_fragment").insert({
+    const fullPayload: Json = {
       id: row.id,
       user_id: uid,
       work_id: row.workId,
+      collection_id: row.collectionId,
+      title: row.title ?? null,
+      source_name: row.sourceName ?? null,
+      source_url: row.sourceUrl ?? null,
+      url_title: row.urlTitle ?? null,
+      url_site: row.urlSite ?? null,
+      url_description: row.urlDescription ?? null,
+      url_fetched_at: row.urlFetchedAt ?? null,
+      links: row.links ?? [],
       body: row.body,
       tags: row.tags,
+      is_favorite: !!row.isFavorite,
+      is_private: !!row.isPrivate,
+      archived: !!row.archived,
       created_at: row.createdAt,
       updated_at: row.updatedAt,
-    } as never);
-    if (error) throw new Error(error.message);
+    };
+    const { error } = await getSupabase().from("inspiration_fragment").insert(fullPayload as never);
+    if (error) {
+      // 兼容：远端表还没迁移到最新 schema（schema cache 缺列）
+      const m = /Could not find the '([^']+)' column/i.exec(error.message);
+      if (m) {
+        const minimal: Json = {
+          id: row.id,
+          user_id: uid,
+          work_id: row.workId,
+          collection_id: row.collectionId,
+          body: row.body,
+          tags: row.tags,
+          created_at: row.createdAt,
+          updated_at: row.updatedAt,
+        };
+        const { error: e2 } = await getSupabase().from("inspiration_fragment").insert(minimal as never);
+        if (e2) throw new Error(e2.message);
+      } else {
+        throw new Error(error.message);
+      }
+    }
     return row;
   }
 
   async updateInspirationFragment(
     id: string,
-    patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId">>,
+    patch: Partial<
+      Pick<
+        InspirationFragment,
+        | "body"
+        | "tags"
+        | "workId"
+        | "collectionId"
+        | "title"
+        | "sourceName"
+        | "sourceUrl"
+        | "urlTitle"
+        | "urlSite"
+        | "urlDescription"
+        | "urlFetchedAt"
+        | "links"
+        | "isFavorite"
+        | "isPrivate"
+        | "archived"
+      >
+    >,
   ): Promise<void> {
     const uid = await requireUid();
     if (patch.workId !== undefined && patch.workId !== null) {
       const w = await this.getWork(patch.workId);
       if (!w) throw new Error("作品不存在或无权访问");
     }
+    if (patch.collectionId !== undefined && patch.collectionId !== null) {
+      const { data: col, error: ce } = await getSupabase()
+        .from("inspiration_collection")
+        .select("id")
+        .eq("id", patch.collectionId)
+        .eq("user_id", uid)
+        .maybeSingle();
+      if (ce) throw new Error(ce.message);
+      if (!col) throw new Error("集合不存在");
+    }
     const row: Json = { updated_at: now() };
     if (patch.body !== undefined) row.body = patch.body.trim() || "（空碎片）";
     if (patch.tags !== undefined) row.tags = normalizeWorkTagList(patch.tags) ?? [];
     if (patch.workId !== undefined) row.work_id = patch.workId;
-    const { error, data } = await getSupabase()
-      .from("inspiration_fragment")
-      .update(row as never)
-      .eq("id", id)
-      .eq("user_id", uid)
-      .select("id");
+    if (patch.collectionId !== undefined) row.collection_id = patch.collectionId;
+    if (patch.title !== undefined) row.title = patch.title?.trim() || null;
+    if (patch.sourceName !== undefined) row.source_name = patch.sourceName?.trim() || null;
+    if (patch.sourceUrl !== undefined) row.source_url = patch.sourceUrl?.trim() || null;
+    if (patch.urlTitle !== undefined) row.url_title = patch.urlTitle?.trim() || null;
+    if (patch.urlSite !== undefined) row.url_site = patch.urlSite?.trim() || null;
+    if (patch.urlDescription !== undefined) row.url_description = patch.urlDescription?.trim() || null;
+    if (patch.urlFetchedAt !== undefined) row.url_fetched_at = patch.urlFetchedAt ?? null;
+    if (patch.links !== undefined) row.links = Array.isArray(patch.links) ? patch.links : [];
+    if (patch.isFavorite !== undefined) row.is_favorite = !!patch.isFavorite;
+    if (patch.isPrivate !== undefined) row.is_private = !!patch.isPrivate;
+    if (patch.archived !== undefined) row.archived = !!patch.archived;
+    const doUpdate = async (payload: Json) =>
+      getSupabase()
+        .from("inspiration_fragment")
+        .update(payload as never)
+        .eq("id", id)
+        .eq("user_id", uid)
+        .select("id");
+    let { error, data } = await doUpdate(row);
+    if (error) {
+      // 兼容：远端表未迁移，忽略缺失列并重试一次（让本地不被远端 schema 卡死）
+      const m = /Could not find the '([^']+)' column/i.exec(error.message);
+      if (m) {
+        const bad = m[1];
+        const retry = { ...row } as Record<string, unknown>;
+        delete retry[bad];
+        ({ error, data } = await doUpdate(retry as Json));
+      }
+    }
     if (error) throw new Error(error.message);
     if (!data?.length) throw new Error("碎片不存在或无权修改");
   }
@@ -1277,6 +1610,218 @@ export class WritingStoreSupabase implements WritingStore {
     if (error) throw new Error(error.message);
     if (!data?.length) throw new Error("碎片不存在或无权删除");
   }
+
+  async listInspirationCollections(): Promise<InspirationCollection[]> {
+    const uid = await maybeUid();
+    if (!uid) return [];
+    const { data, error } = await getSupabase()
+      .from("inspiration_collection")
+      .select("*")
+      .eq("user_id", uid)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data as Json[]).map(parseInspirationCollectionRow);
+  }
+
+  async addInspirationCollection(
+    input: Partial<Omit<InspirationCollection, "id" | "createdAt" | "updatedAt">> & { name: string },
+  ): Promise<InspirationCollection> {
+    const uid = await requireUid();
+    const t = now();
+    const { data: last } = await getSupabase()
+      .from("inspiration_collection")
+      .select("sort_order")
+      .eq("user_id", uid)
+      .order("sort_order", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const lastSo = last?.sort_order;
+    const sortOrder = lastSo != null ? Number(lastSo) + 1 : 0;
+    const row: InspirationCollection = {
+      id: crypto.randomUUID(),
+      name: (input.name ?? "").trim() || "未命名集合",
+      sortOrder: input.sortOrder ?? sortOrder,
+      createdAt: t,
+      updatedAt: t,
+    };
+    const { error } = await getSupabase().from("inspiration_collection").insert({
+      id: row.id,
+      user_id: uid,
+      name: row.name,
+      sort_order: row.sortOrder,
+      created_at: row.createdAt,
+      updated_at: row.updatedAt,
+    } as never);
+    if (error) throw new Error(error.message);
+    return row;
+  }
+
+  async updateInspirationCollection(
+    id: string,
+    patch: Partial<Pick<InspirationCollection, "name" | "sortOrder">>,
+  ): Promise<void> {
+    const uid = await requireUid();
+    const row: Json = { updated_at: now() };
+    if (patch.name !== undefined) row.name = (patch.name ?? "").trim() || "未命名集合";
+    if (patch.sortOrder !== undefined) row.sort_order = patch.sortOrder;
+    const { error, data } = await getSupabase()
+      .from("inspiration_collection")
+      .update(row as never)
+      .eq("id", id)
+      .eq("user_id", uid)
+      .select("id");
+    if (error) throw new Error(error.message);
+    if (!data?.length) throw new Error("集合不存在或无权修改");
+  }
+
+  async deleteInspirationCollection(id: string): Promise<void> {
+    const uid = await requireUid();
+    const { error, data } = await getSupabase()
+      .from("inspiration_collection")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", uid)
+      .select("id");
+    if (error) throw new Error(error.message);
+    if (!data?.length) throw new Error("集合不存在或无权删除");
+  }
+
+  // ── 全局提示词库（Sprint 1）─────────────────────────────────────────────────
+
+  async listGlobalPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+    const uid = await maybeUid();
+    if (!uid) return [];
+    const { data, error } = await getSupabase()
+      .from("prompt_template")
+      .select("*")
+      .eq("user_id", uid)
+      .order("sort_order", { ascending: true })
+      .order("created_at", { ascending: true });
+    if (error) throw new Error(error.message);
+    return (data as Json[]).map(parseGlobalPromptTemplateRow);
+  }
+
+  async addGlobalPromptTemplate(
+    input: Omit<GlobalPromptTemplate, "id" | "sortOrder" | "createdAt" | "updatedAt">,
+  ): Promise<GlobalPromptTemplate> {
+    const uid = await requireUid();
+    const sb = getSupabase();
+    const t = now();
+    const { data: last } = await sb
+      .from("prompt_template")
+      .select("sort_order")
+      .eq("user_id", uid)
+      .order("sort_order", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const sortOrder = last?.sort_order != null ? Number(last.sort_order) + 1 : 0;
+    const row: GlobalPromptTemplate = {
+      id: crypto.randomUUID(),
+      title: (input.title ?? "").trim() || "未命名模板",
+      type: input.type,
+      tags: input.tags ?? [],
+      body: input.body ?? "",
+      status: "draft",
+      sortOrder,
+      createdAt: t,
+      updatedAt: t,
+    };
+    const { error } = await sb.from("prompt_template").insert({
+      id: row.id,
+      user_id: uid,
+      title: row.title,
+      type: row.type,
+      tags: row.tags,
+      body: row.body,
+      status: row.status,
+      sort_order: row.sortOrder,
+      created_at: row.createdAt,
+      updated_at: row.updatedAt,
+    } as never);
+    if (error) throw new Error(error.message);
+    return row;
+  }
+
+  async updateGlobalPromptTemplate(
+    id: string,
+    patch: Partial<Omit<GlobalPromptTemplate, "id" | "createdAt">>,
+  ): Promise<void> {
+    const uid = await requireUid();
+    const row: Json = { updated_at: now() };
+    if (patch.title !== undefined) row.title = (patch.title ?? "").trim() || "未命名模板";
+    if (patch.type !== undefined) row.type = patch.type;
+    if (patch.tags !== undefined) row.tags = patch.tags;
+    if (patch.body !== undefined) row.body = patch.body;
+    if (patch.status !== undefined) row.status = patch.status;
+    if (patch.reviewNote !== undefined) row.review_note = patch.reviewNote ?? null;
+    if (patch.sortOrder !== undefined) row.sort_order = patch.sortOrder;
+    const { error } = await getSupabase()
+      .from("prompt_template")
+      .update(row as never)
+      .eq("id", id)
+      .eq("user_id", uid);
+    if (error) throw new Error(error.message);
+  }
+
+  async deleteGlobalPromptTemplate(id: string): Promise<void> {
+    const uid = await requireUid();
+    const { error } = await getSupabase()
+      .from("prompt_template")
+      .delete()
+      .eq("id", id)
+      .eq("user_id", uid);
+    if (error) throw new Error(error.message);
+  }
+
+  async reorderGlobalPromptTemplates(orderedIds: string[]): Promise<void> {
+    const uid = await requireUid();
+    const sb = getSupabase();
+    const t = now();
+    await Promise.all(
+      orderedIds.map((id, i) =>
+        sb
+          .from("prompt_template")
+          .update({ sort_order: i, updated_at: t } as never)
+          .eq("id", id)
+          .eq("user_id", uid),
+      ),
+    );
+  }
+
+  async listApprovedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+    const uid = await maybeUid();
+    if (!uid) return [];
+    // RLS 保证只有 approved 行对所有登录用户可见（含他人）
+    // 此处不加 user_id 过滤，让 RLS 决定可见范围
+    const { data, error } = await getSupabase()
+      .from("prompt_template")
+      .select("*")
+      .eq("status", "approved")
+      .order("updated_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data as Json[]).map(parseGlobalPromptTemplateRow);
+  }
+
+  async listSubmittedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+    const uid = await maybeUid();
+    if (!uid) return [];
+    // ⚠️  需要在 Supabase Dashboard → Authentication → Policies → prompt_template 添加策略：
+    //   允许管理员账号读取所有 submitted 行，例如：
+    //   CREATE POLICY "admin read submitted"
+    //     ON prompt_template FOR SELECT
+    //     USING (status = 'submitted' AND auth.email() = 'your-admin@email.com');
+    // 未配置此策略时，RLS 仅返回自己的 submitted 行（退化为本地效果）。
+    const { data, error } = await getSupabase()
+      .from("prompt_template")
+      .select("*")
+      .eq("status", "submitted")
+      .order("updated_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return (data as Json[]).map(parseGlobalPromptTemplateRow);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
 
   async exportAllData(): ReturnType<WritingStore["exportAllData"]> {
     const uid = await maybeUid();
@@ -1299,10 +1844,13 @@ export class WritingStoreSupabase implements WritingStore {
         bibleWorldEntries: [],
         bibleForeshadowing: [],
         bibleTimelineEvents: [],
+        logicPlaceNodes: [],
+        logicPlaceEvents: [],
         bibleChapterTemplates: [],
         chapterBible: [],
         bibleGlossaryTerms: [],
         workStyleCards: [],
+        inspirationCollections: [],
         inspirationFragments: [],
         writingPromptTemplates: [],
         writingStyleSamples: [],
@@ -1310,12 +1858,13 @@ export class WritingStoreSupabase implements WritingStore {
       };
     }
     const sb = getSupabase();
-    const { data: fragRows, error: ef } = await sb
-      .from("inspiration_fragment")
-      .select("*")
-      .eq("user_id", uid)
-      .order("created_at", { ascending: false });
+    const [{ data: collRows, error: ec }, { data: fragRows, error: ef }] = await Promise.all([
+      sb.from("inspiration_collection").select("*").eq("user_id", uid).order("sort_order", { ascending: true }),
+      sb.from("inspiration_fragment").select("*").eq("user_id", uid).order("created_at", { ascending: false }),
+    ]);
+    if (ec) throw new Error(ec.message);
     if (ef) throw new Error(ef.message);
+    const inspirationCollections = (collRows as Json[]).map(parseInspirationCollectionRow);
     const inspirationFragments = (fragRows as Json[]).map(parseInspirationFragmentRow);
     const { data: workRows, error: ew } = await sb
       .from("work")
@@ -1335,10 +1884,13 @@ export class WritingStoreSupabase implements WritingStore {
         bibleWorldEntries: [],
         bibleForeshadowing: [],
         bibleTimelineEvents: [],
+        logicPlaceNodes: [],
+        logicPlaceEvents: [],
         bibleChapterTemplates: [],
         chapterBible: [],
         bibleGlossaryTerms: [],
         workStyleCards: [],
+        inspirationCollections,
         inspirationFragments,
         writingPromptTemplates: [],
         writingStyleSamples: [],
@@ -1352,6 +1904,8 @@ export class WritingStoreSupabase implements WritingStore {
       { data: worlds },
       { data: fores },
       { data: times },
+      { data: placeNodes },
+      { data: placeEvents },
       { data: tpls },
       { data: cb },
       { data: gloss },
@@ -1365,6 +1919,8 @@ export class WritingStoreSupabase implements WritingStore {
       sb.from("bible_world_entry").select("*").in("work_id", workIds),
       sb.from("bible_foreshadow").select("*").in("work_id", workIds),
       sb.from("bible_timeline_event").select("*").in("work_id", workIds),
+      sb.from("logic_place_node").select("*").in("work_id", workIds),
+      sb.from("logic_place_event").select("*").in("work_id", workIds),
       sb.from("bible_chapter_template").select("*").in("work_id", workIds),
       sb.from("chapter_bible").select("*").in("work_id", workIds),
       sb.from("bible_glossary_term").select("*").in("work_id", workIds),
@@ -1388,10 +1944,13 @@ export class WritingStoreSupabase implements WritingStore {
       bibleWorldEntries: (worlds as Json[]).map(parseBibleWorldRow),
       bibleForeshadowing: (fores as Json[]).map(parseBibleForeRow),
       bibleTimelineEvents: (times as Json[]).map(parseBibleTimelineRow),
+      logicPlaceNodes: (placeNodes as Json[]).map(parseLogicPlaceNodeRow),
+      logicPlaceEvents: (placeEvents as Json[]).map(parseLogicPlaceEventRow),
       bibleChapterTemplates: (tpls as Json[]).map(parseBibleTplRow),
       chapterBible: (cb as Json[]).map(parseChapterBibleRow),
       bibleGlossaryTerms: (gloss as Json[]).map(parseGlossaryRow),
       workStyleCards: (cards as Json[]).map(parseStyleCardRow),
+      inspirationCollections,
       inspirationFragments,
       writingPromptTemplates: (promptTpl as Json[]).map(parseWritingPromptTemplateRow),
       writingStyleSamples: (styleSamples as Json[]).map(parseWritingStyleSampleRow),
@@ -1403,6 +1962,8 @@ export class WritingStoreSupabase implements WritingStore {
     const sb = getSupabase();
     const { error: delFrag } = await sb.from("inspiration_fragment").delete().eq("user_id", uid);
     if (delFrag) throw new Error(delFrag.message);
+    const { error: delColl } = await sb.from("inspiration_collection").delete().eq("user_id", uid);
+    if (delColl) throw new Error(delColl.message);
     const { error: delErr } = await sb.from("work").delete().eq("user_id", uid);
     if (delErr) throw new Error(delErr.message);
     const normalized = normalizeImportRows(data);
@@ -1429,9 +1990,17 @@ export class WritingStoreSupabase implements WritingStore {
         styleAnchor: s.styleAnchor ?? "",
         extraRules: s.extraRules ?? "",
       })),
+      newInspirationCollections: (data.inspirationCollections ?? []).map((c) => ({
+        ...c,
+        name: (c.name ?? "").trim() || "未命名集合",
+        sortOrder: c.sortOrder ?? 0,
+        createdAt: c.createdAt ?? now(),
+        updatedAt: c.updatedAt ?? now(),
+      })),
       newInspirationFragments: (data.inspirationFragments ?? []).map((f) => ({
         ...f,
         workId: f.workId ?? null,
+        collectionId: f.collectionId ?? null,
         tags: normalizeWorkTagList(f.tags) ?? [],
         body: (f.body ?? "").trim() || "（空碎片）",
         createdAt: f.createdAt ?? now(),
@@ -1454,13 +2023,30 @@ export class WritingStoreSupabase implements WritingStore {
         createdAt: s.createdAt ?? now(),
         updatedAt: s.updatedAt ?? now(),
       })),
+      newLogicPlaceNodes: (data.logicPlaceNodes ?? []).map((p) => ({
+        ...p,
+        name: (p.name ?? "").trim() || "地点",
+        note: p.note ?? "",
+        x: Number.isFinite(p.x) ? Math.max(0, Math.min(100, Math.round(p.x))) : 50,
+        y: Number.isFinite(p.y) ? Math.max(0, Math.min(100, Math.round(p.y))) : 50,
+        createdAt: p.createdAt ?? now(),
+        updatedAt: p.updatedAt ?? now(),
+      })),
+      newLogicPlaceEvents: (data.logicPlaceEvents ?? []).map((ev) => ({
+        ...ev,
+        label: (ev.label ?? "").trim() || "事件",
+        note: ev.note ?? "",
+        chapterId: ev.chapterId ?? null,
+        createdAt: ev.createdAt ?? now(),
+        updatedAt: ev.updatedAt ?? now(),
+      })),
       newRefLib: [],
       newRefChunks: [],
       newRefChapterHeads: [],
       newExcerpts: [],
       newTags: [],
       newExcerptTags: [],
-    });
+    } as unknown as import("./backup-merge-remap").MergeRemapResult);
     await chunkedInsert("work", rows.works);
     await chunkedInsert("volume", rows.volumes);
     await chunkedInsert("chapter", rows.chapters);
@@ -1473,9 +2059,12 @@ export class WritingStoreSupabase implements WritingStore {
     await chunkedInsert("chapter_bible", rows.chapterBible);
     await chunkedInsert("bible_glossary_term", rows.bibleGloss);
     await chunkedInsert("work_style_card", rows.styleCards);
+    await chunkedInsert("inspiration_collection", rows.inspirationCollections);
     await chunkedInsert("inspiration_fragment", rows.inspirationFrags);
     await chunkedInsert("writing_prompt_template", rows.writingPromptTpl);
     await chunkedInsert("writing_style_sample", rows.writingStyleSamples);
+    await chunkedInsert("logic_place_node", rows.logicPlaceNodes);
+    await chunkedInsert("logic_place_event", rows.logicPlaceEvents);
   }
 
   async importAllDataMerge(data: Parameters<WritingStore["importAllDataMerge"]>[0]): Promise<void> {

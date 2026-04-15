@@ -179,6 +179,78 @@ export async function buildServer() {
 
   app.get("/api/health", async () => ({ ok: true }));
 
+  // ===== URL 预览（流光书签）=====
+  // 目标：不依赖浏览器 CORS，后端抓取 meta 信息；带简易缓存与超时，避免被滥用
+  const urlPreviewCache = new Map(); // key: url, val: { at, data }
+  const URL_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+  function cacheGet(url) {
+    const hit = urlPreviewCache.get(url);
+    if (!hit) return null;
+    if (Date.now() - hit.at > URL_CACHE_TTL_MS) {
+      urlPreviewCache.delete(url);
+      return null;
+    }
+    return hit.data;
+  }
+  function cacheSet(url, data) {
+    urlPreviewCache.set(url, { at: Date.now(), data });
+    // 简单上限，避免无限增长
+    if (urlPreviewCache.size > 400) {
+      const first = urlPreviewCache.keys().next().value;
+      if (first) urlPreviewCache.delete(first);
+    }
+  }
+  function pickMeta(html, key) {
+    const re = new RegExp(`<meta[^>]+(?:property|name)=["']${key}["'][^>]+content=["']([^"']+)["'][^>]*>`, "i");
+    const m = html.match(re);
+    return m ? m[1] : null;
+  }
+  function pickTitle(html) {
+    const m = html.match(/<title[^>]*>([^<]{1,300})<\/title>/i);
+    return m ? m[1] : null;
+  }
+  app.get("/api/url-preview", async (req, reply) => {
+    const raw = String(req.query?.url ?? "").trim();
+    if (!raw) return reply.code(400).send({ error: "BAD_URL" });
+    let u;
+    try {
+      u = new URL(raw);
+    } catch {
+      return reply.code(400).send({ error: "BAD_URL" });
+    }
+    if (u.protocol !== "http:" && u.protocol !== "https:") {
+      return reply.code(400).send({ error: "BAD_URL" });
+    }
+    const cached = cacheGet(u.toString());
+    if (cached) return cached;
+
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 8000);
+    try {
+      const res = await fetch(u.toString(), {
+        signal: ac.signal,
+        redirect: "follow",
+        headers: {
+          "user-agent": "liubai-writing-url-preview/1.0",
+          accept: "text/html,application/xhtml+xml",
+        },
+      });
+      if (!res.ok) return reply.code(502).send({ error: "FETCH_FAILED" });
+      const html = await res.text();
+      const title = pickMeta(html, "og:title") ?? pickTitle(html);
+      const site = pickMeta(html, "og:site_name") ?? u.hostname;
+      const description = pickMeta(html, "og:description") ?? pickMeta(html, "description");
+      const out = { title, site, description };
+      cacheSet(u.toString(), out);
+      return out;
+    } catch (e) {
+      req.log.warn({ err: String(e) }, "url preview fetch failed");
+      return reply.code(502).send({ error: "FETCH_FAILED" });
+    } finally {
+      clearTimeout(t);
+    }
+  });
+
   /** 联调：将当前用户 ID 与测试文本写入 test_content */
   app.post("/api/test-save", { preHandler: requireAuth }, async (req, reply) => {
     const text = String(req.body?.text ?? "").trim() || "sync test";
@@ -421,6 +493,563 @@ export async function buildServer() {
       [workId],
     );
     reply.send({ ok: true });
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // P0-02 · 锦囊 Bible API
+  // ─────────────────────────────────────────────────────────────────
+
+  /** 公共：校验 work 归属当前用户 */
+  async function assertWorkOwner(userId, workId) {
+    const r = await pool.query("select 1 from work where id=$1 and user_id=$2", [workId, userId]);
+    if (!r.rowCount) throw { statusCode: 404, message: "NOT_FOUND" };
+  }
+
+  // ── bible_character ──
+  app.get("/api/works/:workId/bible/characters", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const rows = await pool.query(
+      "select * from bible_character where work_id=$1 order by sort_order asc, created_at asc",
+      [req.params.workId],
+    );
+    reply.send(rows.rows);
+  });
+
+  app.post("/api/works/:workId/bible/characters", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const b = req.body ?? {};
+    const now = nowMs();
+    const r = await pool.query(
+      `insert into bible_character(work_id, name, motivation, relationships, voice_notes, taboos, sort_order, created_at, updated_at)
+       values($1,$2,$3,$4,$5,$6,$7,$8,$8) returning *`,
+      [req.params.workId, String(b.name ?? ""), String(b.motivation ?? ""), String(b.relationships ?? ""),
+       String(b.voice_notes ?? ""), String(b.taboos ?? ""), Number(b.sort_order ?? 0), now],
+    );
+    reply.code(201).send(r.rows[0]);
+  });
+
+  app.patch("/api/bible/characters/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const { id } = req.params;
+    const own = await pool.query(
+      "select bc.id from bible_character bc join work w on w.id=bc.work_id where bc.id=$1 and w.user_id=$2",
+      [id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    const b = req.body ?? {};
+    const now = nowMs();
+    const fields = ["name", "motivation", "relationships", "voice_notes", "taboos", "sort_order"];
+    const sets = []; const vals = [];
+    let idx = 1;
+    for (const f of fields) {
+      if (b[f] !== undefined) { sets.push(`${f}=$${idx++}`); vals.push(f === "sort_order" ? Number(b[f]) : String(b[f])); }
+    }
+    sets.push(`updated_at=$${idx++}`); vals.push(now);
+    vals.push(id);
+    const r = await pool.query(`update bible_character set ${sets.join(",")} where id=$${idx} returning *`, vals);
+    reply.send(r.rows[0]);
+  });
+
+  app.delete("/api/bible/characters/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select bc.id from bible_character bc join work w on w.id=bc.work_id where bc.id=$1 and w.user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    await pool.query("delete from bible_character where id=$1", [req.params.id]);
+    reply.send({ ok: true });
+  });
+
+  // ── bible_world_entry ──
+  app.get("/api/works/:workId/bible/world-entries", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const rows = await pool.query(
+      "select * from bible_world_entry where work_id=$1 order by sort_order asc, created_at asc",
+      [req.params.workId],
+    );
+    reply.send(rows.rows);
+  });
+
+  app.post("/api/works/:workId/bible/world-entries", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const b = req.body ?? {};
+    const now = nowMs();
+    const r = await pool.query(
+      `insert into bible_world_entry(work_id, entry_kind, title, body, sort_order, created_at, updated_at)
+       values($1,$2,$3,$4,$5,$6,$6) returning *`,
+      [req.params.workId, String(b.entry_kind ?? "other"), String(b.title ?? ""), String(b.body ?? ""), Number(b.sort_order ?? 0), now],
+    );
+    reply.code(201).send(r.rows[0]);
+  });
+
+  app.patch("/api/bible/world-entries/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select bw.id from bible_world_entry bw join work w on w.id=bw.work_id where bw.id=$1 and w.user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    const b = req.body ?? {};
+    const now = nowMs();
+    const fields = ["entry_kind", "title", "body", "sort_order"];
+    const sets = []; const vals = [];
+    let idx = 1;
+    for (const f of fields) {
+      if (b[f] !== undefined) { sets.push(`${f}=$${idx++}`); vals.push(f === "sort_order" ? Number(b[f]) : String(b[f])); }
+    }
+    sets.push(`updated_at=$${idx++}`); vals.push(now);
+    vals.push(req.params.id);
+    const r = await pool.query(`update bible_world_entry set ${sets.join(",")} where id=$${idx} returning *`, vals);
+    reply.send(r.rows[0]);
+  });
+
+  app.delete("/api/bible/world-entries/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select bw.id from bible_world_entry bw join work w on w.id=bw.work_id where bw.id=$1 and w.user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    await pool.query("delete from bible_world_entry where id=$1", [req.params.id]);
+    reply.send({ ok: true });
+  });
+
+  // ── bible_foreshadow ──
+  app.get("/api/works/:workId/bible/foreshadows", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const rows = await pool.query(
+      "select * from bible_foreshadow where work_id=$1 order by sort_order asc, created_at asc",
+      [req.params.workId],
+    );
+    reply.send(rows.rows);
+  });
+
+  app.post("/api/works/:workId/bible/foreshadows", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const b = req.body ?? {};
+    const now = nowMs();
+    const r = await pool.query(
+      `insert into bible_foreshadow(work_id, title, planted_where, planned_resolve, status, note, chapter_id, sort_order, created_at, updated_at)
+       values($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) returning *`,
+      [req.params.workId, String(b.title ?? ""), String(b.planted_where ?? ""), String(b.planned_resolve ?? ""),
+       String(b.status ?? "pending"), String(b.note ?? ""), b.chapter_id ?? null, Number(b.sort_order ?? 0), now],
+    );
+    reply.code(201).send(r.rows[0]);
+  });
+
+  app.patch("/api/bible/foreshadows/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select bf.id from bible_foreshadow bf join work w on w.id=bf.work_id where bf.id=$1 and w.user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    const b = req.body ?? {};
+    const now = nowMs();
+    const fields = ["title", "planted_where", "planned_resolve", "status", "note", "chapter_id", "sort_order"];
+    const sets = []; const vals = [];
+    let idx = 1;
+    for (const f of fields) {
+      if (b[f] !== undefined) { sets.push(`${f}=$${idx++}`); vals.push(f === "sort_order" ? Number(b[f]) : b[f] === null ? null : String(b[f])); }
+    }
+    sets.push(`updated_at=$${idx++}`); vals.push(now);
+    vals.push(req.params.id);
+    const r = await pool.query(`update bible_foreshadow set ${sets.join(",")} where id=$${idx} returning *`, vals);
+    reply.send(r.rows[0]);
+  });
+
+  app.delete("/api/bible/foreshadows/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select bf.id from bible_foreshadow bf join work w on w.id=bf.work_id where bf.id=$1 and w.user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    await pool.query("delete from bible_foreshadow where id=$1", [req.params.id]);
+    reply.send({ ok: true });
+  });
+
+  // ── bible_timeline_event ──
+  app.get("/api/works/:workId/bible/timeline-events", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const rows = await pool.query(
+      "select * from bible_timeline_event where work_id=$1 order by sort_order asc, created_at asc",
+      [req.params.workId],
+    );
+    reply.send(rows.rows);
+  });
+
+  app.post("/api/works/:workId/bible/timeline-events", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const b = req.body ?? {};
+    const now = nowMs();
+    const r = await pool.query(
+      `insert into bible_timeline_event(work_id, label, sort_order, note, chapter_id, created_at, updated_at)
+       values($1,$2,$3,$4,$5,$6,$6) returning *`,
+      [req.params.workId, String(b.label ?? ""), Number(b.sort_order ?? 0), String(b.note ?? ""), b.chapter_id ?? null, now],
+    );
+    reply.code(201).send(r.rows[0]);
+  });
+
+  app.patch("/api/bible/timeline-events/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select bt.id from bible_timeline_event bt join work w on w.id=bt.work_id where bt.id=$1 and w.user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    const b = req.body ?? {};
+    const now = nowMs();
+    const fields = ["label", "sort_order", "note", "chapter_id"];
+    const sets = []; const vals = [];
+    let idx = 1;
+    for (const f of fields) {
+      if (b[f] !== undefined) { sets.push(`${f}=$${idx++}`); vals.push(f === "sort_order" ? Number(b[f]) : b[f] === null ? null : String(b[f])); }
+    }
+    sets.push(`updated_at=$${idx++}`); vals.push(now);
+    vals.push(req.params.id);
+    const r = await pool.query(`update bible_timeline_event set ${sets.join(",")} where id=$${idx} returning *`, vals);
+    reply.send(r.rows[0]);
+  });
+
+  app.delete("/api/bible/timeline-events/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select bt.id from bible_timeline_event bt join work w on w.id=bt.work_id where bt.id=$1 and w.user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    await pool.query("delete from bible_timeline_event where id=$1", [req.params.id]);
+    reply.send({ ok: true });
+  });
+
+  // ── bible_glossary_term ──
+  app.get("/api/works/:workId/bible/glossary-terms", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const rows = await pool.query(
+      "select * from bible_glossary_term where work_id=$1 order by term asc",
+      [req.params.workId],
+    );
+    reply.send(rows.rows);
+  });
+
+  app.post("/api/works/:workId/bible/glossary-terms", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const b = req.body ?? {};
+    const now = nowMs();
+    const r = await pool.query(
+      `insert into bible_glossary_term(work_id, term, category, note, created_at, updated_at)
+       values($1,$2,$3,$4,$5,$5) returning *`,
+      [req.params.workId, String(b.term ?? ""), String(b.category ?? ""), String(b.note ?? ""), now],
+    );
+    reply.code(201).send(r.rows[0]);
+  });
+
+  app.patch("/api/bible/glossary-terms/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select bg.id from bible_glossary_term bg join work w on w.id=bg.work_id where bg.id=$1 and w.user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    const b = req.body ?? {};
+    const now = nowMs();
+    const fields = ["term", "category", "note"];
+    const sets = []; const vals = [];
+    let idx = 1;
+    for (const f of fields) {
+      if (b[f] !== undefined) { sets.push(`${f}=$${idx++}`); vals.push(String(b[f])); }
+    }
+    sets.push(`updated_at=$${idx++}`); vals.push(now);
+    vals.push(req.params.id);
+    const r = await pool.query(`update bible_glossary_term set ${sets.join(",")} where id=$${idx} returning *`, vals);
+    reply.send(r.rows[0]);
+  });
+
+  app.delete("/api/bible/glossary-terms/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select bg.id from bible_glossary_term bg join work w on w.id=bg.work_id where bg.id=$1 and w.user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    await pool.query("delete from bible_glossary_term where id=$1", [req.params.id]);
+    reply.send({ ok: true });
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // P0-02 · 风格卡 Style Card API
+  // ─────────────────────────────────────────────────────────────────
+
+  app.get("/api/works/:workId/style-card", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const r = await pool.query("select * from work_style_card where work_id=$1", [req.params.workId]);
+    reply.send(r.rows[0] ?? null);
+  });
+
+  app.patch("/api/works/:workId/style-card", { preHandler: requireAuth }, async (req, reply) => {
+    await assertWorkOwner(req.user.id, req.params.workId).catch((e) => reply.code(e.statusCode ?? 404).send({ error: e.message }));
+    if (reply.sent) return;
+    const b = req.body ?? {};
+    const now = nowMs();
+    const r = await pool.query(
+      `insert into work_style_card(work_id, pov, tone, banned_phrases, style_anchor, extra_rules, updated_at)
+       values($1,$2,$3,$4,$5,$6,$7)
+       on conflict(work_id) do update set
+         pov=excluded.pov, tone=excluded.tone, banned_phrases=excluded.banned_phrases,
+         style_anchor=excluded.style_anchor, extra_rules=excluded.extra_rules, updated_at=excluded.updated_at
+       returning *`,
+      [req.params.workId, String(b.pov ?? ""), String(b.tone ?? ""), String(b.banned_phrases ?? ""),
+       String(b.style_anchor ?? ""), String(b.extra_rules ?? ""), now],
+    );
+    reply.send(r.rows[0]);
+  });
+
+  // ─────────────────────────────────────────────────────────────────
+  // P0-03 · 问策会话 Wence Sessions API
+  // ─────────────────────────────────────────────────────────────────
+
+  app.get("/api/wence-sessions", { preHandler: requireAuth }, async (req) => {
+    const workId = req.query?.workId ?? null;
+    if (workId) {
+      const r = await pool.query(
+        "select * from wence_chat_session where user_id=$1 and work_id=$2 order by updated_at desc limit 200",
+        [req.user.id, workId],
+      );
+      return r.rows;
+    }
+    const r = await pool.query(
+      "select * from wence_chat_session where user_id=$1 order by updated_at desc limit 200",
+      [req.user.id],
+    );
+    return r.rows;
+  });
+
+  app.post("/api/wence-sessions", { preHandler: requireAuth }, async (req, reply) => {
+    const b = req.body ?? {};
+    const now = nowMs();
+    const r = await pool.query(
+      `insert into wence_chat_session(user_id, work_id, title, include_setting_index, messages, updated_at)
+       values($1,$2,$3,$4,$5,$6) returning *`,
+      [req.user.id, b.work_id ?? null, String(b.title ?? ""), !!b.include_setting_index,
+       JSON.stringify(Array.isArray(b.messages) ? b.messages : []), now],
+    );
+    reply.code(201).send(r.rows[0]);
+  });
+
+  app.patch("/api/wence-sessions/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select id from wence_chat_session where id=$1 and user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    const b = req.body ?? {};
+    const now = nowMs();
+    const fields = ["title", "work_id", "include_setting_index", "messages"];
+    const sets = []; const vals = [];
+    let idx = 1;
+    for (const f of fields) {
+      if (b[f] !== undefined) {
+        sets.push(`${f}=$${idx++}`);
+        if (f === "messages") vals.push(JSON.stringify(Array.isArray(b[f]) ? b[f] : []));
+        else if (f === "include_setting_index") vals.push(!!b[f]);
+        else vals.push(b[f] === null ? null : String(b[f]));
+      }
+    }
+    sets.push(`updated_at=$${idx++}`); vals.push(now);
+    vals.push(req.params.id);
+    const r = await pool.query(`update wence_chat_session set ${sets.join(",")} where id=$${idx} returning *`, vals);
+    reply.send(r.rows[0]);
+  });
+
+  app.delete("/api/wence-sessions/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select id from wence_chat_session where id=$1 and user_id=$2",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    await pool.query("delete from wence_chat_session where id=$1", [req.params.id]);
+    reply.send({ ok: true });
+  });
+
+  // ===== 步骤6：work_concept（推演构思层）=====
+
+  // GET /api/works/:workId/concept — 取构思，不存在返回空对象
+  app.get("/api/works/:workId/concept", { preHandler: requireAuth }, async (req, reply) => {
+    const r = await pool.query(
+      "select * from work_concept where work_id=$1 and user_id=$2",
+      [req.params.workId, req.user.id],
+    );
+    reply.send(r.rows[0] ?? {});
+  });
+
+  // PUT /api/works/:workId/concept — upsert；finalized 后不可再修改
+  app.put("/api/works/:workId/concept", { preHandler: requireAuth }, async (req, reply) => {
+    const existing = await pool.query(
+      "select id, stage from work_concept where work_id=$1 and user_id=$2",
+      [req.params.workId, req.user.id],
+    );
+    if (existing.rows[0]?.stage === "finalized") {
+      return reply.code(409).send({ error: "CONCEPT_FINALIZED" });
+    }
+    const b = req.body ?? {};
+    const now = nowMs();
+    const genre = Array.isArray(b.genre) ? b.genre : [];
+    const importedCardIds = Array.isArray(b.imported_card_ids) ? b.imported_card_ids : [];
+    if (existing.rows[0]) {
+      const r = await pool.query(
+        `update work_concept set
+           genre=$1, core_conflict=$2, world_rules=$3,
+           protagonist_motivation=$4, raw_text=$5,
+           imported_card_ids=$6, updated_at=$7
+         where work_id=$8 and user_id=$9 returning *`,
+        [
+          genre, String(b.core_conflict ?? ""), String(b.world_rules ?? ""),
+          String(b.protagonist_motivation ?? ""), String(b.raw_text ?? ""),
+          importedCardIds, now,
+          req.params.workId, req.user.id,
+        ],
+      );
+      return reply.send(r.rows[0]);
+    }
+    const r = await pool.query(
+      `insert into work_concept
+         (work_id, user_id, genre, core_conflict, world_rules,
+          protagonist_motivation, raw_text, imported_card_ids, stage, created_at, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,'draft',$9,$9) returning *`,
+      [
+        req.params.workId, req.user.id,
+        genre, String(b.core_conflict ?? ""), String(b.world_rules ?? ""),
+        String(b.protagonist_motivation ?? ""), String(b.raw_text ?? ""),
+        importedCardIds, now,
+      ],
+    );
+    reply.code(201).send(r.rows[0]);
+  });
+
+  // POST /api/works/:workId/concept/finalize — 锁定构思，进入卷纲阶段
+  app.post("/api/works/:workId/concept/finalize", { preHandler: requireAuth }, async (req, reply) => {
+    const r = await pool.query(
+      "update work_concept set stage='finalized', updated_at=$1 where work_id=$2 and user_id=$3 returning *",
+      [nowMs(), req.params.workId, req.user.id],
+    );
+    if (!r.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    reply.send(r.rows[0]);
+  });
+
+  // ===== 步骤7：tuiyan_prompt_template（推演专用提示词） =====
+
+  // GET /api/tuiyan/prompts?stage= — 返回该用户的模板 + 系统默认模板
+  app.get("/api/tuiyan/prompts", { preHandler: requireAuth }, async (req, reply) => {
+    const stage = String(req.query?.stage ?? "").trim();
+    const allowed = ["concept", "volume", "chapter", "detail_outline"];
+    if (stage && !allowed.includes(stage)) {
+      return reply.code(400).send({ error: "BAD_STAGE" });
+    }
+    const stageFilter = stage ? "and stage=$3" : "";
+    const vals = stage
+      ? [req.user.id, true, stage]
+      : [req.user.id, true];
+    const r = await pool.query(
+      `select * from tuiyan_prompt_template
+       where (user_id=$1 or is_default=$2) ${stageFilter}
+       order by is_default desc, sort_order asc, created_at asc`,
+      vals,
+    );
+    reply.send(r.rows);
+  });
+
+  // POST /api/tuiyan/prompts — 新建用户自定义模板
+  app.post("/api/tuiyan/prompts", { preHandler: requireAuth }, async (req, reply) => {
+    const b = req.body ?? {};
+    const allowed = ["concept", "volume", "chapter", "detail_outline"];
+    const stage = String(b.stage ?? "");
+    if (!allowed.includes(stage)) return reply.code(400).send({ error: "BAD_STAGE" });
+    const now = nowMs();
+    const r = await pool.query(
+      `insert into tuiyan_prompt_template
+         (user_id, stage, title, body, is_default, sort_order, created_at, updated_at)
+       values ($1,$2,$3,$4,false,$5,$6,$6) returning *`,
+      [
+        req.user.id, stage,
+        String(b.title ?? ""), String(b.body ?? ""),
+        Number(b.sort_order ?? 0), now,
+      ],
+    );
+    reply.code(201).send(r.rows[0]);
+  });
+
+  // PUT /api/tuiyan/prompts/:id — 更新（仅限本人）
+  app.put("/api/tuiyan/prompts/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select id from tuiyan_prompt_template where id=$1 and user_id=$2 and is_default=false",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    const b = req.body ?? {};
+    const now = nowMs();
+    const r = await pool.query(
+      `update tuiyan_prompt_template
+       set title=$1, body=$2, sort_order=$3, updated_at=$4
+       where id=$5 returning *`,
+      [
+        String(b.title ?? ""), String(b.body ?? ""),
+        Number(b.sort_order ?? 0), now,
+        req.params.id,
+      ],
+    );
+    reply.send(r.rows[0]);
+  });
+
+  // DELETE /api/tuiyan/prompts/:id — 删除（仅限本人，不允许删系统默认）
+  app.delete("/api/tuiyan/prompts/:id", { preHandler: requireAuth }, async (req, reply) => {
+    const own = await pool.query(
+      "select id from tuiyan_prompt_template where id=$1 and user_id=$2 and is_default=false",
+      [req.params.id, req.user.id],
+    );
+    if (!own.rowCount) return reply.code(404).send({ error: "NOT_FOUND" });
+    await pool.query("delete from tuiyan_prompt_template where id=$1", [req.params.id]);
+    reply.send({ ok: true });
+  });
+
+  // ===== 步骤8：push-outline（推演细纲 → 写作页章节） =====
+
+  // POST /api/tuiyan/push-outline
+  // body: { chapterId, outlineDraft, outlineNodeId }
+  // 产品规则：推送后 chapter.outline_draft 只读；再次推送同一章节返回 409。
+  app.post("/api/tuiyan/push-outline", { preHandler: requireAuth }, async (req, reply) => {
+    const b = req.body ?? {};
+    const chapterId = String(b.chapterId ?? "").trim();
+    const outlineDraft = String(b.outlineDraft ?? "").trim();
+    const outlineNodeId = String(b.outlineNodeId ?? "").trim();
+
+    if (!chapterId) return reply.code(400).send({ error: "MISSING_CHAPTER_ID" });
+    if (!outlineDraft) return reply.code(400).send({ error: "MISSING_OUTLINE_DRAFT" });
+
+    // 校验章节归属
+    const chapterRow = await pool.query(
+      `select c.id, c.outline_pushed_at
+       from chapter c
+       join work w on w.id = c.work_id
+       where c.id=$1 and w.user_id=$2`,
+      [chapterId, req.user.id],
+    );
+    if (!chapterRow.rowCount) return reply.code(404).send({ error: "CHAPTER_NOT_FOUND" });
+
+    // 已推送过则拒绝（以编辑页章节为真，推演快照只读）
+    if (chapterRow.rows[0].outline_pushed_at !== null) {
+      return reply.code(409).send({ error: "ALREADY_PUSHED" });
+    }
+
+    const r = await pool.query(
+      `update chapter
+       set outline_draft=$1, outline_node_id=$2, outline_pushed_at=$3
+       where id=$4 returning id, title, outline_draft, outline_node_id, outline_pushed_at`,
+      [outlineDraft, outlineNodeId || null, nowMs(), chapterId],
+    );
+    reply.send(r.rows[0]);
   });
 
   app.addHook("onClose", async () => {

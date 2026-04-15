@@ -1,7 +1,8 @@
+/* eslint-disable react-refresh/only-export-components -- 同文件导出 Provider 与配套 hook 为常见模式 */
 import { createContext, useContext, type ReactNode } from "react";
 
 export type EditorZenContextValue = {
-  /** 沉浸写作：隐藏顶栏、收起章列表与右栏，扩大正文区 */
+  /** 沉浸写作：请求浏览器全屏（Fullscreen API）；写作 UI（顶栏、章栏、右栏）保持可用，区别于阅读向「全隐藏」 */
   zenWrite: boolean;
   setZenWrite: (v: boolean) => void;
 };

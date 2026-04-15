@@ -66,6 +66,7 @@ import {
   AlertCircle,
   Info,
   X,
+  GitBranch,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -100,6 +101,7 @@ import {
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Slider } from "@/components/ui/slider"
+import { useToast } from "@/components/ui/use-toast"
 
 // 类型定义
 interface BibleEntry {
@@ -588,6 +590,21 @@ export function LuoBiModule() {
   const [aiSuggestionOpen, setAiSuggestionOpen] = useState(false)
   const editorRef = useRef<HTMLTextAreaElement>(null)
 
+  const { toast } = useToast()
+
+  // 导入到推演：通知用户并提示切换到推演页（真实实装时调用 PUT /api/works/:workId/concept）
+  function handleSendToTuiyan(entry: BibleEntry) {
+    toast({
+      title: "已标记「导入到推演构思」",
+      description: `「${entry.title}」将在切换到推演页后合并到构思区。`,
+      action: (
+        <Button variant="outline" size="sm">
+          前往推演
+        </Button>
+      ),
+    })
+  }
+
   useEffect(() => {
     const count = content.replace(/\s/g, "").length
     setWordCount(count)
@@ -1022,7 +1039,7 @@ export function LuoBiModule() {
                 <TabsList className="w-full">
                   <TabsTrigger value="bible" className="flex-1 gap-1.5 text-xs">
                     <BookOpen className="h-3.5 w-3.5" />
-                    圣经
+                    本书锦囊
                   </TabsTrigger>
                   <TabsTrigger value="style" className="flex-1 gap-1.5 text-xs">
                     <Palette className="h-3.5 w-3.5" />
@@ -1116,6 +1133,7 @@ export function LuoBiModule() {
                           setSelectedEntry(entry)
                           setIsDetailOpen(true)
                         }}
+                        onSendToTuiyan={handleSendToTuiyan}
                       />
                     ))}
                   </div>
@@ -1308,10 +1326,12 @@ function BibleEntryCard({
   entry,
   isSelected,
   onClick,
+  onSendToTuiyan,
 }: {
   entry: BibleEntry
   isSelected: boolean
   onClick: () => void
+  onSendToTuiyan?: (entry: BibleEntry) => void
 }) {
   const config = categoryConfig[entry.category]
   const Icon = config.icon
@@ -1381,6 +1401,20 @@ function BibleEntryCard({
               <Copy className="mr-2 h-4 w-4" />
               复制
             </DropdownMenuItem>
+            {onSendToTuiyan && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onSendToTuiyan(entry)
+                  }}
+                >
+                  <GitBranch className="mr-2 h-4 w-4 text-primary" />
+                  <span className="text-primary">导入到推演构思</span>
+                </DropdownMenuItem>
+              </>
+            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-destructive">
               <Trash2 className="mr-2 h-4 w-4" />

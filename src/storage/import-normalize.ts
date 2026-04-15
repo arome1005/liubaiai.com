@@ -6,6 +6,8 @@ type RawWork = Work & {
   progressChapterId?: string | null;
   tags?: unknown;
   coverImage?: unknown;
+  description?: unknown;
+  status?: unknown;
 };
 
 /** 兼容旧备份 JSON 中的 `progressChapterId`；透传 `coverImage` / `tags` */
@@ -14,12 +16,18 @@ export function normalizeWorkRow(raw: RawWork): Work {
     ? raw.tags.filter((x): x is string => typeof x === "string")
     : undefined;
   const cov = raw.coverImage;
+  const desc = raw.description;
+  const st = raw.status;
+  const status =
+    st === "serializing" || st === "completed" || st === "archived" ? (st as Work["status"]) : undefined;
   return {
     id: raw.id,
     title: raw.title,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
     progressCursor: raw.progressCursor ?? raw.progressChapterId ?? null,
+    description: typeof desc === "string" && desc.trim().length ? desc : undefined,
+    status,
     coverImage: typeof cov === "string" && cov.length > 0 ? cov : undefined,
     tags: normalizeWorkTagList(tagArr),
   };

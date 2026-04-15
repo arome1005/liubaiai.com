@@ -1,15 +1,44 @@
 import { clampContextText, formatWorkStyleAndTagProfileBlock, takeTailText, type WritingWorkStyleSlice } from "./assemble-context";
 import { generateWithProviderStream } from "./client";
+import { isLocalAiProvider } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
+import { approxTotalTokensForMessages } from "../util/ai-injection-confirm";
 
 const MAX_OUTLINE_CHARS = 48000;
 const MAX_BODY_TAIL_CHARS = 12000;
 const MAX_SETTING_INDEX_CHARS = 8000;
+const MAX_EXCERPTS_CHARS = 6000;
+const MAX_DRAFT_PROCESS_CHARS = 24000;
 
-const SYSTEM_BASE = `你是严谨的中文小说写作助手。用户的任务是「按已定稿的大纲与文策」写出**可发表的章节正文**（叙述与对话为主）。
+/** 生辉生成模式：按纲仿写 / 续写 / 重写 / 精炼 */
+export type ShengHuiGenerateMode = "write" | "continue" | "rewrite" | "polish";
+
+export const MODE_LABELS: Record<ShengHuiGenerateMode, string> = {
+  write: "按纲仿写",
+  continue: "续写",
+  rewrite: "重写",
+  polish: "精炼",
+};
+
+export const MODE_DESCS: Record<ShengHuiGenerateMode, string> = {
+  write: "按大纲与文策从零生成正文",
+  continue: "在当前草稿末尾续写",
+  rewrite: "按大纲精神全新改写当前草稿",
+  polish: "润色当前草稿，保持情节不变",
+};
+
+const MODE_TASK_PREFIXES: Record<ShengHuiGenerateMode, string> = {
+  write: "【任务：按纲仿写】请依照下方大纲与文策，生成本章正文。若有文风参考段落，请学习其笔法并自然融入。",
+  continue: "【任务：续写】请在「当前草稿」末尾之后，按大纲精神延续情节，保持风格连贯。",
+  rewrite: "【任务：重写】请将「当前草稿」按大纲精神全新创作：情节脉络不变，语言全面更新。",
+  polish: "【任务：精炼】请对「当前草稿」进行语言润色与节奏优化：保持情节、人物与对白内容不变，只提升文字质量。",
+};
+
+const SYSTEM_BASE = `你是严谨的中文小说写作助手。用户的任务是写出**可发表的章节正文**（叙述与对话为主）。
 要求：
-- 严格服从用户给出的纲、文策与本书约束；不要引入与设定矛盾的情节。
+- 严格服从用户给出的大纲、文策与本书约束；不要引入与设定矛盾的情节。
+- 若提供「文风参考段落」，请从中学习其**文字节奏、遣词风格与场景描摹手法**，将这种笔法自然地融入创作中。仿写的目的是习得风格与笔法，绝不是改写原文情节、搬运对白或复制文字——参考段落只作为风格锚定，不应原文出现在输出中。
 - 若提供「续接正文」或「文风锚点」，需自然衔接、风格一致。
 - 不要复述纲要条目；应展开为场景、对话与描写。
 - 直接输出正文；不要开场白、不要对写作过程的说明、不要 Markdown 标题。`;
@@ -25,7 +54,7 @@ export function assertShengHuiPrivacy(
   settings: AiSettings,
   opts: { includeChapterSummary: boolean },
 ): void {
-  const cloud = settings.provider !== "ollama";
+  const cloud = !isLocalAiProvider(settings.provider);
   if (!cloud) return;
   if (!settings.privacy.consentAccepted || !settings.privacy.allowCloudProviders) {
     throw new ShengHuiGenerateError("请先在设置中同意云端 AI 并允许调用。");
@@ -41,8 +70,132 @@ export function assertShengHuiPrivacy(
   }
 }
 
+const emptyStyleSlice = (): WritingWorkStyleSlice => ({
+  pov: "",
+  tone: "",
+  bannedPhrases: "",
+  styleAnchor: "",
+  extraRules: "",
+});
+
 /**
- * §11 步 10：生辉按纲仿写（流式）；system 注入与写作侧栏同源 **风格卡 + 标签侧写**，user 段含 **文风锚点**（与推演三分支一致）。
+ * 与 {@link generateShengHuiProseStream} 将发送的 messages 一致（用于粗估与确认）。
+ */
+export function buildShengHuiChatMessages(args: {
+  workTitle: string;
+  chapterTitle?: string;
+  outlineAndStrategy: string;
+  chapterSummary?: string;
+  chapterBodyTail?: string;
+  chapterBibleFormatted?: string;
+  settingIndexText?: string;
+  workStyle?: WritingWorkStyleSlice;
+  tagProfileText?: string;
+  /** 从藏经 RAG 检索到的风格参考段落（仅学习笔法，非洗稿） */
+  referenceStyleExcerpts?: string[];
+  generateMode?: ShengHuiGenerateMode;
+  /** 续写/重写/精炼模式下的当前草稿 */
+  draftToProcess?: string;
+  /** 目标字数（0 = 不限制） */
+  targetWordCount?: number;
+}): AiChatMessage[] {
+  const mode = args.generateMode ?? "write";
+  const outline = args.outlineAndStrategy.trim();
+  const draft = (args.draftToProcess ?? "").trim();
+
+  if (mode === "write" && !outline) {
+    throw new ShengHuiGenerateError("请先填写「大纲与文策」（可从推演定稿粘贴）。");
+  }
+  if (mode === "continue" && !outline && !draft) {
+    throw new ShengHuiGenerateError("续写模式：请填写「大纲与文策」或在写作台输入当前草稿。");
+  }
+  if ((mode === "rewrite" || mode === "polish") && !draft) {
+    throw new ShengHuiGenerateError(`${mode === "rewrite" ? "重写" : "精炼"}模式：请先生成或在写作台输入草稿。`);
+  }
+
+  const ws = args.workStyle ?? emptyStyleSlice();
+  const constraintBlock = formatWorkStyleAndTagProfileBlock(ws, args.tagProfileText);
+  let systemContent = SYSTEM_BASE;
+  if (constraintBlock.trim()) {
+    systemContent =
+      SYSTEM_BASE +
+      "\n\n【写作约束（与写作侧栏装配器同源；请与下列材料一并遵守）】\n" +
+      constraintBlock.trim();
+  }
+
+  const outlineClamped = outline ? clampContextText(outline, MAX_OUTLINE_CHARS) : "";
+  const summary = (args.chapterSummary ?? "").trim();
+  const bible = (args.chapterBibleFormatted ?? "").trim();
+  const tailRaw = (args.chapterBodyTail ?? "").trim();
+  const tail = tailRaw ? takeTailText(tailRaw, MAX_BODY_TAIL_CHARS) : "";
+  const settingIdx = (args.settingIndexText ?? "").trim()
+    ? clampContextText((args.settingIndexText ?? "").trim(), MAX_SETTING_INDEX_CHARS)
+    : "";
+  const anchor = ws.styleAnchor.trim();
+  const chTitle = (args.chapterTitle ?? "").trim();
+
+  const excerpts = (args.referenceStyleExcerpts ?? []).filter((e) => e.trim());
+  const excerptBlock = excerpts.length > 0
+    ? clampContextText(excerpts.join("\n---\n"), MAX_EXCERPTS_CHARS)
+    : "";
+
+  const draftClamped = draft ? clampContextText(draft, MAX_DRAFT_PROCESS_CHARS) : "";
+
+  const targetWords = typeof args.targetWordCount === "number" && args.targetWordCount > 0
+    ? args.targetWordCount : 0;
+
+  const userParts: string[] = [];
+  const modePrefix = MODE_TASK_PREFIXES[mode];
+  userParts.push(targetWords > 0
+    ? `${modePrefix}（目标字数：约 ${targetWords.toLocaleString()} 字，可适当浮动 ±20%）`
+    : modePrefix);
+  userParts.push(`书名：${args.workTitle.trim() || "未命名"}`);
+  if (chTitle) userParts.push(`章节：${chTitle}`);
+  if (anchor) userParts.push(`文风锚点（尽量贴近其用词/节奏/句法）：\n${anchor}`);
+  if (settingIdx) userParts.push(`【设定索引（摘录）】\n${settingIdx}`);
+  if (summary) userParts.push(`【章节概要】\n${summary}`);
+  if (bible) userParts.push(`【本章锦囊要点】\n${bible}`);
+  if (tail && mode === "write") userParts.push(`【续接位置：正文末尾节选】\n${tail}`);
+  if (excerptBlock) {
+    userParts.push(`【文风参考段落（仅学习笔法与风格，勿复制原文情节、人物名或对白）】\n${excerptBlock}`);
+  }
+  if (outlineClamped) userParts.push(`【大纲与文策（定稿）】\n${outlineClamped}`);
+
+  if (mode === "continue" && draftClamped) {
+    userParts.push(`【当前草稿（请在此末尾续写新内容）】\n${draftClamped}`);
+  } else if (mode === "rewrite" && draftClamped) {
+    userParts.push(`【当前草稿（请按以上大纲全新重写）】\n${draftClamped}`);
+  } else if (mode === "polish" && draftClamped) {
+    userParts.push(`【当前草稿（请润色以下内容，保持情节不变）】\n${draftClamped}`);
+  }
+
+  const userContent = userParts.join("\n\n");
+  return [
+    { role: "system", content: systemContent },
+    { role: "user", content: userContent },
+  ];
+}
+
+/** §G-05：输出长度按「一次章节正文」预留粗估（非计费、非厂商上限）。 */
+export const SHENG_HUI_OUTPUT_ESTIMATE_TOKENS = 4000;
+
+export function estimateShengHuiRoughTokens(messages: AiChatMessage[]): {
+  inputApprox: number;
+  outputEstimateApprox: number;
+  totalApprox: number;
+} {
+  const inputApprox = approxTotalTokensForMessages(messages);
+  const outputEstimateApprox = SHENG_HUI_OUTPUT_ESTIMATE_TOKENS;
+  return {
+    inputApprox,
+    outputEstimateApprox,
+    totalApprox: inputApprox + outputEstimateApprox,
+  };
+}
+
+/**
+ * 生辉仿写生成（流式）。支持四种模式：按纲仿写 / 续写 / 重写 / 精炼。
+ * 可注入藏经 RAG 风格参考段落（学习笔法，非洗稿）。
  */
 export async function generateShengHuiProseStream(args: {
   workTitle: string;
@@ -54,76 +207,32 @@ export async function generateShengHuiProseStream(args: {
   settingIndexText?: string;
   workStyle?: WritingWorkStyleSlice;
   tagProfileText?: string;
+  referenceStyleExcerpts?: string[];
+  generateMode?: ShengHuiGenerateMode;
+  draftToProcess?: string;
+  targetWordCount?: number;
   settings?: AiSettings;
   signal?: AbortSignal;
   onDelta: (d: string) => void;
 }): Promise<{ text: string }> {
-  const outline = args.outlineAndStrategy.trim();
-  if (!outline) {
-    throw new ShengHuiGenerateError("请先填写「大纲与文策」（可从推演定稿粘贴）。");
-  }
-
   const settings = args.settings ?? loadAiSettings();
   assertShengHuiPrivacy(settings, {
     includeChapterSummary: Boolean((args.chapterSummary ?? "").trim()),
   });
 
   const cfg = getProviderConfig(settings, settings.provider);
-  if (settings.provider !== "ollama" && !cfg.apiKey?.trim()) {
+  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
     throw new ShengHuiGenerateError("请先在设置中填写当前模型的 API Key。");
   }
 
-  const emptyStyle: WritingWorkStyleSlice = {
-    pov: "",
-    tone: "",
-    bannedPhrases: "",
-    styleAnchor: "",
-    extraRules: "",
-  };
-  const ws = args.workStyle ?? emptyStyle;
-  const constraintBlock = formatWorkStyleAndTagProfileBlock(ws, args.tagProfileText);
-  let systemContent = SYSTEM_BASE;
-  if (constraintBlock.trim()) {
-    systemContent =
-      SYSTEM_BASE +
-      "\n\n【写作约束（与写作侧栏装配器同源；请与下列材料一并遵守）】\n" +
-      constraintBlock.trim();
-  }
-
-  const outlineClamped = clampContextText(outline, MAX_OUTLINE_CHARS);
-  const summary = (args.chapterSummary ?? "").trim();
-  const bible = (args.chapterBibleFormatted ?? "").trim();
-  const tailRaw = (args.chapterBodyTail ?? "").trim();
-  const tail = tailRaw ? takeTailText(tailRaw, MAX_BODY_TAIL_CHARS) : "";
-  const settingIdx = (args.settingIndexText ?? "").trim()
-    ? clampContextText((args.settingIndexText ?? "").trim(), MAX_SETTING_INDEX_CHARS)
-    : "";
-
-  const anchor = ws.styleAnchor.trim();
-  const chTitle = (args.chapterTitle ?? "").trim();
-
-  const userParts: string[] = [];
-  userParts.push(`书名：${args.workTitle.trim() || "未命名"}`);
-  if (chTitle) userParts.push(`章节：${chTitle}`);
-  if (anchor) userParts.push(`文风锚点（尽量贴近其用词/节奏/句法）：\n${anchor}`);
-  if (settingIdx) userParts.push(`【设定索引（摘录）】\n${settingIdx}`);
-  if (summary) userParts.push(`【章节概要】\n${summary}`);
-  if (bible) userParts.push(`【本章圣经要点】\n${bible}`);
-  if (tail) userParts.push(`【续接位置：正文末尾节选】\n${tail}`);
-  userParts.push(`【大纲与文策（定稿）】\n${outlineClamped}`);
-
-  const userContent = userParts.join("\n\n");
-  const messages: AiChatMessage[] = [
-    { role: "system", content: systemContent },
-    { role: "user", content: userContent },
-  ];
+  const messages = buildShengHuiChatMessages(args);
 
   const r = await generateWithProviderStream({
     provider: settings.provider,
     config: cfg,
     messages,
     onDelta: args.onDelta,
-    temperature: settings.provider !== "ollama" ? settings.geminiTemperature : undefined,
+    temperature: !isLocalAiProvider(settings.provider) ? settings.geminiTemperature : undefined,
     signal: args.signal,
   });
   return { text: (r.text ?? "").trim() };

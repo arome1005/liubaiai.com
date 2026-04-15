@@ -10,6 +10,7 @@ import type {
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  GlobalPromptTemplate,
   ReferenceChapterHead,
   ReferenceChunk,
   ReferenceExcerpt,
@@ -18,12 +19,16 @@ import type {
   ReferenceSearchHit,
   ReferenceTag,
   ReferenceTokenPosting,
+  InspirationCollection,
   InspirationFragment,
   Volume,
   Work,
   WorkStyleCard,
   WritingPromptTemplate,
   WritingStyleSample,
+  LogicPlaceEvent,
+  LogicPlaceNode,
+  TuiyanState,
 } from "../db/types";
 
 /** {@link WritingStore.updateChapter} 可选行为（步 25 乐观锁） */
@@ -44,10 +49,10 @@ export interface WritingStore {
 
   listWorks(): Promise<Work[]>;
   getWork(id: string): Promise<Work | undefined>;
-  createWork(title: string, opts?: { tags?: string[] }): Promise<Work>;
+  createWork(title: string, opts?: { tags?: string[]; description?: string; status?: Work["status"] }): Promise<Work>;
   updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status">>,
   ): Promise<void>;
   deleteWork(id: string): Promise<void>;
 
@@ -60,14 +65,19 @@ export interface WritingStore {
   createChapter(workId: string, title?: string, volumeId?: string): Promise<Chapter>;
   updateChapter(
     id: string,
-    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt">>,
+    patch: Partial<
+      Pick<
+        Chapter,
+        "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder" | "outlineDraft" | "outlineNodeId" | "outlinePushedAt"
+      >
+    >,
     options?: UpdateChapterOptions,
   ): Promise<void>;
   deleteChapter(id: string): Promise<void>;
   reorderChapters(workId: string, orderedIds: string[]): Promise<void>;
 
   /** 全书纯文本搜索（字面量，非正则） */
-  searchWork(workId: string, query: string, scope?: BookSearchScope): Promise<BookSearchHit[]>;
+  searchWork(workId: string, query: string, scope?: BookSearchScope, isRegex?: boolean): Promise<BookSearchHit[]>;
 
   listChapterSnapshots(chapterId: string): Promise<ChapterSnapshot[]>;
   /** 若与最新一条正文相同则跳过；超出条数删最旧 */
@@ -140,7 +150,7 @@ export interface WritingStore {
   /** 清空全部参考库数据（索引、分块、摘录；不影响作品正文） */
   clearAllReferenceLibraryData(): Promise<void>;
 
-  /** 第 4 组：一致性护栏 / 圣经 */
+  /** 第 4 组：一致性护栏 / 锦囊 */
   listBibleCharacters(workId: string): Promise<BibleCharacter[]>;
   addBibleCharacter(
     workId: string,
@@ -177,6 +187,30 @@ export interface WritingStore {
   deleteBibleTimelineEvent(id: string): Promise<void>;
   reorderBibleTimelineEvents(workId: string, orderedIds: string[]): Promise<void>;
 
+  /** §11 步 34：推演地图/地点事件（独立表） */
+  listLogicPlaceNodes(workId: string): Promise<LogicPlaceNode[]>;
+  addLogicPlaceNode(
+    workId: string,
+    input: Partial<Omit<LogicPlaceNode, "id" | "workId" | "createdAt" | "updatedAt">> & { name: string },
+  ): Promise<LogicPlaceNode>;
+  updateLogicPlaceNode(id: string, patch: Partial<Omit<LogicPlaceNode, "id" | "workId">>): Promise<void>;
+  deleteLogicPlaceNode(id: string): Promise<void>;
+
+  listLogicPlaceEvents(workId: string): Promise<LogicPlaceEvent[]>;
+  addLogicPlaceEvent(
+    workId: string,
+    input: Partial<Omit<LogicPlaceEvent, "id" | "workId" | "createdAt" | "updatedAt">> & { placeId: string; label: string },
+  ): Promise<LogicPlaceEvent>;
+  updateLogicPlaceEvent(id: string, patch: Partial<Omit<LogicPlaceEvent, "id" | "workId">>): Promise<void>;
+  deleteLogicPlaceEvent(id: string): Promise<void>;
+
+  /** 推演工作台：与作品绑定的状态（对话/文策/定稿标记等） */
+  getTuiyanState(workId: string): Promise<TuiyanState | undefined>;
+  upsertTuiyanState(
+    workId: string,
+    patch: Partial<Omit<TuiyanState, "id" | "workId" | "updatedAt">> & { updatedAt?: number },
+  ): Promise<TuiyanState>;
+
   listBibleChapterTemplates(workId: string): Promise<BibleChapterTemplate[]>;
   addBibleChapterTemplate(
     workId: string,
@@ -200,6 +234,29 @@ export interface WritingStore {
   ): Promise<BibleGlossaryTerm>;
   updateBibleGlossaryTerm(id: string, patch: Partial<Omit<BibleGlossaryTerm, "id" | "workId">>): Promise<void>;
   deleteBibleGlossaryTerm(id: string): Promise<void>;
+
+  /** Sprint 1：全局（跨作品）提示词库（仅返回当前用户自己的所有模板） */
+  listGlobalPromptTemplates(): Promise<GlobalPromptTemplate[]>;
+  /**
+   * Sprint 2：返回所有 status=approved 的模板（含他人已发布）。
+   * Supabase RLS 自动过滤可见性；IndexedDB 退化为本地 approved。
+   */
+  listApprovedPromptTemplates(): Promise<GlobalPromptTemplate[]>;
+  /**
+   * 管理员审核：返回所有 status=submitted 的模板（含他人提交）。
+   * Supabase 端需配套 RLS 策略允许管理员账号读取全部 submitted 行；
+   * IndexedDB 退化为本地 submitted 行。
+   */
+  listSubmittedPromptTemplates(): Promise<GlobalPromptTemplate[]>;
+  addGlobalPromptTemplate(
+    input: Omit<GlobalPromptTemplate, "id" | "sortOrder" | "createdAt" | "updatedAt">,
+  ): Promise<GlobalPromptTemplate>;
+  updateGlobalPromptTemplate(
+    id: string,
+    patch: Partial<Omit<GlobalPromptTemplate, "id" | "createdAt">>,
+  ): Promise<void>;
+  deleteGlobalPromptTemplate(id: string): Promise<void>;
+  reorderGlobalPromptTemplates(orderedIds: string[]): Promise<void>;
 
   /** §11 步 42：可复用「额外要求」模板 */
   listWritingPromptTemplates(workId: string): Promise<WritingPromptTemplate[]>;
@@ -241,9 +298,20 @@ export interface WritingStore {
   ): Promise<InspirationFragment>;
   updateInspirationFragment(
     id: string,
-    patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId">>,
+    patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId" | "collectionId">>,
   ): Promise<void>;
   deleteInspirationFragment(id: string): Promise<void>;
+
+  /** §G-07：流光集合 */
+  listInspirationCollections(): Promise<InspirationCollection[]>;
+  addInspirationCollection(
+    input: Partial<Omit<InspirationCollection, "id" | "createdAt" | "updatedAt">> & { name: string },
+  ): Promise<InspirationCollection>;
+  updateInspirationCollection(
+    id: string,
+    patch: Partial<Pick<InspirationCollection, "name" | "sortOrder">>,
+  ): Promise<void>;
+  deleteInspirationCollection(id: string): Promise<void>;
 
   exportAllData(): Promise<{
     works: Work[];
@@ -265,9 +333,12 @@ export interface WritingStore {
     chapterBible: ChapterBible[];
     bibleGlossaryTerms: BibleGlossaryTerm[];
     workStyleCards: WorkStyleCard[];
+    inspirationCollections: InspirationCollection[];
     inspirationFragments: InspirationFragment[];
     writingPromptTemplates: WritingPromptTemplate[];
     writingStyleSamples: WritingStyleSample[];
+    logicPlaceNodes: LogicPlaceNode[];
+    logicPlaceEvents: LogicPlaceEvent[];
   }>;
   importAllData(data: {
     works: Work[];
@@ -289,9 +360,12 @@ export interface WritingStore {
     chapterBible?: ChapterBible[];
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
+    inspirationCollections?: InspirationCollection[];
     inspirationFragments?: InspirationFragment[];
     writingPromptTemplates?: WritingPromptTemplate[];
     writingStyleSamples?: WritingStyleSample[];
+    logicPlaceNodes?: LogicPlaceNode[];
+    logicPlaceEvents?: LogicPlaceEvent[];
   }): Promise<void>;
   /** 合并导入：生成新 id，追加到现有库 */
   importAllDataMerge(data: {
@@ -313,8 +387,11 @@ export interface WritingStore {
     chapterBible?: ChapterBible[];
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
+    inspirationCollections?: InspirationCollection[];
     inspirationFragments?: InspirationFragment[];
     writingPromptTemplates?: WritingPromptTemplate[];
     writingStyleSamples?: WritingStyleSample[];
+    logicPlaceNodes?: LogicPlaceNode[];
+    logicPlaceEvents?: LogicPlaceEvent[];
   }): Promise<void>;
 }

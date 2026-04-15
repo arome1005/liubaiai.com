@@ -6,11 +6,15 @@ import type {
   BibleGlossaryTerm,
   BibleTimelineEvent,
   BibleWorldEntry,
+  GlobalPromptTemplate,
+  LogicPlaceEvent,
+  LogicPlaceNode,
   BookSearchHit,
   BookSearchScope,
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  InspirationCollection,
   InspirationFragment,
   ReferenceChunk,
   ReferenceChapterHead,
@@ -25,6 +29,7 @@ import type {
   WorkStyleCard,
   WritingPromptTemplate,
   WritingStyleSample,
+  TuiyanState,
 } from "../db/types";
 import { SNAPSHOT_CAP_PER_CHAPTER, SNAPSHOT_MAX_AGE_MS } from "../db/types";
 import { annotateReferenceParts } from "./chapter-detector";
@@ -241,17 +246,21 @@ export class WritingStoreIndexedDB implements WritingStore {
     return getDB().works.get(id);
   }
 
-  async createWork(title: string, opts?: { tags?: string[] }): Promise<Work> {
+  async createWork(title: string, opts?: { tags?: string[]; description?: string; status?: Work["status"] }): Promise<Work> {
     const db = getDB();
     const id = crypto.randomUUID();
     const t = now();
     const tags = normalizeWorkTagList(opts?.tags);
+    const desc = (opts?.description ?? "").trim();
+    const status = opts?.status ?? "serializing";
     const work: Work = {
       id,
       title: title.trim() || "未命名作品",
       createdAt: t,
       updatedAt: t,
       progressCursor: null,
+      ...(desc ? { description: desc } : {}),
+      ...(status ? { status } : {}),
       ...(tags?.length ? { tags } : {}),
     };
     await db.works.add(work);
@@ -269,7 +278,7 @@ export class WritingStoreIndexedDB implements WritingStore {
 
   async updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status">>,
   ): Promise<void> {
     const db = getDB();
     const cur = await db.works.get(id);
@@ -279,6 +288,16 @@ export class WritingStoreIndexedDB implements WritingStore {
       const n = normalizeWorkTagList(patch.tags);
       if (n?.length) next.tags = n;
       else delete next.tags;
+    }
+    if (patch.description !== undefined) {
+      const d = String(patch.description ?? "").trim();
+      if (d) next.description = d;
+      else delete next.description;
+    }
+    if (patch.status !== undefined) {
+      const s = patch.status;
+      if (s === "serializing" || s === "completed" || s === "archived" || s === "deleted") next.status = s;
+      else delete next.status;
     }
     await db.works.put(next);
   }
@@ -303,6 +322,8 @@ export class WritingStoreIndexedDB implements WritingStore {
     await db.bibleChapterTemplates.where("workId").equals(id).delete();
     await db.bibleGlossaryTerms.where("workId").equals(id).delete();
     await db.workStyleCards.where("workId").equals(id).delete();
+    await db.logicPlaceEvents.where("workId").equals(id).delete();
+    await db.logicPlaceNodes.where("workId").equals(id).delete();
     await db.inspirationFragments.where("workId").equals(id).modify({ workId: null });
     await db.works.delete(id);
   }
@@ -387,7 +408,12 @@ export class WritingStoreIndexedDB implements WritingStore {
 
   async updateChapter(
     id: string,
-    patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt">>,
+    patch: Partial<
+      Pick<
+        Chapter,
+        "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder" | "outlineDraft" | "outlineNodeId" | "outlinePushedAt"
+      >
+    >,
     options?: UpdateChapterOptions,
   ): Promise<void> {
     const db = getDB();
@@ -446,9 +472,22 @@ export class WritingStoreIndexedDB implements WritingStore {
     workId: string,
     query: string,
     scope?: BookSearchScope,
+    isRegex?: boolean,
   ): Promise<BookSearchHit[]> {
     const q = query.trim();
     if (!q) return [];
+
+    // Build regex: if isRegex=true use raw pattern; otherwise escape and use literal
+    let re: RegExp;
+    try {
+      re = isRegex
+        ? new RegExp(q, "g")
+        : new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+    } catch {
+      // Invalid regex → fall back to literal
+      re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
+    }
+
     const work = await this.getWork(workId);
     let chapters = await this.listChapters(workId);
     if (scope === "beforeProgress" && work?.progressCursor) {
@@ -456,25 +495,47 @@ export class WritingStoreIndexedDB implements WritingStore {
       const curOrder = cur?.order ?? Infinity;
       chapters = chapters.filter((c) => c.order < curOrder);
     }
+
+    const CONTEXT = 60; // chars before/after
+    const MAX_CONTEXTS = 3;
+
     const hits: BookSearchHit[] = [];
     for (const ch of chapters) {
-      let count = 0;
-      let pos = 0;
-      while (true) {
-        const i = ch.content.indexOf(q, pos);
-        if (i < 0) break;
-        count++;
-        pos = i + q.length;
+      const text = ch.content;
+      const offsets: number[] = [];
+      re.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text)) !== null) {
+        offsets.push(m.index);
+        if (offsets.length > 500) break; // safety cap
       }
-      if (count === 0) continue;
-      const first = ch.content.indexOf(q);
-      const start = Math.max(0, first - 40);
-      const preview = ch.content.slice(start, start + 120).replace(/\s+/g, " ").trim();
+      if (offsets.length === 0) continue;
+
+      const firstOffset = offsets[0];
+      // Legacy preview (first match, ~120 chars)
+      const start0 = Math.max(0, firstOffset - 40);
+      const preview = text.slice(start0, start0 + 120).replace(/\s+/g, " ").trim();
+
+      // Rich contexts: up to MAX_CONTEXTS non-overlapping snippets
+      const contexts: string[] = [];
+      let lastEnd = -1;
+      for (const off of offsets) {
+        if (off < lastEnd) continue; // skip overlapping
+        const cStart = Math.max(0, off - CONTEXT);
+        const cEnd = Math.min(text.length, off + CONTEXT + q.length);
+        const snippet = text.slice(cStart, cEnd).replace(/\s+/g, " ").trim();
+        contexts.push(`${cStart > 0 ? "…" : ""}${snippet}${cEnd < text.length ? "…" : ""}`);
+        lastEnd = off + q.length;
+        if (contexts.length >= MAX_CONTEXTS) break;
+      }
+
       hits.push({
         chapterId: ch.id,
         chapterTitle: ch.title,
-        matchCount: count,
+        matchCount: offsets.length,
         preview: preview.length ? `…${preview}…` : "…",
+        contexts,
+        firstMatchOffset: firstOffset,
       });
     }
     return hits;
@@ -1111,6 +1172,111 @@ export class WritingStoreIndexedDB implements WritingStore {
     });
   }
 
+  async listLogicPlaceNodes(workId: string): Promise<LogicPlaceNode[]> {
+    return getDB().logicPlaceNodes.where("workId").equals(workId).sortBy("updatedAt");
+  }
+
+  async addLogicPlaceNode(
+    workId: string,
+    input: Partial<Omit<LogicPlaceNode, "id" | "workId" | "createdAt" | "updatedAt">> & { name: string },
+  ): Promise<LogicPlaceNode> {
+    const db = getDB();
+    const t = now();
+    const x = Number.isFinite(input.x as number) ? Number(input.x) : 50;
+    const y = Number.isFinite(input.y as number) ? Number(input.y) : 50;
+    const row: LogicPlaceNode = {
+      id: crypto.randomUUID(),
+      workId,
+      name: (input.name ?? "").trim() || "地点",
+      note: input.note ?? "",
+      x: Math.max(0, Math.min(100, Math.round(x))),
+      y: Math.max(0, Math.min(100, Math.round(y))),
+      createdAt: t,
+      updatedAt: t,
+    };
+    await db.logicPlaceNodes.add(row);
+    return row;
+  }
+
+  async updateLogicPlaceNode(id: string, patch: Partial<Omit<LogicPlaceNode, "id" | "workId">>): Promise<void> {
+    const upd: Record<string, unknown> = { updatedAt: now() };
+    if (patch.name !== undefined) upd.name = (patch.name ?? "").trim() || "地点";
+    if (patch.note !== undefined) upd.note = patch.note ?? "";
+    if (patch.x !== undefined) upd.x = Math.max(0, Math.min(100, Math.round(Number(patch.x))));
+    if (patch.y !== undefined) upd.y = Math.max(0, Math.min(100, Math.round(Number(patch.y))));
+    await getDB().logicPlaceNodes.update(id, upd as Partial<LogicPlaceNode>);
+  }
+
+  async deleteLogicPlaceNode(id: string): Promise<void> {
+    const db = getDB();
+    await db.logicPlaceEvents.where("placeId").equals(id).delete();
+    await db.logicPlaceNodes.delete(id);
+  }
+
+  async listLogicPlaceEvents(workId: string): Promise<LogicPlaceEvent[]> {
+    return getDB().logicPlaceEvents.where("workId").equals(workId).sortBy("updatedAt");
+  }
+
+  async addLogicPlaceEvent(
+    workId: string,
+    input: Partial<Omit<LogicPlaceEvent, "id" | "workId" | "createdAt" | "updatedAt">> & { placeId: string; label: string },
+  ): Promise<LogicPlaceEvent> {
+    const db = getDB();
+    const t = now();
+    const row: LogicPlaceEvent = {
+      id: crypto.randomUUID(),
+      workId,
+      placeId: input.placeId,
+      label: (input.label ?? "").trim() || "事件",
+      note: input.note ?? "",
+      chapterId: input.chapterId ?? null,
+      createdAt: t,
+      updatedAt: t,
+    };
+    await db.logicPlaceEvents.add(row);
+    return row;
+  }
+
+  async updateLogicPlaceEvent(id: string, patch: Partial<Omit<LogicPlaceEvent, "id" | "workId">>): Promise<void> {
+    const upd: Record<string, unknown> = { updatedAt: now() };
+    if (patch.placeId !== undefined) upd.placeId = patch.placeId;
+    if (patch.label !== undefined) upd.label = (patch.label ?? "").trim() || "事件";
+    if (patch.note !== undefined) upd.note = patch.note ?? "";
+    if (patch.chapterId !== undefined) upd.chapterId = patch.chapterId;
+    await getDB().logicPlaceEvents.update(id, upd as Partial<LogicPlaceEvent>);
+  }
+
+  async deleteLogicPlaceEvent(id: string): Promise<void> {
+    await getDB().logicPlaceEvents.delete(id);
+  }
+
+  async getTuiyanState(workId: string): Promise<TuiyanState | undefined> {
+    return getDB().tuiyanStates.get(workId);
+  }
+
+  async upsertTuiyanState(
+    workId: string,
+    patch: Partial<Omit<TuiyanState, "id" | "workId" | "updatedAt">> & { updatedAt?: number },
+  ): Promise<TuiyanState> {
+    const db = getDB();
+    const prev = await db.tuiyanStates.get(workId);
+    const t = Number.isFinite(patch.updatedAt) ? Number(patch.updatedAt) : now();
+    const next: TuiyanState = {
+      id: workId,
+      workId,
+      updatedAt: t,
+      chatHistory: patch.chatHistory ?? prev?.chatHistory ?? [],
+      wenCe: patch.wenCe ?? prev?.wenCe ?? [],
+      finalizedNodeIds: patch.finalizedNodeIds ?? prev?.finalizedNodeIds ?? [],
+      statusByNodeId: patch.statusByNodeId ?? prev?.statusByNodeId ?? {},
+      linkedRefWorkIds: patch.linkedRefWorkIds ?? prev?.linkedRefWorkIds ?? [],
+      mindmap: patch.mindmap ?? prev?.mindmap ?? { nodes: [], edges: [] },
+      scenes: patch.scenes ?? prev?.scenes ?? [],
+    };
+    await db.tuiyanStates.put(next);
+    return next;
+  }
+
   async listBibleChapterTemplates(workId: string): Promise<BibleChapterTemplate[]> {
     return getDB().bibleChapterTemplates.where("workId").equals(workId).sortBy("name");
   }
@@ -1279,6 +1445,83 @@ export class WritingStoreIndexedDB implements WritingStore {
     });
   }
 
+  // ── 全局提示词库（Sprint 1）─────────────────────────────────────────────────
+
+  async listGlobalPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+    return getDB().globalPromptTemplates.orderBy("sortOrder").toArray();
+  }
+
+  async addGlobalPromptTemplate(
+    input: Omit<GlobalPromptTemplate, "id" | "sortOrder" | "createdAt" | "updatedAt">,
+  ): Promise<GlobalPromptTemplate> {
+    const db = getDB();
+    const all = await db.globalPromptTemplates.orderBy("sortOrder").toArray();
+    const maxOrder = all.length === 0 ? -1 : Math.max(...all.map((r) => r.sortOrder));
+    const t = now();
+    const row: GlobalPromptTemplate = {
+      id: crypto.randomUUID(),
+      title: (input.title ?? "").trim() || "未命名模板",
+      type: input.type,
+      tags: input.tags ?? [],
+      body: input.body ?? "",
+      status: "draft",
+      sortOrder: maxOrder + 1,
+      createdAt: t,
+      updatedAt: t,
+    };
+    await db.globalPromptTemplates.add(row);
+    return row;
+  }
+
+  async updateGlobalPromptTemplate(
+    id: string,
+    patch: Partial<Omit<GlobalPromptTemplate, "id" | "createdAt">>,
+  ): Promise<void> {
+    const upd: Record<string, unknown> = { updatedAt: now() };
+    if (patch.title !== undefined) upd.title = (patch.title ?? "").trim() || "未命名模板";
+    if (patch.type !== undefined) upd.type = patch.type;
+    if (patch.tags !== undefined) upd.tags = patch.tags;
+    if (patch.body !== undefined) upd.body = patch.body;
+    if (patch.status !== undefined) upd.status = patch.status;
+    if (patch.reviewNote !== undefined) upd.reviewNote = patch.reviewNote;
+    if (patch.sortOrder !== undefined) upd.sortOrder = patch.sortOrder;
+    await getDB().globalPromptTemplates.update(id, upd as Partial<GlobalPromptTemplate>);
+  }
+
+  async deleteGlobalPromptTemplate(id: string): Promise<void> {
+    await getDB().globalPromptTemplates.delete(id);
+  }
+
+  async reorderGlobalPromptTemplates(orderedIds: string[]): Promise<void> {
+    const db = getDB();
+    const t = now();
+    await db.transaction("rw", db.globalPromptTemplates, async () => {
+      for (let i = 0; i < orderedIds.length; i++) {
+        await db.globalPromptTemplates.update(orderedIds[i], { sortOrder: i, updatedAt: t });
+      }
+    });
+  }
+
+  async listApprovedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+    // 本地 IndexedDB 无法访问他人数据，退化为自己的 approved 行
+    const rows = await getDB()
+      .globalPromptTemplates.where("status")
+      .equals("approved")
+      .toArray();
+    return rows.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  async listSubmittedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+    // 本地 IndexedDB 退化为自己的 submitted 行
+    const rows = await getDB()
+      .globalPromptTemplates.where("status")
+      .equals("submitted")
+      .toArray();
+    return rows.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+
   async listWritingStyleSamples(workId: string): Promise<WritingStyleSample[]> {
     return getDB().writingStyleSamples.where("workId").equals(workId).sortBy("sortOrder");
   }
@@ -1365,12 +1608,26 @@ export class WritingStoreIndexedDB implements WritingStore {
     const db = getDB();
     const wid = input.workId ?? null;
     if (wid && !(await db.works.get(wid))) throw new Error("作品不存在");
+    const cid = input.collectionId ?? null;
+    if (cid && !(await db.inspirationCollections.get(cid))) throw new Error("集合不存在");
     const t = now();
     const row: InspirationFragment = {
       id: crypto.randomUUID(),
       workId: wid,
+      collectionId: cid,
+      title: input.title?.trim() || undefined,
+      sourceName: input.sourceName?.trim() || undefined,
+      sourceUrl: input.sourceUrl?.trim() || undefined,
+      urlTitle: input.urlTitle?.trim() || undefined,
+      urlSite: input.urlSite?.trim() || undefined,
+      urlDescription: input.urlDescription?.trim() || undefined,
+      urlFetchedAt: typeof input.urlFetchedAt === "number" ? input.urlFetchedAt : undefined,
+      links: Array.isArray(input.links) ? input.links : [],
       body: input.body.trim() || "（空碎片）",
       tags: normalizeWorkTagList(input.tags) ?? [],
+      isFavorite: input.isFavorite ?? false,
+      isPrivate: input.isPrivate ?? false,
+      archived: input.archived ?? false,
       createdAt: t,
       updatedAt: t,
     };
@@ -1380,11 +1637,33 @@ export class WritingStoreIndexedDB implements WritingStore {
 
   async updateInspirationFragment(
     id: string,
-    patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId">>,
+    patch: Partial<
+      Pick<
+        InspirationFragment,
+        | "body"
+        | "tags"
+        | "workId"
+        | "collectionId"
+        | "title"
+        | "sourceName"
+        | "sourceUrl"
+        | "urlTitle"
+        | "urlSite"
+        | "urlDescription"
+        | "urlFetchedAt"
+        | "links"
+        | "isFavorite"
+        | "isPrivate"
+        | "archived"
+      >
+    >,
   ): Promise<void> {
     const db = getDB();
     if (patch.workId !== undefined && patch.workId !== null && !(await db.works.get(patch.workId))) {
       throw new Error("作品不存在");
+    }
+    if (patch.collectionId !== undefined && patch.collectionId !== null) {
+      if (!(await db.inspirationCollections.get(patch.collectionId))) throw new Error("集合不存在");
     }
     const cur = await db.inspirationFragments.get(id);
     if (!cur) throw new Error("碎片不存在");
@@ -1392,11 +1671,65 @@ export class WritingStoreIndexedDB implements WritingStore {
     if (patch.body !== undefined) upd.body = patch.body.trim() || "（空碎片）";
     if (patch.tags !== undefined) upd.tags = normalizeWorkTagList(patch.tags) ?? [];
     if (patch.workId !== undefined) upd.workId = patch.workId;
+    if (patch.collectionId !== undefined) upd.collectionId = patch.collectionId;
+    if (patch.title !== undefined) upd.title = patch.title?.trim() || undefined;
+    if (patch.sourceName !== undefined) upd.sourceName = patch.sourceName?.trim() || undefined;
+    if (patch.sourceUrl !== undefined) upd.sourceUrl = patch.sourceUrl?.trim() || undefined;
+    if (patch.urlTitle !== undefined) upd.urlTitle = patch.urlTitle?.trim() || undefined;
+    if (patch.urlSite !== undefined) upd.urlSite = patch.urlSite?.trim() || undefined;
+    if (patch.urlDescription !== undefined) upd.urlDescription = patch.urlDescription?.trim() || undefined;
+    if (patch.urlFetchedAt !== undefined) upd.urlFetchedAt = patch.urlFetchedAt ?? undefined;
+    if (patch.links !== undefined) upd.links = Array.isArray(patch.links) ? patch.links : [];
+    if (patch.isFavorite !== undefined) upd.isFavorite = !!patch.isFavorite;
+    if (patch.isPrivate !== undefined) upd.isPrivate = !!patch.isPrivate;
+    if (patch.archived !== undefined) upd.archived = !!patch.archived;
     await db.inspirationFragments.update(id, upd as Partial<InspirationFragment>);
   }
 
   async deleteInspirationFragment(id: string): Promise<void> {
     await getDB().inspirationFragments.delete(id);
+  }
+
+  async listInspirationCollections(): Promise<InspirationCollection[]> {
+    const rows = await getDB().inspirationCollections.orderBy("sortOrder").toArray();
+    return rows.sort((a, b) => a.sortOrder - b.sortOrder || a.createdAt - b.createdAt);
+  }
+
+  async addInspirationCollection(
+    input: Partial<Omit<InspirationCollection, "id" | "createdAt" | "updatedAt">> & { name: string },
+  ): Promise<InspirationCollection> {
+    const db = getDB();
+    const t = now();
+    const existing = await db.inspirationCollections.orderBy("sortOrder").last();
+    const sortOrder = (existing?.sortOrder ?? -1) + 1;
+    const row: InspirationCollection = {
+      id: crypto.randomUUID(),
+      name: (input.name ?? "").trim() || "未命名集合",
+      sortOrder: input.sortOrder ?? sortOrder,
+      createdAt: t,
+      updatedAt: t,
+    };
+    await db.inspirationCollections.add(row);
+    return row;
+  }
+
+  async updateInspirationCollection(
+    id: string,
+    patch: Partial<Pick<InspirationCollection, "name" | "sortOrder">>,
+  ): Promise<void> {
+    const db = getDB();
+    const cur = await db.inspirationCollections.get(id);
+    if (!cur) throw new Error("集合不存在");
+    const upd: Record<string, unknown> = { updatedAt: now() };
+    if (patch.name !== undefined) upd.name = (patch.name ?? "").trim() || "未命名集合";
+    if (patch.sortOrder !== undefined) upd.sortOrder = patch.sortOrder;
+    await db.inspirationCollections.update(id, upd as Partial<InspirationCollection>);
+  }
+
+  async deleteInspirationCollection(id: string): Promise<void> {
+    const db = getDB();
+    await db.inspirationFragments.where("collectionId").equals(id).modify({ collectionId: null });
+    await db.inspirationCollections.delete(id);
   }
 
   async exportAllData(): Promise<{
@@ -1419,9 +1752,12 @@ export class WritingStoreIndexedDB implements WritingStore {
     chapterBible: ChapterBible[];
     bibleGlossaryTerms: BibleGlossaryTerm[];
     workStyleCards: WorkStyleCard[];
+    inspirationCollections: InspirationCollection[];
     inspirationFragments: InspirationFragment[];
     writingPromptTemplates: WritingPromptTemplate[];
     writingStyleSamples: WritingStyleSample[];
+    logicPlaceNodes: LogicPlaceNode[];
+    logicPlaceEvents: LogicPlaceEvent[];
   }> {
     const db = getDB();
     const works = await db.works.toArray();
@@ -1443,9 +1779,12 @@ export class WritingStoreIndexedDB implements WritingStore {
     const chapterBible = await db.chapterBible.toArray();
     const bibleGlossaryTerms = await db.bibleGlossaryTerms.toArray();
     const workStyleCards = await db.workStyleCards.toArray();
+    const inspirationCollections = await db.inspirationCollections.toArray();
     const inspirationFragments = await db.inspirationFragments.toArray();
     const writingPromptTemplates = await db.writingPromptTemplates.toArray();
     const writingStyleSamples = await db.writingStyleSamples.toArray();
+    const logicPlaceNodes = await db.logicPlaceNodes.toArray();
+    const logicPlaceEvents = await db.logicPlaceEvents.toArray();
     return {
       works,
       volumes,
@@ -1466,9 +1805,12 @@ export class WritingStoreIndexedDB implements WritingStore {
       chapterBible,
       bibleGlossaryTerms,
       workStyleCards,
+      inspirationCollections,
       inspirationFragments,
       writingPromptTemplates,
       writingStyleSamples,
+      logicPlaceNodes,
+      logicPlaceEvents,
     };
   }
 
@@ -1492,9 +1834,12 @@ export class WritingStoreIndexedDB implements WritingStore {
     chapterBible?: ChapterBible[];
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
+    inspirationCollections?: InspirationCollection[];
     inspirationFragments?: InspirationFragment[];
     writingPromptTemplates?: WritingPromptTemplate[];
     writingStyleSamples?: WritingStyleSample[];
+    logicPlaceNodes?: LogicPlaceNode[];
+    logicPlaceEvents?: LogicPlaceEvent[];
   }): Promise<void> {
     const normalized = normalizeImportRows(data);
     const refLib = data.referenceLibrary ?? [];
@@ -1512,9 +1857,12 @@ export class WritingStoreIndexedDB implements WritingStore {
     const chapterBible = data.chapterBible ?? [];
     const bibleGlossaryTerms = data.bibleGlossaryTerms ?? [];
     const workStyleCards = data.workStyleCards ?? [];
+    const inspirationCollections = data.inspirationCollections ?? [];
     const inspirationFragments = data.inspirationFragments ?? [];
     const writingPromptTemplates = data.writingPromptTemplates ?? [];
     const writingStyleSamples = data.writingStyleSamples ?? [];
+    const logicPlaceNodes = data.logicPlaceNodes ?? [];
+    const logicPlaceEvents = data.logicPlaceEvents ?? [];
     const db = getDB();
     await db.transaction(
       "rw",
@@ -1538,9 +1886,12 @@ export class WritingStoreIndexedDB implements WritingStore {
         db.chapterBible,
         db.bibleGlossaryTerms,
         db.workStyleCards,
+        db.inspirationCollections,
         db.inspirationFragments,
         db.writingPromptTemplates,
         db.writingStyleSamples,
+        db.logicPlaceNodes,
+        db.logicPlaceEvents,
       ],
       async () => {
         await db.referenceTokenPostings.clear();
@@ -1559,8 +1910,11 @@ export class WritingStoreIndexedDB implements WritingStore {
         await db.bibleCharacters.clear();
         await db.workStyleCards.clear();
         await db.inspirationFragments.clear();
+        await db.inspirationCollections.clear();
         await db.writingPromptTemplates.clear();
         await db.writingStyleSamples.clear();
+        await db.logicPlaceEvents.clear();
+        await db.logicPlaceNodes.clear();
         await db.chapterSnapshots.clear();
         await db.chapters.clear();
         await db.volumes.clear();
@@ -1624,11 +1978,23 @@ export class WritingStoreIndexedDB implements WritingStore {
             })),
           );
         }
+        if (inspirationCollections.length) {
+          await db.inspirationCollections.bulkAdd(
+            inspirationCollections.map((c) => ({
+              ...c,
+              name: (c.name ?? "").trim() || "未命名集合",
+              sortOrder: c.sortOrder ?? 0,
+              createdAt: c.createdAt ?? now(),
+              updatedAt: c.updatedAt ?? now(),
+            })),
+          );
+        }
         if (inspirationFragments.length) {
           await db.inspirationFragments.bulkAdd(
             inspirationFragments.map((f) => ({
               ...f,
               workId: f.workId ?? null,
+              collectionId: f.collectionId ?? null,
               tags: normalizeWorkTagList(f.tags) ?? [],
               body: (f.body ?? "").trim() || "（空碎片）",
               createdAt: f.createdAt ?? now(),
@@ -1658,6 +2024,31 @@ export class WritingStoreIndexedDB implements WritingStore {
               sortOrder: s.sortOrder ?? 0,
               createdAt: s.createdAt ?? now(),
               updatedAt: s.updatedAt ?? now(),
+            })),
+          );
+        }
+        if (logicPlaceNodes.length) {
+          await db.logicPlaceNodes.bulkAdd(
+            logicPlaceNodes.map((p) => ({
+              ...p,
+              name: (p.name ?? "").trim() || "地点",
+              note: p.note ?? "",
+              x: Number.isFinite(p.x) ? Math.max(0, Math.min(100, Math.round(p.x))) : 50,
+              y: Number.isFinite(p.y) ? Math.max(0, Math.min(100, Math.round(p.y))) : 50,
+              createdAt: p.createdAt ?? now(),
+              updatedAt: p.updatedAt ?? now(),
+            })),
+          );
+        }
+        if (logicPlaceEvents.length) {
+          await db.logicPlaceEvents.bulkAdd(
+            logicPlaceEvents.map((ev) => ({
+              ...ev,
+              label: (ev.label ?? "").trim() || "事件",
+              note: ev.note ?? "",
+              chapterId: ev.chapterId ?? null,
+              createdAt: ev.createdAt ?? now(),
+              updatedAt: ev.updatedAt ?? now(),
             })),
           );
         }
@@ -1692,12 +2083,47 @@ export class WritingStoreIndexedDB implements WritingStore {
     chapterBible?: ChapterBible[];
     bibleGlossaryTerms?: BibleGlossaryTerm[];
     workStyleCards?: WorkStyleCard[];
+    inspirationCollections?: InspirationCollection[];
     inspirationFragments?: InspirationFragment[];
     writingPromptTemplates?: WritingPromptTemplate[];
     writingStyleSamples?: WritingStyleSample[];
+    logicPlaceNodes?: LogicPlaceNode[];
+    logicPlaceEvents?: LogicPlaceEvent[];
   }): Promise<void> {
     const m = remapImportMergePayload(data, now);
     await this.bulkAddFullMergeRemap(m);
+    const db = getDB();
+    const nodes = data.logicPlaceNodes ?? [];
+    const events = data.logicPlaceEvents ?? [];
+    if (nodes.length || events.length) {
+      await db.transaction("rw", [db.logicPlaceNodes, db.logicPlaceEvents], async () => {
+        for (const n of nodes) {
+          const existing = await db.logicPlaceNodes.get(n.id);
+          if (existing) continue;
+          await db.logicPlaceNodes.add({
+            ...n,
+            name: (n.name ?? "").trim() || "地点",
+            note: n.note ?? "",
+            x: Number.isFinite(n.x) ? Math.max(0, Math.min(100, Math.round(n.x))) : 50,
+            y: Number.isFinite(n.y) ? Math.max(0, Math.min(100, Math.round(n.y))) : 50,
+            createdAt: n.createdAt ?? now(),
+            updatedAt: n.updatedAt ?? now(),
+          });
+        }
+        for (const ev of events) {
+          const existing = await db.logicPlaceEvents.get(ev.id);
+          if (existing) continue;
+          await db.logicPlaceEvents.add({
+            ...ev,
+            label: (ev.label ?? "").trim() || "事件",
+            note: ev.note ?? "",
+            chapterId: ev.chapterId ?? null,
+            createdAt: ev.createdAt ?? now(),
+            updatedAt: ev.updatedAt ?? now(),
+          });
+        }
+      });
+    }
   }
 
   /**
@@ -1834,6 +2260,7 @@ export class WritingStoreIndexedDB implements WritingStore {
         db.chapterBible,
         db.bibleGlossaryTerms,
         db.workStyleCards,
+        db.inspirationCollections,
         db.inspirationFragments,
         db.writingPromptTemplates,
         db.writingStyleSamples,
@@ -1857,6 +2284,7 @@ export class WritingStoreIndexedDB implements WritingStore {
         if (m.newChapterBible.length) await db.chapterBible.bulkAdd(m.newChapterBible);
         if (m.newBibleGloss.length) await db.bibleGlossaryTerms.bulkAdd(m.newBibleGloss);
         if (m.newStyleCards.length) await db.workStyleCards.bulkAdd(m.newStyleCards);
+        if (m.newInspirationCollections.length) await db.inspirationCollections.bulkAdd(m.newInspirationCollections);
         if (m.newInspirationFragments.length) await db.inspirationFragments.bulkAdd(m.newInspirationFragments);
         if (m.newWritingPromptTemplates.length) {
           await db.writingPromptTemplates.bulkAdd(m.newWritingPromptTemplates);

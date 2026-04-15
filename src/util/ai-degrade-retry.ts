@@ -24,7 +24,7 @@ export type AiRunContextOverrides = {
 };
 
 /**
- * 构建一轮「精简重试」覆盖：减半字数上限（下限 8000）、关全书圣经/RAG/邻章概要/关联摘录；
+ * 构建一轮「精简重试」覆盖：减半字数上限（下限 8000）、关全书锦囊/RAG/邻章概要/关联摘录；
  * 若当前为全文注入且本章有概要，则改为概要注入。
  */
 export function buildContextDegradeOverrides(args: {

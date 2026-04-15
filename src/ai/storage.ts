@@ -2,14 +2,17 @@ import type { AiSettings } from "./types";
 import type { AiProviderConfig, AiProviderId } from "./types";
 
 const KEY = "liubai:aiSettings";
+const GATE_KEY = "liubai:firstAiUseGateCompleted";
 
 export function defaultAiSettings(): AiSettings {
   return {
     provider: "ollama",
-    openai: { id: "openai", label: "OpenAI", model: "gpt-4.1-mini", baseUrl: "https://api.openai.com/v1" },
+    openai: { id: "openai", label: "OpenAI", model: "gpt-4.1-mini", embeddingModel: "text-embedding-3-small", baseUrl: "https://api.openai.com/v1" },
     anthropic: { id: "anthropic", label: "Claude", model: "claude-3-5-sonnet-latest", baseUrl: "https://api.anthropic.com" },
     gemini: { id: "gemini", label: "Gemini", model: "gemini-2.0-flash", baseUrl: "https://generativelanguage.googleapis.com" },
     ollama: { id: "ollama", label: "Ollama", model: "llama3.1:8b", baseUrl: "http://localhost:11434" },
+    // MLX LM / 兼容服务常见为 OpenAI 式 /v1；端口以本机实际为准
+    mlx: { id: "mlx", label: "Apple MLX", model: "default", baseUrl: "http://127.0.0.1:8080/v1" },
     // 豆包（火山引擎 Ark）通常提供 OpenAI 兼容接口（/chat/completions）。
     // 注意：不同账号/区域的 baseUrl 与 model 命名可能不同，可在设置中覆盖。
     doubao: { id: "doubao", label: "豆包", model: "doubao-seed-1.6", baseUrl: "https://ark.cn-beijing.volces.com/api/v3" },
@@ -38,7 +41,10 @@ export function defaultAiSettings(): AiSettings {
     injectConfirmOnOversizeTokens: true,
     injectConfirmCloudBible: true,
     toneDriftHintEnabled: true,
+    highRiskAlwaysConfirm: true,
     aiSessionApproxTokenBudget: 0,
+    dailyTokenBudget: 0,
+    singleCallWarnTokens: 0,
   };
 }
 
@@ -47,6 +53,7 @@ export function loadAiSettings(): AiSettings {
     const raw = localStorage.getItem(KEY);
     if (!raw) return defaultAiSettings();
     const parsed = JSON.parse(raw) as Partial<AiSettings>;
+    const px = parsed as unknown as Record<string, unknown>;
     const d = defaultAiSettings();
     return {
       ...d,
@@ -55,6 +62,7 @@ export function loadAiSettings(): AiSettings {
       anthropic: { ...d.anthropic, ...(parsed.anthropic ?? {}) },
       gemini: { ...d.gemini, ...(parsed.gemini ?? {}) },
       ollama: { ...d.ollama, ...(parsed.ollama ?? {}) },
+      mlx: { ...d.mlx, ...(parsed.mlx ?? {}) },
       doubao: { ...d.doubao, ...(parsed.doubao ?? {}) },
       zhipu: (() => {
         const zp = { ...d.zhipu, ...(parsed.zhipu ?? {}) };
@@ -76,33 +84,49 @@ export function loadAiSettings(): AiSettings {
         }
         return xm;
       })(),
-      privacy: { ...d.privacy, ...(parsed.privacy ?? {}) },
+      privacy: (() => {
+        const p = { ...d.privacy, ...(parsed.privacy ?? {}) };
+        // 迁移：已通过首次 AI 确认弹窗的用户，自动开启云端权限
+        if (localStorage.getItem(GATE_KEY) === "1") {
+          p.consentAccepted = true;
+          p.allowCloudProviders = true;
+          p.allowMetadata = true;
+          p.allowChapterContent = true;
+        }
+        return p;
+      })(),
       geminiTemperature:
-        typeof (parsed as any).geminiTemperature === "number" && Number.isFinite((parsed as any).geminiTemperature)
-          ? Math.max(0.1, Math.min(2.0, (parsed as any).geminiTemperature))
+        typeof px.geminiTemperature === "number" && Number.isFinite(px.geminiTemperature)
+          ? Math.max(0.1, Math.min(2.0, px.geminiTemperature))
           : d.geminiTemperature,
       injectApproxTokenThreshold:
-        typeof (parsed as any).injectApproxTokenThreshold === "number" &&
-        Number.isFinite((parsed as any).injectApproxTokenThreshold)
-          ? Math.max(0, Math.min(500_000, Math.floor((parsed as any).injectApproxTokenThreshold)))
+        typeof px.injectApproxTokenThreshold === "number" && Number.isFinite(px.injectApproxTokenThreshold)
+          ? Math.max(0, Math.min(500_000, Math.floor(px.injectApproxTokenThreshold)))
           : d.injectApproxTokenThreshold,
       injectConfirmOnOversizeTokens:
-        typeof (parsed as any).injectConfirmOnOversizeTokens === "boolean"
-          ? (parsed as any).injectConfirmOnOversizeTokens
+        typeof px.injectConfirmOnOversizeTokens === "boolean"
+          ? px.injectConfirmOnOversizeTokens
           : d.injectConfirmOnOversizeTokens,
       injectConfirmCloudBible:
-        typeof (parsed as any).injectConfirmCloudBible === "boolean"
-          ? (parsed as any).injectConfirmCloudBible
+        typeof px.injectConfirmCloudBible === "boolean"
+          ? px.injectConfirmCloudBible
           : d.injectConfirmCloudBible,
       toneDriftHintEnabled:
-        typeof (parsed as any).toneDriftHintEnabled === "boolean"
-          ? (parsed as any).toneDriftHintEnabled
-          : d.toneDriftHintEnabled,
+        typeof px.toneDriftHintEnabled === "boolean" ? px.toneDriftHintEnabled : d.toneDriftHintEnabled,
+      highRiskAlwaysConfirm:
+        typeof px.highRiskAlwaysConfirm === "boolean" ? px.highRiskAlwaysConfirm : d.highRiskAlwaysConfirm,
       aiSessionApproxTokenBudget:
-        typeof (parsed as any).aiSessionApproxTokenBudget === "number" &&
-        Number.isFinite((parsed as any).aiSessionApproxTokenBudget)
-          ? Math.max(0, Math.min(2_000_000, Math.floor((parsed as any).aiSessionApproxTokenBudget)))
+        typeof px.aiSessionApproxTokenBudget === "number" && Number.isFinite(px.aiSessionApproxTokenBudget)
+          ? Math.max(0, Math.min(2_000_000, Math.floor(px.aiSessionApproxTokenBudget)))
           : d.aiSessionApproxTokenBudget,
+      dailyTokenBudget:
+        typeof px.dailyTokenBudget === "number" && Number.isFinite(px.dailyTokenBudget)
+          ? Math.max(0, Math.min(10_000_000, Math.floor(px.dailyTokenBudget)))
+          : d.dailyTokenBudget,
+      singleCallWarnTokens:
+        typeof px.singleCallWarnTokens === "number" && Number.isFinite(px.singleCallWarnTokens)
+          ? Math.max(0, Math.min(500_000, Math.floor(px.singleCallWarnTokens)))
+          : d.singleCallWarnTokens,
     };
   } catch {
     return defaultAiSettings();
@@ -134,6 +158,7 @@ export function getBackendConfig(): BackendModelConfig {
     kimi: { baseUrl: s.kimi.baseUrl, apiKey: s.kimi.apiKey },
     xiaomi: { baseUrl: s.xiaomi.baseUrl, apiKey: s.xiaomi.apiKey },
     ollama: { baseUrl: s.ollama.baseUrl, apiKey: s.ollama.apiKey },
+    mlx: { baseUrl: s.mlx.baseUrl, apiKey: s.mlx.apiKey },
   };
 }
 
@@ -155,6 +180,8 @@ export function getProviderConfig(s: AiSettings, id: AiProviderId): AiProviderCo
       return s.xiaomi;
     case "ollama":
       return s.ollama;
+    case "mlx":
+      return s.mlx;
   }
 }
 

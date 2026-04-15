@@ -10,6 +10,7 @@ import {
 } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { registerFirstAiGateDialogOpener, settleFirstAiGate } from "../ai/first-ai-gate";
+import { loadAiSettings, saveAiSettings } from "../ai/storage";
 
 /**
  * 挂载于 `App`：与 `src/ai/client.ts` 中首次调用 LLM 前的 `requestFirstAiUseGate()` 配合。
@@ -104,6 +105,20 @@ export function FirstAiGateHost() {
             type="button"
             disabled={!checked}
             onClick={() => {
+              // 同步开启全部 privacy 权限，避免各模块二次拦截
+              try {
+                const s = loadAiSettings();
+                saveAiSettings({
+                  ...s,
+                  privacy: {
+                    ...s.privacy,
+                    consentAccepted: true,
+                    allowCloudProviders: true,
+                    allowMetadata: true,
+                    allowChapterContent: true,
+                  },
+                });
+              } catch { /* ignore */ }
               setOpen(false);
               settleFirstAiGate(true);
             }}

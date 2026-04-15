@@ -46,27 +46,38 @@ import {
   buildChapterDocx,
   buildChapterTxt,
 } from "../storage/export-txt-docx";
+import { exitDocumentFullscreen, requestDocumentFullscreen } from "../util/browser-fullscreen";
+import { aiPanelDraftStorageKey } from "../util/ai-panel-draft";
 import { addDailyWordsFromDelta, getDailyWordsToday } from "../util/dailyWords";
 import { clearDraft, readDraft, writeDraftDebounced } from "../util/draftRecovery";
 import { LAST_CHAPTER_SESSION_KEY_PREFIX } from "../util/last-chapter-session";
 import { normalizeLineEndings, readLineEndingMode } from "../util/lineEnding";
-import { formatSummaryUpdatedAt } from "../util/summary-meta";
+import { formatSummaryScope, formatSummaryUpdatedAt } from "../util/summary-meta";
 import { replaceAllLiteral, replaceFirstLiteral } from "../util/text-replace";
 import { wordCount } from "../util/wordCount";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
 import { isFirstAiGateCancelledError } from "../ai/client";
 import { generateChapterSummaryWithRetry } from "../ai/chapter-summary-generate";
 import { loadAiSettings } from "../ai/storage";
+import { createAutoSummaryQueue } from "../ai/chapter-summary-auto";
+import type { AutoSummaryStatus } from "../ai/chapter-summary-auto";
+import { clearInspirationTransferHandoff, readInspirationTransferHandoff } from "../util/inspiration-transfer-handoff";
 import { CodeMirrorEditor, type CodeMirrorEditorHandle } from "../components/CodeMirrorEditor";
 import { AiPanel } from "../components/AiPanel";
 import { useEditorZen } from "../components/EditorZenContext";
 import { useRightRail } from "../components/RightRailContext";
 import { BibleRightPanel, RefRightPanel, SummaryRightPanel } from "../components/RightRailPanels";
 import { useTopbar } from "../components/TopbarContext";
+import { EDITOR_TYPOGRAPHY_EVENT, loadEditorTypography, type EditorPaperTint } from "../util/editor-typography";
+import { HOTKEY_EVENT, matchHotkey, readZenToggleHotkey } from "../util/hotkey-config";
 
 const SIDEBAR_KEY = "liubai:editorSidebarCollapsed";
 const CHAPTER_LIST_KEY = "liubai:chapterListCollapsed";
 const EDITOR_WIDTH_KEY = "liubai:editorMaxWidthPx";
+const EDITOR_AUTO_WIDTH_KEY = "liubai:editorAutoWidth";
+/** 与星月类沉浸式写作对齐：默认用「自适应宽」，避免中间一条窄纸 */
+const EDITOR_DEFAULT_MAX_WIDTH_PX = 1200;
+const EDITOR_AUTO_MAX_CAP_PX = 1600;
 
 export function EditorPage() {
   const { workId } = useParams<{ workId: string }>();
@@ -74,11 +85,47 @@ export function EditorPage() {
   const navigate = useNavigate();
   const rightRail = useRightRail();
   const { zenWrite, setZenWrite } = useEditorZen();
+
+  useEffect(() => {
+    const sp = new URLSearchParams(location.search);
+    if (sp.get("zen") !== "1") return;
+    setZenWrite(true);
+    void requestDocumentFullscreen();
+    sp.delete("zen");
+    const q = sp.toString();
+    navigate({ pathname: location.pathname, search: q ? `?${q}` : "" }, { replace: true });
+  }, [location.search, location.pathname, navigate, setZenWrite]);
+
+  // 沉浸模式可配置快捷键监听
+  const zenWriteRef = useRef(zenWrite);
+  zenWriteRef.current = zenWrite;
+  useEffect(() => {
+    let combo = readZenToggleHotkey();
+    const onHotkeyChanged = () => { combo = readZenToggleHotkey(); };
+    window.addEventListener(HOTKEY_EVENT, onHotkeyChanged);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (matchHotkey(e, combo)) {
+        e.preventDefault();
+        const next = !zenWriteRef.current;
+        setZenWrite(next);
+        if (next) void requestDocumentFullscreen();
+        else void exitDocumentFullscreen();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener(HOTKEY_EVENT, onHotkeyChanged);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [setZenWrite]);
+
   const topbar = useTopbar();
+  const [paperTint, setPaperTint] = useState<EditorPaperTint>(() => loadEditorTypography().paperTint);
   const [work, setWork] = useState<Work | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [content, setContent] = useState("");
+  const [liuguangReturnVisible, setLiuguangReturnVisible] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error" | "conflict">("idle");
   const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -97,6 +144,17 @@ export function EditorPage() {
       return false;
     }
   });
+  const [sidebarWidthPx, setSidebarWidthPx] = useState(() => {
+    try {
+      const n = Number(localStorage.getItem("liubai:sidebarWidthPx"));
+      if (!Number.isFinite(n)) return 240;
+      return Math.max(160, Math.min(480, Math.floor(n)));
+    } catch {
+      return 240;
+    }
+  });
+  const sidebarDragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const [sidebarTab, setSidebarTab] = useState<"outline" | "chapter">("chapter");
   const [findOpen, setFindOpen] = useState(false);
   const [replaceQ, setReplaceQ] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
@@ -106,6 +164,9 @@ export function EditorPage() {
   const [bookSearchLoading, setBookSearchLoading] = useState(false);
   /** null 表示尚未执行过本次会话的搜索 */
   const [bookSearchHits, setBookSearchHits] = useState<BookSearchHit[] | null>(null);
+  const [bookSearchRegex, setBookSearchRegex] = useState(false);
+  /** 跳转后自动高亮：存储 { query, isRegex, offset } */
+  const pendingScrollRef = useRef<{ query: string; isRegex: boolean; offset: number } | null>(null);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
   const [snapshotList, setSnapshotList] = useState<ChapterSnapshot[]>([]);
   const [volumes, setVolumes] = useState<Volume[]>([]);
@@ -129,7 +190,7 @@ export function EditorPage() {
   const [styleExtra, setStyleExtra] = useState("");
   const [glossaryTerms, setGlossaryTerms] = useState<BibleGlossaryTerm[]>([]);
   const [writingStyleSamples, setWritingStyleSamples] = useState<WritingStyleSample[]>([]);
-  /** 圣经「提示词」页跳转：一次性写入 AI 侧栏「额外要求」 */
+  /** 锦囊「提示词」页跳转：一次性写入 AI 侧栏「额外要求」 */
   const [aiUserHintPrefill, setAiUserHintPrefill] = useState<string | null>(null);
   const [aiOpen, setAiOpen] = useState(false);
   /** 递增触发 AiPanel 一次「续写」自动 run（§11 步 17） */
@@ -150,18 +211,28 @@ export function EditorPage() {
   const [summaryDraft, setSummaryDraft] = useState("");
   const [summaryAiBusy, setSummaryAiBusy] = useState(false);
   const summaryAiAbortRef = useRef<AbortController | null>(null);
+  const [autoSummaryStatus, setAutoSummaryStatus] = useState<AutoSummaryStatus>({ kind: "idle" });
+  const autoSummaryQueueRef = useRef<ReturnType<typeof createAutoSummaryQueue> | null>(null);
+  const workTitleRef = useRef<string>("");
+  const chapterTitleRef = useRef<Map<string, string>>(new Map());
   const [editorMaxWidthPx, setEditorMaxWidthPx] = useState(() => {
     try {
       const n = Number(localStorage.getItem(EDITOR_WIDTH_KEY));
-      if (!Number.isFinite(n)) return 860;
-      return Math.max(720, Math.min(1600, Math.floor(n)));
+      if (!Number.isFinite(n)) return EDITOR_DEFAULT_MAX_WIDTH_PX;
+      return Math.max(720, Math.min(EDITOR_AUTO_MAX_CAP_PX, Math.floor(n)));
     } catch {
-      return 860;
+      return EDITOR_DEFAULT_MAX_WIDTH_PX;
     }
   });
   const [editorAutoWidth, setEditorAutoWidth] = useState(() => {
-    // When true: expand to available width
-    return false;
+    try {
+      const v = localStorage.getItem(EDITOR_AUTO_WIDTH_KEY);
+      if (v === "0") return false;
+      if (v === "1") return true;
+      return true;
+    } catch {
+      return true;
+    }
   });
   const widthDragRef = useRef<null | { startX: number; startW: number }>(null);
   const cbStateRef = useRef({ goal: "", forbid: "", pov: "", scene: "", characterState: "" });
@@ -170,6 +241,7 @@ export function EditorPage() {
   const lastPersistedRef = useRef<Map<string, string>>(new Map());
   /** 与存储层 `updatedAt` 对齐，供步 25 正文保存乐观锁 */
   const chapterServerUpdatedAtRef = useRef<Map<string, number>>(new Map());
+  const chapterOrderRef = useRef<Map<string, number>>(new Map());
   const persistInFlightRef = useRef(false);
   const contentRef = useRef(content);
   const activeIdRef = useRef(activeId);
@@ -184,49 +256,8 @@ export function EditorPage() {
     });
     return () => window.cancelAnimationFrame(t);
   }, [activeId]);
-  const sidebarBeforeZen = useRef<boolean | null>(null);
-  const chapterListBeforeZen = useRef<boolean | null>(null);
-  const sidebarCollapsedRef = useRef(sidebarCollapsed);
-  const chapterListCollapsedRef = useRef(chapterListCollapsed);
-  const zenWritePrev = useRef(false);
-  sidebarCollapsedRef.current = sidebarCollapsed;
-  chapterListCollapsedRef.current = chapterListCollapsed;
   contentRef.current = content;
   activeIdRef.current = activeId;
-
-  useEffect(() => {
-    const entered = zenWrite && !zenWritePrev.current;
-    const left = !zenWrite && zenWritePrev.current;
-    zenWritePrev.current = zenWrite;
-
-    if (entered) {
-      sidebarBeforeZen.current = sidebarCollapsedRef.current;
-      chapterListBeforeZen.current = chapterListCollapsedRef.current;
-      setSidebarCollapsed(true);
-      setChapterListCollapsed(true);
-    } else if (left) {
-      if (sidebarBeforeZen.current !== null) {
-        const v = sidebarBeforeZen.current;
-        sidebarBeforeZen.current = null;
-        setSidebarCollapsed(v);
-        try {
-          localStorage.setItem(SIDEBAR_KEY, v ? "1" : "0");
-        } catch {
-          /* ignore */
-        }
-      }
-      if (chapterListBeforeZen.current !== null) {
-        const v = chapterListBeforeZen.current;
-        chapterListBeforeZen.current = null;
-        setChapterListCollapsed(v);
-        try {
-          localStorage.setItem(CHAPTER_LIST_KEY, v ? "1" : "0");
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-  }, [zenWrite]);
 
   useEffect(() => {
     if (!zenWrite) return;
@@ -236,16 +267,84 @@ export function EditorPage() {
     return () => cancelAnimationFrame(id);
   }, [zenWrite]);
 
+  useEffect(() => {
+    const sync = () => setPaperTint(loadEditorTypography().paperTint);
+    window.addEventListener(EDITOR_TYPOGRAPHY_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(EDITOR_TYPOGRAPHY_EVENT, sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(EDITOR_AUTO_WIDTH_KEY, editorAutoWidth ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [editorAutoWidth]);
+
   const activeChapter = useMemo(
     () => chapters.find((c) => c.id === activeId) ?? null,
     [chapters, activeId],
   );
 
+  /** 卷的 id 与章节里存的 volumeId 不一致时，章节不会出现在任何卷下（合并/导入/删卷遗留）；须单独展示并允许并入首卷 */
+  const volumeIdSet = useMemo(() => new Set(volumes.map((v) => v.id)), [volumes]);
+  const orphanChapters = useMemo(
+    () => [...chapters].filter((c) => !volumeIdSet.has(c.volumeId)).sort((a, b) => a.order - b.order),
+    [chapters, volumeIdSet],
+  );
+
   useEffect(() => {
     for (const c of chapters) {
       chapterServerUpdatedAtRef.current.set(c.id, c.updatedAt);
+      chapterTitleRef.current.set(c.id, c.title);
+      chapterOrderRef.current.set(c.id, c.order);
     }
   }, [chapters]);
+
+  useEffect(() => {
+    workTitleRef.current = work?.title ?? "";
+  }, [work?.title]);
+
+  useEffect(() => {
+    const q = createAutoSummaryQueue();
+    autoSummaryQueueRef.current = q;
+    const off = q.subscribe((s) => {
+      setAutoSummaryStatus(s);
+      if (s.kind === "ok") {
+        chapterServerUpdatedAtRef.current.set(s.chapterId, s.at);
+        chapterOrderRef.current.set(s.chapterId, chapterOrderRef.current.get(s.chapterId) ?? 0);
+        setChapters((prev) =>
+          prev.map((c) =>
+            c.id === s.chapterId
+              ? {
+                  ...c,
+                  summary: s.summary,
+                  summaryUpdatedAt: s.at,
+                  summaryScopeFromOrder: c.summaryScopeFromOrder ?? c.order,
+                  summaryScopeToOrder: c.summaryScopeToOrder ?? c.order,
+                  updatedAt: s.at,
+                }
+              : c,
+          ),
+        );
+      }
+    });
+    return () => {
+      off();
+      q.cancel();
+      autoSummaryQueueRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    // 切章时取消后台概要生成，避免“上一章概要写回”带来的扰动感
+    autoSummaryQueueRef.current?.cancel();
+    setAutoSummaryStatus({ kind: "idle" });
+  }, [activeId]);
 
   useEffect(() => {
     if (!summaryOpen || !activeChapter) return;
@@ -366,6 +465,7 @@ export function EditorPage() {
         chapter={activeChapter}
         chapterEditorContent={content}
         chapters={chapters}
+        autoSummaryStatus={autoSummaryStatus}
         onJumpToChapter={(id) => void switchChapter(id)}
         onChapterPatch={(id, patch) => {
           setChapters((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
@@ -568,6 +668,138 @@ export function EditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workId, chapters.length]);
 
+  // 全书搜索跳转后自动高亮定位
+  useEffect(() => {
+    const ps = pendingScrollRef.current;
+    if (!ps || !activeId || !content) return;
+    pendingScrollRef.current = null;
+    // Wait one frame for CodeMirror to render new content
+    requestAnimationFrame(() => {
+      editorRef.current?.scrollToMatch(ps.query, ps.isRegex, ps.offset);
+    });
+  }, [activeId, content]);
+
+  // 步 38：流光转入”光标位插入”handoff（跳转到写作页后执行）
+  useEffect(() => {
+    if (!workId || !activeId) return;
+    let should = false;
+    try {
+      const u = new URL(window.location.href);
+      should = u.searchParams.get("liuguangInsert") === "1";
+      if (should) {
+        u.searchParams.delete("liuguangInsert");
+        window.history.replaceState({}, "", u.toString());
+      }
+    } catch {
+      should = false;
+    }
+    if (!should) return;
+
+    const payload = readInspirationTransferHandoff();
+    if (!payload || payload.workId !== workId || payload.chapterId !== activeId || payload.mode !== "insertCursor") {
+      return;
+    }
+    // 等编辑器挂载后插入
+    const text = payload.text;
+    clearInspirationTransferHandoff();
+    queueMicrotask(() => {
+      rightRail.setOpen(true);
+      rightRail.setActiveTab("ai");
+    });
+    const tryInsert = (n: number) => {
+      if (n <= 0) return;
+      const ok = !!editorRef.current;
+      if (ok) {
+        // 冲突提示：若正文已包含该段（或高度相似片段），提示用户避免重复插入
+        const cur = contentRef.current ?? "";
+        const needle = text.trim().slice(0, 80);
+        if (needle && cur.includes(needle)) {
+          if (!window.confirm("检测到正文中可能已存在相同片段，仍要在光标处插入吗？")) return;
+        }
+        editorRef.current?.insertTextAtCursor(text);
+        setLiuguangReturnVisible(true);
+        return;
+      }
+      window.setTimeout(() => tryInsert(n - 1), 60);
+    };
+    tryInsert(12);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workId, activeId]);
+
+  // 流光转入：章末追加 / 写入侧栏草稿（与 insertCursor 类似，由 query param 触发一次）
+  useEffect(() => {
+    if (!workId || !activeId) return;
+    let mode: "appendEnd" | "mergeAiDraft" | null = null;
+    try {
+      const u = new URL(window.location.href);
+      if (u.searchParams.get("liuguangAppend") === "1") {
+        mode = "appendEnd";
+        u.searchParams.delete("liuguangAppend");
+        window.history.replaceState({}, "", u.toString());
+      } else if (u.searchParams.get("liuguangDraft") === "1") {
+        mode = "mergeAiDraft";
+        u.searchParams.delete("liuguangDraft");
+        window.history.replaceState({}, "", u.toString());
+      }
+    } catch {
+      mode = null;
+    }
+    if (!mode) return;
+
+    const payload = readInspirationTransferHandoff();
+    if (!payload || payload.workId !== workId || payload.chapterId !== activeId || payload.mode !== mode) return;
+    clearInspirationTransferHandoff();
+    if (mode === "appendEnd") {
+      const text = payload.text;
+      const cur = contentRef.current ?? "";
+      const needle = text.trim().slice(0, 80);
+      if (needle && cur.includes(needle)) {
+        if (!window.confirm("检测到正文中可能已存在相同片段，仍要追加到章末吗？")) return;
+      }
+      const tryAppend = (n: number) => {
+        if (n <= 0) return;
+        if (editorRef.current) {
+          editorRef.current.appendTextToEnd(text);
+          setLiuguangReturnVisible(true);
+          return;
+        }
+        window.setTimeout(() => tryAppend(n - 1), 60);
+      };
+      tryAppend(12);
+      return;
+    }
+
+    // mergeAiDraft: 写入 AiPanel 草稿（在右侧栏可编辑后再插入）
+    const draftText = payload.text;
+    queueMicrotask(() => {
+      rightRail.setOpen(true);
+      rightRail.setActiveTab("ai");
+    });
+    const tryDraft = (n: number) => {
+      if (n <= 0) return;
+      if (activeChapter && workId) {
+        // AiPanel 自己从 sessionStorage 读；这里直接走它的草稿 key 约定
+        const key = aiPanelDraftStorageKey(workId, activeChapter.id);
+        try {
+          const prev = sessionStorage.getItem(key) ?? "";
+          const needle = draftText.trim().slice(0, 80);
+          if (needle && prev.includes(needle)) {
+            if (!window.confirm("检测到 AI 侧栏草稿里可能已存在相同片段，仍要合并写入吗？")) return;
+          }
+          const merged = prev.trim().length ? `${prev.trim()}\n\n${draftText.trim()}\n` : `${draftText.trim()}\n`;
+          sessionStorage.setItem(key, merged);
+        } catch {
+          /* ignore */
+        }
+        setLiuguangReturnVisible(true);
+        return;
+      }
+      window.setTimeout(() => tryDraft(n - 1), 60);
+    };
+    tryDraft(12);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workId, activeId, activeChapter]);
+
   useEffect(() => {
     if (!workId || !activeId) return;
     sessionStorage.setItem(LAST_CHAPTER_SESSION_KEY_PREFIX + workId, activeId);
@@ -663,8 +895,6 @@ export function EditorPage() {
     });
   }
 
-  const canWideWrite = sidebarCollapsed && !rightRail.open;
-
   // Close "more" menu on outside click / ESC
   useEffect(() => {
     function onDown(e: MouseEvent) {
@@ -724,6 +954,7 @@ export function EditorPage() {
         clearDraft(workId, chapterId);
         setDailyTick((t) => t + 1);
         const t = Date.now();
+        chapterServerUpdatedAtRef.current.set(chapterId, t);
         setChapters((prevCh) =>
           prevCh.map((c) =>
             c.id === chapterId
@@ -731,6 +962,21 @@ export function EditorPage() {
               : c,
           ),
         );
+        // 步 20：保存成功后后台队列自动生成概要（可被切章取消）
+        const chapterTitle = chapterTitleRef.current.get(chapterId) ?? "未命名章节";
+        const chapterOrder = chapterOrderRef.current.get(chapterId) ?? 0;
+        const workTitle = workTitleRef.current.trim();
+        if (workTitle) {
+          autoSummaryQueueRef.current?.enqueue({
+            workId,
+            workTitle,
+            chapterId,
+            chapterTitle,
+            chapterOrder,
+            chapterContent: text,
+            expectedUpdatedAt: t,
+          });
+        }
         setSaveState("saved");
         setLastSavedAt(t);
       } catch (e) {
@@ -772,141 +1018,159 @@ export function EditorPage() {
   // Inject write tools into global topbar
   useEffect(() => {
     if (!work) return;
-    topbar.setTitleNode(
-      <div className="editor-topbar-breadcrumb">
-        <span className="editor-topbar-bc-book muted small">{work.title}</span>
-        <span className="editor-topbar-bc-sep muted small" aria-hidden>
-          ›
-        </span>
-        <span className="editor-topbar-bc-chapter">{activeChapter?.title ?? "未选章节"}</span>
-      </div>,
-    );
+    topbar.setTitleNode(null);
     topbar.setCenterNode(
-      <div className="editor-topbar-center-inner">
-        <div className="editor-topbar-stats">
-          <span className="muted small" title="本章字数">
-            {chapterWords}
+      <div className="editor-xy-center-stack">
+        <div className="editor-xy-pills-scroller">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="editor-xy-pill"
+            disabled={!activeChapter}
+            onClick={() => void handleManualSnapshot()}
+          >
+            保存
+          </Button>
+          <Button
+            type="button"
+            variant={aiOpen ? "default" : "outline"}
+            size="sm"
+            className="editor-xy-pill"
+            disabled={!activeChapter}
+            onClick={() => {
+              setAiOpen((v) => {
+                const next = !v;
+                rightRail.setActiveTab("ai");
+                rightRail.setOpen(next);
+                return next;
+              });
+            }}
+          >
+            AI写作
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="editor-xy-pill"
+            disabled={!activeChapter}
+            title="打开 AI 侧栏并以续写模式生成；结果在侧栏草稿框，确认后再插入正文"
+            onClick={() => {
+              setAiOpen(true);
+              rightRail.setActiveTab("ai");
+              rightRail.setOpen(true);
+              setAiContinueRunTick((n) => n + 1);
+            }}
+          >
+            AI续写
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="editor-xy-pill"
+            disabled={!canAiDrawCard}
+            title="打开 AI 侧栏并以抽卡模式生成"
+            onClick={() => {
+              setAiOpen(true);
+              rightRail.setActiveTab("ai");
+              rightRail.setOpen(true);
+              setAiDrawRunTick((n) => n + 1);
+            }}
+          >
+            抽卡
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="editor-xy-pill"
+            disabled={!activeChapter}
+            title="章节概要"
+            onClick={() => {
+              if (!activeChapter) return;
+              setSummaryOpen(true);
+            }}
+          >
+            章纲
+          </Button>
+          <Button
+            type="button"
+            variant={zenWrite ? "default" : "outline"}
+            size="sm"
+            className="editor-xy-pill"
+            title={
+              zenWrite
+                ? "退出沉浸：结束浏览器全屏（Esc 也可）"
+                : "沉浸写作：浏览器全屏专心码字；保留顶栏、章栏与右栏；Alt+Z 切换"
+            }
+            onClick={() => {
+              if (zenWrite) {
+                void exitDocumentFullscreen().finally(() => setZenWrite(false));
+              } else {
+                setZenWrite(true);
+                void requestDocumentFullscreen();
+              }
+            }}
+          >
+            {zenWrite ? "退出沉浸" : "沉浸"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="editor-xy-pill"
+            onClick={() => setEditorAutoWidth((v) => !v)}
+          >
+            {editorAutoWidth ? "宽度：自适应" : "宽度：自定义"}
+          </Button>
+        </div>
+        <div className="editor-xy-stats-line">
+          <span className="editor-xy-stats-nums" title="本章 · 全书 · 今日">
+            <span>{chapterWords}</span>
+            <span aria-hidden> · </span>
+            <span>{bookWords}</span>
+            <span aria-hidden> · </span>
+            <span>今日 {dailyWordsDisplay}</span>
           </span>
-          <span className="muted small" aria-hidden>
-            ·
-          </span>
-          <span className="muted small" title="全书字数">
-            {bookWords}
-          </span>
-          <span className="muted small" aria-hidden>
-            ·
-          </span>
-          <span className="muted small" title="今日新增">
-            今日 {dailyWordsDisplay}
+          <span className={`save-pill save-${saveState}`} title="保存状态">
+            {saveState === "saving" && "保存中"}
+            {saveState === "saved" && "已保存"}
+            {saveState === "idle" && ""}
+            {saveState === "error" && "保存失败"}
+            {saveState === "conflict" && (
+              <>
+                保存冲突
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="save-conflict-reload"
+                  onClick={() => void resolveSaveConflict()}
+                >
+                  重新载入本章
+                </Button>
+              </>
+            )}
           </span>
         </div>
-        <span className={`save-pill save-${saveState}`} title="保存状态">
-          {saveState === "saving" && "保存中"}
-          {saveState === "saved" && "已保存"}
-          {saveState === "idle" && ""}
-          {saveState === "error" && "保存失败"}
-          {saveState === "conflict" && (
-            <>
-              保存冲突
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="save-conflict-reload"
-                onClick={() => void resolveSaveConflict()}
-              >
-                重新载入本章
-              </Button>
-            </>
-          )}
-        </span>
-        {lastSavedAt ? (
-          <span className="muted small editor-topbar-saved-time" title="最后一次保存完成时间">
-            {new Date(lastSavedAt).toLocaleTimeString()}
-          </span>
-        ) : null}
       </div>,
     );
     topbar.setActionsNode(
-      <div className="editor-topbar-actions">
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={!activeChapter}
-          onClick={() => void handleManualSnapshot()}
-        >
-          保存
-        </Button>
-        <Button
-          type="button"
-          variant={aiOpen ? "default" : "outline"}
-          size="sm"
-          disabled={!activeChapter}
-          onClick={() => {
-            setAiOpen((v) => {
-              const next = !v;
-              rightRail.setActiveTab("ai");
-              rightRail.setOpen(next);
-              return next;
-            });
-          }}
-        >
-          AI
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={!activeChapter}
-          title="打开 AI 侧栏并以续写模式生成；结果在侧栏草稿框，确认后再插入正文"
-          onClick={() => {
-            setAiOpen(true);
-            rightRail.setActiveTab("ai");
-            rightRail.setOpen(true);
-            setAiContinueRunTick((n) => n + 1);
-          }}
-        >
-          续写
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={!canAiDrawCard}
-          title="打开 AI 侧栏并以抽卡模式生成（仅用章节概要 +/或 前文末尾，无额外提示词）；结果在侧栏草稿"
-          onClick={() => {
-            setAiOpen(true);
-            rightRail.setActiveTab("ai");
-            rightRail.setOpen(true);
-            setAiDrawRunTick((n) => n + 1);
-          }}
-        >
-          抽卡
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          title="沉浸写作：隐藏顶栏与右栏、收起章列表；Alt+Z 切换，Esc 或右上角退出"
-          onClick={() => setZenWrite(true)}
-        >
-          沉浸
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          disabled={!canWideWrite}
-          onClick={() => setEditorAutoWidth((v) => !v)}
-        >
-          {editorAutoWidth ? "宽度：自适应" : "宽度：自定义"}
-        </Button>
+      <div className="editor-xy-trail">
+        {lastSavedAt ? (
+          <span className="editor-xy-saved-full" title="最后一次保存完成时间">
+            最后保存：{new Date(lastSavedAt).toLocaleString()}
+          </span>
+        ) : (
+          <span className="editor-xy-saved-full editor-xy-saved-full--muted">尚未保存到本机</span>
+        )}
         <Button
           type="button"
           variant="ghost"
           size="sm"
-          className={cn("icon-btn editor-topbar-hide-sm", findOpen && "is-on")}
+          className={cn("icon-btn editor-xy-trail-icon", findOpen && "is-on")}
           title="查找 / 替换"
           onClick={() => setFindOpen((v) => !v)}
         >
@@ -916,7 +1180,7 @@ export function EditorPage() {
           type="button"
           variant="ghost"
           size="sm"
-          className={cn("icon-btn editor-topbar-hide-sm", bookSearchOpen && "is-on")}
+          className={cn("icon-btn editor-xy-trail-icon", bookSearchOpen && "is-on")}
           title="全书搜索"
           onClick={() => (bookSearchOpen ? closeBookSearch() : openBookSearch())}
         >
@@ -926,7 +1190,7 @@ export function EditorPage() {
           type="button"
           variant="ghost"
           size="sm"
-          className="icon-btn editor-topbar-hide-sm"
+          className="icon-btn editor-xy-trail-icon"
           title="章节历史"
           disabled={!activeChapter}
           onClick={() => setSnapshotOpen(true)}
@@ -938,7 +1202,7 @@ export function EditorPage() {
             type="button"
             variant="ghost"
             size="sm"
-            className="icon-btn"
+            className="icon-btn editor-xy-trail-icon"
             title="更多"
             aria-expanded={moreOpen}
             onClick={() => setMoreOpen((v) => !v)}
@@ -953,6 +1217,7 @@ export function EditorPage() {
                 onClick={() => {
                   setMoreOpen(false);
                   setZenWrite(true);
+                  void requestDocumentFullscreen();
                 }}
               >
                 沉浸写作
@@ -1100,7 +1365,6 @@ export function EditorPage() {
     activeChapter,
     aiOpen,
     canAiDrawCard,
-    canWideWrite,
     editorAutoWidth,
     findOpen,
     bookSearchOpen,
@@ -1108,13 +1372,14 @@ export function EditorPage() {
     rightRail,
     resolveSaveConflict,
     setZenWrite,
+    zenWrite,
   ]);
 
   useEffect(() => {
     function onMove(e: MouseEvent) {
       if (!widthDragRef.current) return;
       const dx = e.clientX - widthDragRef.current.startX;
-      const next = Math.max(720, Math.min(1600, Math.floor(widthDragRef.current.startW + dx)));
+      const next = Math.max(720, Math.min(EDITOR_AUTO_MAX_CAP_PX, Math.floor(widthDragRef.current.startW + dx)));
       setEditorMaxWidthPx(next);
     }
     function onUp() {
@@ -1133,6 +1398,30 @@ export function EditorPage() {
       window.removeEventListener("mouseup", onUp);
     };
   }, [editorMaxWidthPx]);
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      if (!sidebarDragRef.current) return;
+      const dx = e.clientX - sidebarDragRef.current.startX;
+      const next = Math.max(160, Math.min(480, Math.floor(sidebarDragRef.current.startW + dx)));
+      setSidebarWidthPx(next);
+    }
+    function onUp() {
+      if (!sidebarDragRef.current) return;
+      sidebarDragRef.current = null;
+      try {
+        localStorage.setItem("liubai:sidebarWidthPx", String(sidebarWidthPx));
+      } catch {
+        /* ignore */
+      }
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [sidebarWidthPx]);
 
   async function switchChapter(nextId: string) {
     if (activeId && activeId !== nextId) {
@@ -1214,7 +1503,7 @@ export function EditorPage() {
     setBookSearchLoading(true);
     try {
       if (activeId) await persistContent(activeId, content);
-      const hits = await searchWork(workId, q, bookSearchScope);
+      const hits = await searchWork(workId, q, bookSearchScope, bookSearchRegex);
       setBookSearchHits(hits);
     } finally {
       setBookSearchLoading(false);
@@ -1232,13 +1521,26 @@ export function EditorPage() {
     setBookSearchHits(null);
   }
 
-  async function jumpToSearchHit(chapterId: string) {
-    if (chapterId === activeId) {
+  async function jumpToSearchHit(hit: BookSearchHit) {
+    // Store pending scroll before switching so the effect can apply it
+    pendingScrollRef.current = {
+      query: bookSearchQ.trim(),
+      isRegex: bookSearchRegex,
+      offset: hit.firstMatchOffset ?? 0,
+    };
+    if (hit.chapterId === activeId) {
       closeBookSearch();
+      // Same chapter: apply immediately
+      const ps = pendingScrollRef.current;
+      pendingScrollRef.current = null;
+      requestAnimationFrame(() => {
+        editorRef.current?.scrollToMatch(ps.query, ps.isRegex, ps.offset);
+      });
       return;
     }
-    await switchChapter(chapterId);
+    await switchChapter(hit.chapterId);
     closeBookSearch();
+    // Effect below will fire once content settles
   }
 
   async function handleNewChapter() {
@@ -1290,6 +1592,24 @@ export function EditorPage() {
       { volumeId: volumes[idx].id },
       exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
     );
+    await load();
+  }
+
+  async function handleAttachOrphansToFirstVolume() {
+    if (!workId || volumes.length === 0 || orphanChapters.length === 0) return;
+    const firstVol = volumes[0]!;
+    const ok = window.confirm(
+      `将 ${orphanChapters.length} 个未匹配到当前卷的章节并入「${firstVol.title}」？`,
+    );
+    if (!ok) return;
+    for (const c of orphanChapters) {
+      const exp = c.updatedAt;
+      await updateChapter(
+        c.id,
+        { volumeId: firstVol.id },
+        exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
+      );
+    }
     await load();
   }
 
@@ -1444,6 +1764,126 @@ export function EditorPage() {
     return (content.match(re) ?? []).length;
   }, [content, findQ]);
 
+  function openAiPanelForChapter(chapterId: string) {
+    const go = () => {
+      setAiOpen(true);
+      rightRail.setActiveTab("ai");
+      rightRail.setOpen(true);
+    };
+    if (activeId === chapterId) go();
+    else void switchChapter(chapterId).then(go);
+  }
+
+  function openSummaryForChapter(chapterId: string) {
+    if (activeId === chapterId) setSummaryOpen(true);
+    else void switchChapter(chapterId).then(() => setSummaryOpen(true));
+  }
+
+  function renderChapterSidebarItem(c: Chapter) {
+    const i = chapters.findIndex((x) => x.id === c.id);
+    const wc = c.wordCountCache ?? wordCount(c.content);
+    const isCurrent = c.id === activeId;
+    return (
+      <li
+        key={c.id}
+        className={cn("chapter-card", isCurrent ? "chapter-card--expanded active" : "chapter-card--compact")}
+        draggable
+        onDragStart={() => setDragChapterId(c.id)}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault();
+          void handleDropChapter(c.id);
+        }}
+      >
+        {isCurrent ? (
+          <>
+            <div className="chapter-card__head">
+              <button type="button" className="chapter-card__title" onClick={() => void switchChapter(c.id)}>
+                {c.title}
+              </button>
+              <button
+                type="button"
+                className={cn("chapter-card__bookmark", work?.progressCursor === c.id && "on")}
+                title={work?.progressCursor === c.id ? "已标为写作进度" : "标为写作进度"}
+                aria-pressed={work?.progressCursor === c.id}
+                onClick={() => void setProgressChapter(c.id)}
+              >
+                🔖
+              </button>
+            </div>
+            <div className="chapter-card__meta">
+              <span>{wc.toLocaleString()} 字</span>
+              <span className="chapter-card__date">
+                更新{" "}
+                {new Date(c.updatedAt).toLocaleString(undefined, {
+                  month: "numeric",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            </div>
+            <div className="chapter-card__btns">
+              <button type="button" className="chapter-card__btn chapter-card__btn--blue" onClick={() => openSummaryForChapter(c.id)}>
+                概要
+              </button>
+              <button type="button" className="chapter-card__btn chapter-card__btn--green" onClick={() => openAiPanelForChapter(c.id)}>
+                生成
+              </button>
+              <button
+                type="button"
+                className="chapter-card__btn chapter-card__btn--red"
+                onClick={() => void handleDeleteChapter(c.id)}
+              >
+                删除
+              </button>
+            </div>
+            <div className="chapter-card__tools">
+              <button type="button" title="上移" disabled={i === 0} onClick={() => void moveChapter(c.id, -1)}>
+                ↑
+              </button>
+              <button
+                type="button"
+                title="下移"
+                disabled={i === chapters.length - 1}
+                onClick={() => void moveChapter(c.id, 1)}
+              >
+                ↓
+              </button>
+              <button type="button" title="重命名" onClick={() => void handleRename(c.id)}>
+                ✎
+              </button>
+              {volumes.length > 1 ? (
+                <button type="button" title="移到其他卷" onClick={() => void handleMoveChapterToVolume(c.id)}>
+                  卷
+                </button>
+              ) : null}
+            </div>
+          </>
+        ) : (
+          <div className="chapter-card__compact-row">
+            <button type="button" className="chapter-card__title chapter-card__title--row" onClick={() => void switchChapter(c.id)}>
+              {c.title}
+            </button>
+            <span className="chapter-card__wc">{wc.toLocaleString()} 字</span>
+            <button
+              type="button"
+              className={cn("chapter-card__bookmark chapter-card__bookmark--compact", work?.progressCursor === c.id && "on")}
+              title={work?.progressCursor === c.id ? "已标为写作进度" : "标为写作进度"}
+              aria-pressed={work?.progressCursor === c.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                void setProgressChapter(c.id);
+              }}
+            >
+              🔖
+            </button>
+          </div>
+        )}
+      </li>
+    );
+  }
+
   if (!workId) {
     return <p className="muted">无效地址</p>;
   }
@@ -1467,37 +1907,104 @@ export function EditorPage() {
     );
   }
 
+  const layoutSidebarCollapsed = sidebarCollapsed;
+
   return (
-    <div className={"page editor-page theme-typora" + (zenWrite ? " editor-page--zen" : "")}>
-      <header className="editor-toolbar-lite">
-        <button
-          type="button"
-          className="icon-btn"
-          title={sidebarCollapsed ? "展开章节" : "收起章节"}
-          aria-expanded={!sidebarCollapsed}
-          onClick={toggleSidebar}
-        >
-          <span className="icon-btn__glyph" aria-hidden>
-            {sidebarCollapsed ? "⟩" : "⟨"}
-          </span>
-        </button>
+    <div className={"page editor-page theme-typora editor-page--xy-frame" + (zenWrite ? " editor-page--zen" : "")}>
+      <header className="editor-toolbar-lite" hidden={zenWrite}>
+        {sidebarCollapsed && (
+          <button
+            type="button"
+            className="icon-btn group relative"
+            title="展开章节"
+            aria-expanded={!sidebarCollapsed}
+            onClick={toggleSidebar}
+          >
+            <span className="icon-btn__glyph" aria-hidden>⟩</span>
+          </button>
+        )}
+        {liuguangReturnVisible ? (
+          <Link
+            to="/inspiration?restore=1"
+            className="ml-3 inline-flex items-center rounded-md border border-border/60 bg-background px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+            title="返回流光并恢复筛选状态"
+          >
+            返回流光
+          </Link>
+        ) : null}
       </header>
 
       {/* 旧工具条：按你的要求保留，但不再渲染（避免重复交互/点击冲突） */}
       <header className="editor-toolbar" style={{ display: "none" }} aria-hidden />
 
-      <div
-        className={`editor-body ${sidebarCollapsed ? "editor-body--sidebar-collapsed" : ""}`}
+      <div 
+        className={`editor-body ${layoutSidebarCollapsed ? "editor-body--sidebar-collapsed" : ""}`}
+        style={{ "--sidebar-w": `${sidebarWidthPx}px` } as React.CSSProperties}
       >
         <aside
-          className="chapter-sidebar"
-          aria-hidden={sidebarCollapsed}
+          className="chapter-sidebar relative"
+          aria-hidden={layoutSidebarCollapsed}
           onWheelCapture={(e) => {
             // Prevent wheel scrolling from chaining into the editor/body.
             e.stopPropagation();
           }}
         >
-          <div className="sidebar-head sidebar-section-head">
+          {/* Resize Handle / Collapse Toggle */}
+          <div 
+            className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-blue-500/20 group z-10 flex items-center justify-center transition-colors -mr-1"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              sidebarDragRef.current = { startX: e.clientX, startW: sidebarWidthPx };
+            }}
+          >
+            <div className="w-0.5 h-full bg-border/40 group-hover:bg-blue-500 transition-colors" />
+            <button
+              type="button"
+              className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 w-5 h-8 flex items-center justify-center rounded-sm bg-background border border-border bg-card shadow-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-muted"
+              title="收起章节栏"
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleSidebar();
+              }}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-muted-foreground"><path d="m15 18-6-6 6-6"/></svg>
+            </button>
+          </div>
+
+          <div className="sidebar-project-xy border-b border-border/40 pb-0 shrink-0">
+            <div className="flex w-full px-2 pt-2 -mb-px">
+              <button
+                type="button"
+                className={`flex-1 text-center pb-2 text-sm font-medium border-b-2 transition-colors ${sidebarTab === "outline" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                onClick={() => setSidebarTab("outline")}
+              >
+                章纲
+              </button>
+              <button
+                type="button"
+                className={`flex-1 text-center pb-2 text-sm font-medium border-b-2 transition-colors ${sidebarTab === "chapter" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                onClick={() => setSidebarTab("chapter")}
+              >
+                章节正文
+              </button>
+            </div>
+          </div>
+
+          {sidebarTab === "outline" ? (
+            <div className="p-3 text-sm text-foreground overflow-y-auto">
+              {chapters.map(c => c.outlineDraft ? (
+                <div key={c.id} className="mb-4">
+                  <div className="font-medium text-foreground mb-1 sticky top-0 bg-background z-10 py-1 border-b border-border/20">{c.title}</div>
+                  <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-sans">{c.outlineDraft}</pre>
+                </div>
+              ) : null)}
+              {chapters.filter(c => c.outlineDraft).length === 0 && (
+                <p className="text-muted-foreground text-center py-6">暂无已推送的章纲。</p>
+              )}
+            </div>
+          ) : (
+            <>
+          <div className="sidebar-head sidebar-section-head mt-3">
             <span>章节</span>
             <div className="sidebar-head-btns">
               <button
@@ -1522,101 +2029,51 @@ export function EditorPage() {
             </p>
           )}
           {!chapterListCollapsed ? (
-            volumes.map((vol) => (
-              <div key={vol.id} className="volume-block">
-                <div className="volume-row">
-                  <span className="volume-title">{vol.title}</span>
-                  <div className="volume-actions">
-                    <button type="button" title="重命名卷" onClick={() => void handleRenameVolume(vol.id)}>
-                      ✎
-                    </button>
-                    {volumes.length > 1 ? (
-                      <button type="button" title="删卷（章并入其他卷）" onClick={() => void handleDeleteVolumeUi(vol.id)}>
-                        ×
+            <>
+              {volumes.map((vol) => (
+                <div key={vol.id} className="volume-block">
+                  <div className="volume-row">
+                    <span className="volume-title">{vol.title}</span>
+                    <div className="volume-actions">
+                      <button type="button" title="重命名卷" onClick={() => void handleRenameVolume(vol.id)}>
+                        ✎
                       </button>
-                    ) : null}
+                      {volumes.length > 1 ? (
+                        <button type="button" title="删卷（章并入其他卷）" onClick={() => void handleDeleteVolumeUi(vol.id)}>
+                          ×
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
+                  <ul className="chapter-list">
+                    {chapters.filter((c) => c.volumeId === vol.id).map((c) => renderChapterSidebarItem(c))}
+                  </ul>
                 </div>
-                <ul className="chapter-list">
-                  {chapters
-                    .filter((c) => c.volumeId === vol.id)
-                    .map((c) => {
-                      const i = chapters.findIndex((x) => x.id === c.id);
-                      return (
-                        <li
-                          key={c.id}
-                          className={c.id === activeId ? "active" : ""}
-                          draggable
-                          onDragStart={() => setDragChapterId(c.id)}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            void handleDropChapter(c.id);
-                          }}
+              ))}
+              {orphanChapters.length > 0 ? (
+                <div className="volume-block volume-block--orphans">
+                  <div className="volume-row">
+                    <span className="volume-title">未匹配到当前卷的章节 · {orphanChapters.length}</span>
+                    <div className="volume-actions">
+                      {volumes.length > 0 ? (
+                        <button
+                          type="button"
+                          className="btn small primary"
+                          title={`并入「${volumes[0]?.title ?? "第一卷"}」`}
+                          onClick={() => void handleAttachOrphansToFirstVolume()}
                         >
-                          <button
-                            type="button"
-                            className="chapter-select"
-                            onClick={() => void switchChapter(c.id)}
-                          >
-                            {c.title}
-                          </button>
-                          <div className="chapter-actions">
-                          <button
-                            type="button"
-                            title="上移"
-                            disabled={i === 0}
-                            onClick={() => void moveChapter(c.id, -1)}
-                          >
-                            ↑
-                          </button>
-                          <button
-                            type="button"
-                            title="下移"
-                            disabled={i === chapters.length - 1}
-                            onClick={() => void moveChapter(c.id, 1)}
-                          >
-                            ↓
-                          </button>
-                          <button type="button" title="重命名" onClick={() => void handleRename(c.id)}>
-                            ✎
-                          </button>
-                          <button
-                            type="button"
-                            title="概要"
-                            onClick={() => {
-                              void switchChapter(c.id).then(() => setSummaryOpen(true));
-                            }}
-                          >
-                            概要
-                          </button>
-                          {volumes.length > 1 ? (
-                            <button
-                              type="button"
-                              title="移到其他卷"
-                              onClick={() => void handleMoveChapterToVolume(c.id)}
-                            >
-                              卷
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            title="设为写作进度游标"
-                            className={work.progressCursor === c.id ? "on" : ""}
-                            onClick={() => void setProgressChapter(c.id)}
-                          >
-                            ◎
-                          </button>
-                          <button type="button" title="删除" onClick={() => void handleDeleteChapter(c.id)}>
-                            ×
-                          </button>
-                          </div>
-                        </li>
-                      );
-                    })}
-                </ul>
-              </div>
-            ))
+                          并入首卷
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <p className="muted small" style={{ margin: "0 0 0.4rem" }}>
+                    常见于合并备份、导入或删卷后遗留；点「并入首卷」或单章「卷」按钮即可修复。
+                  </p>
+                  <ul className="chapter-list">{orphanChapters.map((c) => renderChapterSidebarItem(c))}</ul>
+                </div>
+              ) : null}
+            </>
           ) : (
             <p className="muted small" style={{ margin: "0.25rem 0 0.5rem" }}>
               章节列表已折叠。
@@ -1649,7 +2106,7 @@ export function EditorPage() {
                   value={cbGoal}
                   onChange={(e) => setCbGoal(e.target.value)}
                   rows={2}
-                  placeholder="可对照圣经中的章模板"
+                  placeholder="可对照锦囊中的章模板"
                 />
               </label>
               <label className="sidebar-bible-field">
@@ -1740,6 +2197,8 @@ export function EditorPage() {
               )
             ) : null}
           </div>
+          </>
+          )}
         </aside>
 
         <main className="editor-main">
@@ -1777,29 +2236,52 @@ export function EditorPage() {
           <div className="editor-scroll">
             <div className="editor-scroll-inner">
             <div
-              className="editor-paper"
+              className="editor-paper card"
+              role="region"
+              aria-label="正文纸面"
+              data-paper-tint={paperTint}
               style={
-                canWideWrite
-                  ? editorAutoWidth
-                    ? { maxWidth: "1400px", width: "100%" }
-                    : { maxWidth: `${editorMaxWidthPx}px` }
-                  : undefined
+                editorAutoWidth
+                  ? {
+                      width: "100%",
+                      maxWidth: "100%",
+                      boxSizing: "border-box",
+                    }
+                  : {
+                      width: "100%",
+                      maxWidth: `${Math.min(editorMaxWidthPx, EDITOR_AUTO_MAX_CAP_PX)}px`,
+                      marginLeft: "auto",
+                      marginRight: "auto",
+                      boxSizing: "border-box",
+                    }
               }
             >
               {activeChapter ? (
                 <div className="editor-chapter-title" aria-label="当前章节标题">
+                  <span className="editor-chapter-title-sparkle" aria-hidden>
+                    ✨
+                  </span>
                   <span className="editor-chapter-title-text">{activeChapter.title}</span>
-                  {canWideWrite ? (
+                  {chapters.length > 0 ? (
+                    <span className="editor-chapter-title-index">
+                      {(() => {
+                        const ix = chapters.findIndex((x) => x.id === activeId);
+                        return ix >= 0 ? `${ix + 1} / ${chapters.length}` : "";
+                      })()}
+                    </span>
+                  ) : null}
+                  {!editorAutoWidth ? (
                     <span className="editor-chapter-title-tools">
                       <button
                         type="button"
                         className="editor-width-reset"
-                        title="恢复默认宽度"
+                        title="恢复默认宽度（铺满中间栏）"
                         onClick={() => {
-                          setEditorAutoWidth(false);
-                          setEditorMaxWidthPx(860);
+                          setEditorMaxWidthPx(EDITOR_DEFAULT_MAX_WIDTH_PX);
+                          setEditorAutoWidth(true);
                           try {
-                            localStorage.setItem(EDITOR_WIDTH_KEY, "860");
+                            localStorage.setItem(EDITOR_WIDTH_KEY, String(EDITOR_DEFAULT_MAX_WIDTH_PX));
+                            localStorage.setItem(EDITOR_AUTO_WIDTH_KEY, "1");
                           } catch {
                             /* ignore */
                           }
@@ -1807,18 +2289,16 @@ export function EditorPage() {
                       >
                         默认
                       </button>
-                      {!editorAutoWidth ? (
-                        <span
-                          className="editor-width-handle"
-                          title="拖动调整正文宽度"
-                          onMouseDown={(e) => {
-                            e.preventDefault();
-                            widthDragRef.current = { startX: e.clientX, startW: editorMaxWidthPx };
-                          }}
-                        >
-                          ↔
-                        </span>
-                      ) : null}
+                      <span
+                        className="editor-width-handle"
+                        title="拖动调整正文宽度"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          widthDragRef.current = { startX: e.clientX, startW: editorMaxWidthPx };
+                        }}
+                      >
+                        ↔
+                      </span>
                     </span>
                   ) : null}
                 </div>
@@ -1831,11 +2311,24 @@ export function EditorPage() {
                   value={content}
                   onChange={setContent}
                   ariaLabel="正文编辑器"
-                  placeholderText="在此输入正文…"
+                  placeholderText="请输入章节内容"
                 />
               ) : (
-                <p className="editor-empty">请选择或新建章节。</p>
+                <div className="editor-xy-empty">
+                  <div className="editor-xy-empty__card">
+                    <p className="editor-xy-empty__title">请选择或新建章节</p>
+                    <p className="editor-xy-empty__hint">在左侧目录中选一章，或使用下方按钮新建。</p>
+                    <Button type="button" className="editor-xy-empty__cta" onClick={() => void handleNewChapter()}>
+                      + 新建章节
+                    </Button>
+                  </div>
+                </div>
               )}
+              {activeChapter ? (
+                <div className="editor-xy-wc-corner" title="本章字数">
+                  {chapterWords.toLocaleString()}
+                </div>
+              ) : null}
             </div>
             </div>
           </div>
@@ -1866,6 +2359,11 @@ export function EditorPage() {
             {formatSummaryUpdatedAt(activeChapter.summaryUpdatedAt) ? (
               <p className="small muted" style={{ marginTop: "-0.25rem" }}>
                 概要上次更新：{formatSummaryUpdatedAt(activeChapter.summaryUpdatedAt)}
+              </p>
+            ) : null}
+            {formatSummaryScope(activeChapter.summaryScopeFromOrder, activeChapter.summaryScopeToOrder) ? (
+              <p className="small muted" style={{ marginTop: "-0.25rem" }}>
+                {formatSummaryScope(activeChapter.summaryScopeFromOrder, activeChapter.summaryScopeToOrder)}
               </p>
             ) : null}
             <textarea
@@ -1900,13 +2398,25 @@ export function EditorPage() {
                       const t = Date.now();
                       await updateChapter(
                         activeChapter.id,
-                        { summary: text, summaryUpdatedAt: t },
+                        {
+                          summary: text,
+                          summaryUpdatedAt: t,
+                          summaryScopeFromOrder: activeChapter.order,
+                          summaryScopeToOrder: activeChapter.order,
+                        },
                         exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
                       );
                       setChapters((prev) =>
                         prev.map((c) =>
                           c.id === activeChapter.id
-                            ? { ...c, summary: text, summaryUpdatedAt: t, updatedAt: t }
+                            ? {
+                                ...c,
+                                summary: text,
+                                summaryUpdatedAt: t,
+                                summaryScopeFromOrder: activeChapter.order,
+                                summaryScopeToOrder: activeChapter.order,
+                                updatedAt: t,
+                              }
                             : c,
                         ),
                       );
@@ -1946,13 +2456,25 @@ export function EditorPage() {
                       const t = Date.now();
                       await updateChapter(
                         activeChapter.id,
-                        { summary: summaryDraft, summaryUpdatedAt: t },
+                        {
+                          summary: summaryDraft,
+                          summaryUpdatedAt: t,
+                          summaryScopeFromOrder: activeChapter.summaryScopeFromOrder ?? activeChapter.order,
+                          summaryScopeToOrder: activeChapter.summaryScopeToOrder ?? activeChapter.order,
+                        },
                         exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
                       );
                       setChapters((prev) =>
                         prev.map((c) =>
                           c.id === activeChapter.id
-                            ? { ...c, summary: summaryDraft, summaryUpdatedAt: t, updatedAt: t }
+                            ? {
+                                ...c,
+                                summary: summaryDraft,
+                                summaryUpdatedAt: t,
+                                summaryScopeFromOrder: c.summaryScopeFromOrder ?? c.order,
+                                summaryScopeToOrder: c.summaryScopeToOrder ?? c.order,
+                                updatedAt: t,
+                              }
                             : c,
                         ),
                       );
@@ -1996,7 +2518,7 @@ export function EditorPage() {
             onClick={(e) => e.stopPropagation()}
           >
             <h3 id="book-search-title">全书搜索</h3>
-            <p className="small muted">字面量匹配（非正则）。搜索前会先保存当前章。</p>
+            <p className="small muted">点击结果可跳转并高亮定位。搜索前自动保存当前章。</p>
             <div className="modal-row modal-row--wrap book-search-scope">
               <label className="radio-label">
                 <input
@@ -2014,16 +2536,27 @@ export function EditorPage() {
                   checked={bookSearchScope === "beforeProgress"}
                   onChange={() => setBookSearchScope("beforeProgress")}
                 />
-                仅进度游标之前
+                仅进度前
+              </label>
+              <label className="radio-label" title="将搜索词作为正则表达式解析">
+                <input
+                  type="checkbox"
+                  checked={bookSearchRegex}
+                  onChange={(e) => {
+                    setBookSearchRegex(e.target.checked);
+                    setBookSearchHits(null);
+                  }}
+                />
+                正则
               </label>
             </div>
             <div className="modal-row">
               <input
                 type="search"
                 className="modal-input"
-                placeholder="关键词"
+                placeholder={bookSearchRegex ? "正则表达式，如 他[^，]*说" : "关键词"}
                 value={bookSearchQ}
-                onChange={(e) => setBookSearchQ(e.target.value)}
+                onChange={(e) => { setBookSearchQ(e.target.value); setBookSearchHits(null); }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void runBookSearch();
                 }}
@@ -2043,11 +2576,13 @@ export function EditorPage() {
                     <button
                       type="button"
                       className="book-search-hit"
-                      onClick={() => void jumpToSearchHit(h.chapterId)}
+                      onClick={() => void jumpToSearchHit(h)}
                     >
                       <span className="book-search-hit-title">{h.chapterTitle}</span>
                       <span className="book-search-hit-meta">{h.matchCount} 处</span>
-                      <span className="book-search-hit-preview">{h.preview}</span>
+                      {(h.contexts ?? [h.preview]).map((ctx, i) => (
+                        <span key={i} className="book-search-hit-preview">{ctx}</span>
+                      ))}
                     </button>
                   </li>
                 ))}

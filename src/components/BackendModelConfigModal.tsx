@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
 import { cn } from "../lib/utils";
-import { Dialog, DialogContent } from "./ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import type { AiProviderId, AiProviderConfig, AiSettings } from "../ai/types";
 import { getProviderConfig, patchProviderConfig } from "../ai/storage";
 import { resolveOpenAiCompatibleBaseUrl } from "../ai/client";
+import { listModelPersonas } from "../util/model-personas";
+import { geminiGenerateTextFromJson, messageFromApiJsonBody } from "../util/parse-api-json";
 
 type ProviderTestState =
   | { status: "idle" }
@@ -88,17 +90,16 @@ async function testGeminiModel(args: { cfg: AiProviderConfig; modelOverride?: st
       generationConfig: { temperature: 0.1 },
     }),
   });
-  const raw = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error((raw as any)?.error?.message ?? `HTTP ${resp.status}`);
-  const text =
-    (raw as any)?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text ?? "").join("")?.trim() ?? "";
+  const raw: unknown = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(messageFromApiJsonBody(raw) || `HTTP ${resp.status}`);
+  const text = geminiGenerateTextFromJson(raw).trim();
   return text ? "连接成功（该模型可用）" : "连接成功（该模型可用）";
 }
 
 async function testOpenAICompatibleModel(args: { cfg: AiProviderConfig; model: string }): Promise<void> {
   const baseUrl = resolveOpenAiCompatibleBaseUrl(args.cfg);
   const key = (args.cfg.apiKey ?? "").trim();
-  if (!key) throw new Error("请先填写 API Key");
+  if (!key && args.cfg.id !== "mlx") throw new Error("请先填写 API Key");
   const url = joinUrl(baseUrl, "/chat/completions");
   const body: Record<string, unknown> = {
     model: args.model,
@@ -112,13 +113,15 @@ async function testOpenAICompatibleModel(args: { cfg: AiProviderConfig; model: s
   } else {
     body.max_tokens = 8;
   }
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (key) headers.Authorization = `Bearer ${key}`;
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+    headers,
     body: JSON.stringify(body),
   });
-  const raw = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error((raw as any)?.error?.message ?? `HTTP ${resp.status}`);
+  const raw: unknown = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(messageFromApiJsonBody(raw) || `HTTP ${resp.status}`);
 }
 
 async function testAnthropicModel(args: { cfg: AiProviderConfig; model: string }): Promise<void> {
@@ -139,8 +142,8 @@ async function testAnthropicModel(args: { cfg: AiProviderConfig; model: string }
       messages: [{ role: "user", content: "ping" }],
     }),
   });
-  const raw = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error((raw as any)?.error?.message ?? `HTTP ${resp.status}`);
+  const raw: unknown = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(messageFromApiJsonBody(raw) || `HTTP ${resp.status}`);
 }
 
 async function testOllamaModel(args: { cfg: AiProviderConfig; model: string }): Promise<void> {
@@ -156,8 +159,8 @@ async function testOllamaModel(args: { cfg: AiProviderConfig; model: string }): 
       options: { temperature: 0.1 },
     }),
   });
-  const raw = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error((raw as any)?.error ?? `HTTP ${resp.status}`);
+  const raw: unknown = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(messageFromApiJsonBody(raw) || `HTTP ${resp.status}`);
 }
 
 /** GET /api/tags — 需本机 Ollama 已启动；浏览器可能受 CORS 限制 */
@@ -205,6 +208,7 @@ export function BackendModelConfigModal(props: {
     kimi: loadModelHealth("kimi"),
     xiaomi: loadModelHealth("xiaomi"),
     ollama: loadModelHealth("ollama"),
+    mlx: loadModelHealth("mlx"),
   });
   const [modelHealthDirty, setModelHealthDirty] = useState<Record<AiProviderId, boolean>>({
     openai: false,
@@ -215,6 +219,7 @@ export function BackendModelConfigModal(props: {
     kimi: false,
     xiaomi: false,
     ollama: false,
+    mlx: false,
   });
   const [modelBatch, setModelBatch] = useState<Record<AiProviderId, { running: boolean; idx: number; total: number }>>({
     openai: { running: false, idx: 0, total: 0 },
@@ -225,6 +230,7 @@ export function BackendModelConfigModal(props: {
     kimi: { running: false, idx: 0, total: 0 },
     xiaomi: { running: false, idx: 0, total: 0 },
     ollama: { running: false, idx: 0, total: 0 },
+    mlx: { running: false, idx: 0, total: 0 },
   });
   const [showKey, setShowKey] = useState<Record<AiProviderId, boolean>>({
     openai: false,
@@ -235,6 +241,7 @@ export function BackendModelConfigModal(props: {
     kimi: false,
     xiaomi: false,
     ollama: false,
+    mlx: false,
   });
   const [testState, setTestState] = useState<Record<AiProviderId, ProviderTestState>>({
     openai: { status: "idle" },
@@ -245,6 +252,7 @@ export function BackendModelConfigModal(props: {
     kimi: { status: "idle" },
     xiaomi: { status: "idle" },
     ollama: { status: "idle" },
+    mlx: { status: "idle" },
   });
 
   /** 潜龙：/api/tags 拉取到的本机模型名（需 Ollama 已启动） */
@@ -254,15 +262,16 @@ export function BackendModelConfigModal(props: {
 
   const providers = useMemo(() => {
     return [
-      { id: "openai" as const, label: "见山", title: "OpenAI（见山）" },
-      { id: "anthropic" as const, label: "听雨", title: "Claude（听雨）" },
-      { id: "gemini" as const, label: "观云", title: "Gemini（观云）" },
-      { id: "doubao" as const, label: "燎原", title: "豆包（燎原）" },
-      { id: "zhipu" as const, label: "智谱", title: "智谱 GLM" },
-      { id: "kimi" as const, label: "Kimi", title: "Kimi（Moonshot）" },
-      { id: "xiaomi" as const, label: "小米", title: "小米 MiMo" },
-      { id: "ollama" as const, label: "潜龙", title: "Ollama（潜龙）" },
-    ] satisfies Array<{ id: AiProviderId; label: string; title: string }>;
+      { id: "openai" as const, label: "见山", navSub: "openai", title: "OpenAI（见山）" },
+      { id: "anthropic" as const, label: "听雨", navSub: "anthropic", title: "Claude（听雨）" },
+      { id: "gemini" as const, label: "观云", navSub: "gemini", title: "Gemini（观云）" },
+      { id: "doubao" as const, label: "燎原", navSub: "doubao", title: "豆包（燎原）" },
+      { id: "zhipu" as const, label: "智谱", navSub: "zhipu", title: "智谱 GLM" },
+      { id: "kimi" as const, label: "Kimi", navSub: "kimi", title: "Kimi（Moonshot）" },
+      { id: "xiaomi" as const, label: "小米", navSub: "xiaomi", title: "小米 MiMo" },
+      { id: "ollama" as const, label: "潜龙", navSub: "本地·Ollama", title: "Ollama（潜龙）" },
+      { id: "mlx" as const, label: "潜龙", navSub: "本地·MLX", title: "MLX（潜龙）" },
+    ] satisfies Array<{ id: AiProviderId; label: string; navSub: string; title: string }>;
   }, []);
 
   const geminiPresetModels = useMemo(
@@ -320,6 +329,8 @@ export function BackendModelConfigModal(props: {
         return [...xiaomiWritingModels];
       case "gemini":
         return [...geminiPresetModels];
+      case "mlx":
+        return null;
       default:
         return null;
     }
@@ -338,7 +349,7 @@ export function BackendModelConfigModal(props: {
         <div className="backend-modal backend-modal--dialog">
         <div className="backend-modal-head">
           <div>
-            <div className="backend-modal-title">高级后端配置</div>
+            <DialogTitle className="backend-modal-title">高级后端配置</DialogTitle>
             <div className="muted small">保存在本机 localStorage；纯前端直连可能遇到 CORS。</div>
           </div>
           <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
@@ -360,6 +371,7 @@ export function BackendModelConfigModal(props: {
                   "kimi",
                   "xiaomi",
                   "ollama",
+                  "mlx",
                 ] as AiProviderId[]) {
                   if (modelHealthDirty[p]) saveModelHealth(p, modelHealth[p]);
                 }
@@ -372,6 +384,7 @@ export function BackendModelConfigModal(props: {
                   kimi: false,
                   xiaomi: false,
                   ollama: false,
+                  mlx: false,
                 });
                 props.onSave();
               }}
@@ -413,7 +426,7 @@ export function BackendModelConfigModal(props: {
                 onClick={() => setNav(p.id)}
               >
                 <span className="backend-nav-title">{p.label}</span>
-                <span className="backend-nav-sub muted small">{p.id}</span>
+                <span className="backend-nav-sub muted small">{p.navSub}</span>
               </button>
             ))}
           </aside>
@@ -423,7 +436,7 @@ export function BackendModelConfigModal(props: {
               <section className="backend-panel">
                 <h3 style={{ margin: 0 }}>AI 隐私与上传范围</h3>
                 <p className="muted small" style={{ marginTop: 6 }}>
-                  只要你点击「生成」，本次提示词会发送到你选择的提供方。选择 OpenAI / Claude / Gemini / 豆包 / 智谱 / Kimi / 小米 等云端模型即代表会通过网络发送内容到第三方服务。
+                  只要你点击「生成」，本次提示词会发送到你选择的提供方。选择 OpenAI / Claude / Gemini / 豆包 / 智谱 / Kimi / 小米 等云端模型即代表会通过网络发送内容到第三方服务。潜龙（Ollama / MLX）为本地接口，不经过上述云端开关（仍可能因代理访问本机服务）。
                 </p>
 
                 <label className="row row--check" style={{ marginTop: 10 }}>
@@ -452,7 +465,7 @@ export function BackendModelConfigModal(props: {
                     checked={settings.privacy.allowCloudProviders}
                     onChange={(e) => onChange({ ...settings, privacy: { ...settings.privacy, allowCloudProviders: e.target.checked } })}
                   />
-                  <span>允许使用云端提供方（OpenAI / Claude / Gemini / 豆包 / 智谱 / Kimi / 小米 等）</span>
+                  <span>允许使用云端提供方（OpenAI / Claude / Gemini / 豆包 / 智谱 / Kimi / 小米 等；不含潜龙本地 Ollama/MLX）</span>
                 </label>
 
                 <details className="backend-details" style={{ marginTop: 10 }}>
@@ -464,20 +477,28 @@ export function BackendModelConfigModal(props: {
                         ["allowChapterContent", "当前章正文（全文或截断）"],
                         ["allowSelection", "当前选区"],
                         ["allowRecentSummaries", "最近章节概要"],
-                        ["allowBible", "创作圣经（导出 Markdown）"],
+                        ["allowBible", "本书锦囊（导出 Markdown）"],
                         ["allowLinkedExcerpts", "本章关联摘录（参考库）"],
                         ["allowRagSnippets", "参考库检索片段（RAG 注入）"],
                       ] as const
-                    ).map(([k, label]) => (
+                    ).map(([k, label]) => {
+                      const pk = k as keyof AiSettings["privacy"];
+                      return (
                       <label key={k} className="row row--check">
                         <input
                           type="checkbox"
-                          checked={(settings.privacy as any)[k] as boolean}
-                          onChange={(e) => onChange({ ...settings, privacy: { ...(settings.privacy as any), [k]: e.target.checked } })}
+                          checked={Boolean(settings.privacy[pk])}
+                          onChange={(e) =>
+                            onChange({
+                              ...settings,
+                              privacy: { ...settings.privacy, [pk]: e.target.checked },
+                            })
+                          }
                         />
                         <span>{label}</span>
                       </label>
-                    ))}
+                    );
+                    })}
                   </div>
                   <p className="muted small" style={{ marginTop: 10 }}>
                     说明：这些开关只控制“是否把对应内容拼进 prompt”。即使关闭，也不影响你在本地查看/编辑这些内容。
@@ -504,7 +525,8 @@ export function BackendModelConfigModal(props: {
                       <option value="zhipu">智谱</option>
                       <option value="kimi">Kimi</option>
                       <option value="xiaomi">小米</option>
-                      <option value="ollama">潜龙</option>
+                      <option value="ollama">潜龙（Ollama）</option>
+                      <option value="mlx">潜龙（MLX）</option>
                     </select>
                   </label>
 
@@ -515,7 +537,7 @@ export function BackendModelConfigModal(props: {
                       checked={settings.includeBible}
                       onChange={(e) => onChange({ ...settings, includeBible: e.target.checked })}
                     />
-                    <span>默认注入创作圣经</span>
+                    <span>默认注入本书锦囊</span>
                   </label>
 
                   <label className="row">
@@ -534,7 +556,7 @@ export function BackendModelConfigModal(props: {
                   <div className="backend-field" style={{ borderTop: "1px solid var(--border, #e5e7eb)", paddingTop: 12 }}>
                     <div className="backend-label muted small">侧栏注入确认（防误触 / 费用）</div>
                     <p className="muted small" style={{ margin: "6px 0 10px" }}>
-                      在写作页侧栏点击生成前，可按粗估 tokens 或「云端发圣经」弹出浏览器确认。粗估非计费凭证。
+                      在写作页侧栏点击生成前，可按粗估 tokens 或「云端发锦囊全文」弹出浏览器确认。粗估非计费凭证。
                     </p>
                     <label className="row row--check">
                       <input
@@ -567,7 +589,7 @@ export function BackendModelConfigModal(props: {
                         checked={settings.injectConfirmCloudBible}
                         onChange={(e) => onChange({ ...settings, injectConfirmCloudBible: e.target.checked })}
                       />
-                      <span>向云端发送创作圣经前始终确认（建议开启）</span>
+                      <span>向云端发送本书锦囊前始终确认（建议开启）</span>
                     </label>
                   </div>
 
@@ -622,14 +644,18 @@ export function BackendModelConfigModal(props: {
                     ? ollamaDetected.length > 0
                       ? ollamaDetected
                       : [cfg.model].filter(Boolean)
-                    : presetModelIdsForProvider(id) ?? [cfg.model].filter(Boolean);
+                    : id === "mlx"
+                      ? [cfg.model].filter(Boolean)
+                      : presetModelIdsForProvider(id) ?? [cfg.model].filter(Boolean);
                 return (
                   <section className="backend-panel">
                     <div className="backend-panel-head">
                       <div>
                         <h3 style={{ margin: 0 }}>{providers.find((p) => p.id === id)?.title ?? id}</h3>
                         <div className="muted small" style={{ marginTop: 4 }}>
-                          {id === "ollama" ? "本机模型（默认不需要 API Key）" : "云端模型（需 API Key；可能遇到 CORS）"}
+                          {id === "ollama" || id === "mlx"
+                            ? "本机模型（默认不需要 API Key）"
+                            : "云端模型（需 API Key；可能遇到 CORS）"}
                         </div>
                       </div>
                       <div className="backend-provider-actions">
@@ -648,7 +674,14 @@ export function BackendModelConfigModal(props: {
                                   const model = models[i]!;
                                   setModelBatch((m) => ({ ...m, [id]: { running: true, idx: i + 1, total: models.length } }));
                                   try {
-                                    if (id === "openai" || id === "doubao" || id === "zhipu" || id === "kimi" || id === "xiaomi") {
+                                    if (
+                                      id === "openai" ||
+                                      id === "doubao" ||
+                                      id === "zhipu" ||
+                                      id === "kimi" ||
+                                      id === "xiaomi" ||
+                                      id === "mlx"
+                                    ) {
                                       await testOpenAICompatibleModel({ cfg: baseCfg, model });
                                     } else if (id === "anthropic") {
                                       await testAnthropicModel({ cfg: baseCfg, model });
@@ -735,7 +768,9 @@ export function BackendModelConfigModal(props: {
                                         ? "https://api.moonshot.cn/v1"
                                         : id === "xiaomi"
                                           ? "https://api.mimo-v2.com/v1"
-                                          : "http://localhost:11434"
+                                          : id === "mlx"
+                                            ? "http://127.0.0.1:8080/v1"
+                                            : "http://localhost:11434"
                           }
                         />
                       </label>
@@ -747,7 +782,13 @@ export function BackendModelConfigModal(props: {
                             type={keyShown ? "text" : "password"}
                             value={cfg.apiKey ?? ""}
                             onChange={(e) => onChange(patchProviderConfig(settings, id, { apiKey: e.target.value }))}
-                            placeholder={id === "ollama" ? "（Ollama 通常不需要）" : ""}
+                            placeholder={
+                              id === "ollama"
+                                ? "（Ollama 通常不需要）"
+                                : id === "mlx"
+                                  ? "（可选：仅当服务要求鉴权时填写）"
+                                  : ""
+                            }
                             disabled={id === "ollama"}
                           />
                           {id !== "ollama" ? (
@@ -819,6 +860,44 @@ export function BackendModelConfigModal(props: {
                               onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
                               placeholder="例如：gemini-3.1-pro-preview"
                             />
+
+                            <div style={{ marginTop: 8 }}>
+                              <div className="muted small" style={{ marginBottom: 6 }}>
+                                推荐模型（卡面仅用于快捷填入真实 modelId）
+                              </div>
+                              <div className="model-persona-grid">
+                                {listModelPersonas(id)
+                                  .filter((p) => geminiPresetModels.includes(p.modelId))
+                                  .map((p) => (
+                                    <button
+                                      key={p.modelId}
+                                      type="button"
+                                      className={"model-persona-card" + (cfg.model === p.modelId ? " is-on" : "")}
+                                      onClick={() => onChange(patchProviderConfig(settings, id, { model: p.modelId }))}
+                                      title={p.modelId}
+                                    >
+                                      <div className="model-persona-card-head">
+                                        <div className="model-persona-card-title">{p.title}</div>
+                                        <div className="model-persona-card-badges">
+                                          {p.tags?.slice(0, 2).map((t) => (
+                                            <span key={t} className="model-persona-badge muted small">
+                                              {t}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                      <div className="muted small">{p.subtitle}</div>
+                                      <div className="model-persona-card-desc muted small">{p.description}</div>
+                                      <div className="model-persona-card-foot muted small">
+                                        <span className="model-persona-modelid">{p.modelId}</span>
+                                        <span className="model-persona-cost">
+                                          {Array.from({ length: p.costStars ?? 3 }).fill("★").join("")}
+                                        </span>
+                                      </div>
+                                    </button>
+                                  ))}
+                              </div>
+                            </div>
 
                             <div className="backend-health">
                               <div className="backend-health-head">
@@ -1019,6 +1098,93 @@ export function BackendModelConfigModal(props: {
                               </div>
                               <p className="muted small" style={{ marginTop: 8 }}>
                                 说明：结果来源于你点击「测试该模型版本」或「一键测试全部版本」的实时请求；点击右上角「保存」后会被记住。
+                              </p>
+                            </div>
+                          </div>
+                        ) : id === "mlx" ? (
+                          <div style={{ display: "grid", gap: 10 }}>
+                            <p className="muted small" style={{ margin: 0, lineHeight: 1.65 }}>
+                              Apple <strong>MLX</strong> 在本 App 中仅通过{" "}
+                              <strong>HTTP</strong> 连接（OpenAI 兼容，一般为{" "}
+                              <code style={{ fontSize: "0.9em" }}>/v1/chat/completions</code>
+                              ）。默认 Base 为 <code style={{ fontSize: "0.9em" }}>http://127.0.0.1:8080/v1</code>
+                              ，请按你本机实际端口修改。
+                            </p>
+                            <p className="muted small" style={{ margin: 0, lineHeight: 1.65 }}>
+                              <strong>说明：</strong>用终端执行{" "}
+                              <code style={{ fontSize: "0.85em" }}>python3 -m mlx_vlm.generate …</code>{" "}
+                              只会本地下载并跑一次模型，<strong>不会</strong>被本页「检测」——没有常驻网络服务时，浏览器无法发现该模型。请另外启动带 OpenAI 兼容接口的本地服务（或换用已接入的 Ollama 等），再把服务里使用的{" "}
+                              <strong>模型 id</strong> 填到下方（与 CLI 的{" "}
+                              <code style={{ fontSize: "0.85em" }}>--model</code> 字符串可能相同，也可能以服务端为准）。
+                            </p>
+                            <input
+                              value={cfg.model}
+                              onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
+                              placeholder="例如：default 或服务返回的模型 id"
+                              style={{ width: "100%" }}
+                            />
+                            <div className="backend-provider-actions">
+                              <button
+                                type="button"
+                                className="btn small"
+                                disabled={testState.mlx.status === "testing"}
+                                onClick={() => {
+                                  setTestState((prev) => ({ ...prev, mlx: { status: "testing" } }));
+                                  void (async () => {
+                                    const model = cfg.model.trim() || "default";
+                                    try {
+                                      await testOpenAICompatibleModel({
+                                        cfg: getProviderConfig(settings, "mlx"),
+                                        model,
+                                      });
+                                      setTestState((prev) => ({ ...prev, mlx: { status: "ok", message: "连接成功" } }));
+                                      setModelHealth((h) => ({
+                                        ...h,
+                                        mlx: { ...h.mlx, [model]: { verdict: "ok", testedAt: Date.now() } },
+                                      }));
+                                      setModelHealthDirty((d) => ({ ...d, mlx: true }));
+                                    } catch (e) {
+                                      const msg = e instanceof Error ? e.message : "连接失败";
+                                      setTestState((prev) => ({ ...prev, mlx: { status: "err", message: msg } }));
+                                      setModelHealth((h) => ({
+                                        ...h,
+                                        mlx: { ...h.mlx, [model]: { verdict: "err", testedAt: Date.now() } },
+                                      }));
+                                      setModelHealthDirty((d) => ({ ...d, mlx: true }));
+                                    }
+                                  })();
+                                }}
+                              >
+                                测试当前模型
+                              </button>
+                              {testState.mlx.status === "ok" ? (
+                                <span className="backend-test backend-test--ok">可用</span>
+                              ) : null}
+                              {testState.mlx.status === "err" ? (
+                                <span className="backend-test backend-test--err">{testState.mlx.message}</span>
+                              ) : null}
+                            </div>
+                            <div className="backend-health">
+                              <div className="backend-health-head">
+                                <div style={{ fontWeight: 800 }}>本 App 可用版本（测试结果）</div>
+                                <div className="muted small">{modelHealthDirty[id] ? "（未保存）" : "（已保存）"}</div>
+                              </div>
+                              <div className="backend-health-list">
+                                {[cfg.model].filter(Boolean).map((m) => {
+                                  const r = modelHealth[id]?.[m];
+                                  const mark = r?.verdict === "ok" ? "✅" : r?.verdict === "err" ? "❌" : "—";
+                                  return (
+                                    <div key={m} className="backend-health-row">
+                                      <span className="backend-health-model">{m}</span>
+                                      <span className="backend-health-mark" aria-label={mark}>
+                                        {mark}
+                                      </span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                              <p className="muted small" style={{ marginTop: 8 }}>
+                                说明：与 Ollama 不同，MLX 无统一「检测全部本地模型」接口；请按部署文档填写 Base URL 与模型名。若浏览器报 CORS，请用同源代理或桌面端。
                               </p>
                             </div>
                           </div>
@@ -1236,6 +1402,44 @@ export function BackendModelConfigModal(props: {
                                   onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
                                   placeholder="当前默认 model"
                                 />
+
+                                <div style={{ marginTop: 8 }}>
+                                  <div className="muted small" style={{ marginBottom: 6 }}>
+                                    推荐模型
+                                  </div>
+                                  <div className="model-persona-grid">
+                                    {listModelPersonas(id)
+                                      .filter((p) => cloudPresets.includes(p.modelId))
+                                      .map((p) => (
+                                        <button
+                                          key={p.modelId}
+                                          type="button"
+                                          className={"model-persona-card" + (cfg.model === p.modelId ? " is-on" : "")}
+                                          onClick={() => onChange(patchProviderConfig(settings, id, { model: p.modelId }))}
+                                          title={p.modelId}
+                                        >
+                                          <div className="model-persona-card-head">
+                                            <div className="model-persona-card-title">{p.title}</div>
+                                            <div className="model-persona-card-badges">
+                                              {p.tags?.slice(0, 2).map((t) => (
+                                                <span key={t} className="model-persona-badge muted small">
+                                                  {t}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          </div>
+                                          <div className="muted small">{p.subtitle}</div>
+                                          <div className="model-persona-card-desc muted small">{p.description}</div>
+                                          <div className="model-persona-card-foot muted small">
+                                            <span className="model-persona-modelid">{p.modelId}</span>
+                                            <span className="model-persona-cost">
+                                              {Array.from({ length: p.costStars ?? 3 }).fill("★").join("")}
+                                            </span>
+                                          </div>
+                                        </button>
+                                      ))}
+                                  </div>
+                                </div>
                                 <div className="backend-health">
                                   <div className="backend-health-head">
                                     <div style={{ fontWeight: 800 }}>本 App 可用版本（测试结果）</div>

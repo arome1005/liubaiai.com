@@ -1,4 +1,5 @@
 import { generateWithProvider } from "./client";
+import { isLocalAiProvider } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 
@@ -16,7 +17,7 @@ export class ChapterSummaryGenerationError extends Error {
 }
 
 function assertCanSendChapterSummary(settings: AiSettings): void {
-  const cloud = settings.provider !== "ollama";
+  const cloud = !isLocalAiProvider(settings.provider);
   if (!cloud) return;
   if (!settings.privacy.consentAccepted || !settings.privacy.allowCloudProviders) {
     throw new ChapterSummaryGenerationError("请先在设置中同意云端 AI 并允许调用。");
@@ -38,7 +39,7 @@ async function generateChapterSummaryOnce(args: {
 }): Promise<string> {
   assertCanSendChapterSummary(args.settings);
   const cfg = getProviderConfig(args.settings, args.settings.provider);
-  if (args.settings.provider !== "ollama" && !cfg.apiKey?.trim()) {
+  if (!isLocalAiProvider(args.settings.provider) && !cfg.apiKey?.trim()) {
     throw new ChapterSummaryGenerationError("请先在设置中填写当前模型的 API Key。");
   }
   const body = args.chapterContent.trim();

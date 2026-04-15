@@ -6,7 +6,8 @@ import { generateChapterSummaryWithRetry } from "../ai/chapter-summary-generate"
 import { loadAiSettings } from "../ai/storage";
 import { exportBibleMarkdown, isChapterSaveConflictError, updateChapter } from "../db/repo";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
-import { formatSummaryUpdatedAt } from "../util/summary-meta";
+import { formatSummaryScope, formatSummaryUpdatedAt } from "../util/summary-meta";
+import type { AutoSummaryStatus } from "../ai/chapter-summary-auto";
 
 export function SummaryRightPanel(props: {
   workId: string;
@@ -15,6 +16,7 @@ export function SummaryRightPanel(props: {
   /** 当前章在编辑器中的正文（与列表缓存同步，供 AI 概要生成） */
   chapterEditorContent?: string;
   chapters: Chapter[];
+  autoSummaryStatus?: AutoSummaryStatus;
   onJumpToChapter: (chapterId: string) => void;
   /** 概要保存成功后合并进父级 `chapters`，以同步 `updatedAt`（步 25 乐观锁） */
   onChapterPatch?: (chapterId: string, patch: Partial<Chapter>) => void;
@@ -36,6 +38,19 @@ export function SummaryRightPanel(props: {
       .sort((a, b) => b.order - a.order)
       .slice(0, 8);
   }, [props.chapter, props.chapters]);
+
+  const autoHint = useMemo(() => {
+    const s = props.autoSummaryStatus;
+    const id = props.chapter?.id;
+    if (!s || !id) return null;
+    if ("chapterId" in s && s.chapterId !== id) return null;
+    if (s.kind === "queued") return "自动概要：排队中…";
+    if (s.kind === "running") return "自动概要：生成中…";
+    if (s.kind === "skipped") return `自动概要：已跳过（${s.reason}）`;
+    if (s.kind === "error") return `自动概要：失败（${s.message}）`;
+    if (s.kind === "ok") return `自动概要：已更新（${formatSummaryUpdatedAt(s.at) || "刚刚"}）`;
+    return null;
+  }, [props.autoSummaryStatus, props.chapter?.id]);
 
   return (
     <div className="rr-panel">
@@ -68,13 +83,20 @@ export function SummaryRightPanel(props: {
                     const t = Date.now();
                     await updateChapter(
                       props.chapter!.id,
-                      { summary: next, summaryUpdatedAt: t },
+                      {
+                        summary: next,
+                        summaryUpdatedAt: t,
+                        summaryScopeFromOrder: props.chapter!.summaryScopeFromOrder ?? props.chapter!.order,
+                        summaryScopeToOrder: props.chapter!.summaryScopeToOrder ?? props.chapter!.order,
+                      },
                       { expectedUpdatedAt: exp },
                     );
                     props.onChapterPatch?.(props.chapter!.id, {
                       summary: next,
                       updatedAt: t,
                       summaryUpdatedAt: t,
+                      summaryScopeFromOrder: props.chapter!.summaryScopeFromOrder ?? props.chapter!.order,
+                      summaryScopeToOrder: props.chapter!.summaryScopeToOrder ?? props.chapter!.order,
                     });
                   } catch (e) {
                     if (isChapterSaveConflictError(e)) {
@@ -111,7 +133,12 @@ export function SummaryRightPanel(props: {
                       const exp = props.chapter!.updatedAt;
                       await updateChapter(
                         props.chapter!.id,
-                        { summary: text, summaryUpdatedAt: t },
+                        {
+                          summary: text,
+                          summaryUpdatedAt: t,
+                          summaryScopeFromOrder: props.chapter!.order,
+                          summaryScopeToOrder: props.chapter!.order,
+                        },
                         { expectedUpdatedAt: exp },
                       );
                       setDraft(text);
@@ -119,6 +146,8 @@ export function SummaryRightPanel(props: {
                         summary: text,
                         updatedAt: t,
                         summaryUpdatedAt: t,
+                        summaryScopeFromOrder: props.chapter!.order,
+                        summaryScopeToOrder: props.chapter!.order,
                       });
                     } catch (e) {
                       if (isFirstAiGateCancelledError(e)) return;
@@ -134,6 +163,14 @@ export function SummaryRightPanel(props: {
             </div>
             <div className="muted small" style={{ marginTop: 6 }}>
               {saving ? "保存中…" : "失焦自动保存"}
+              {autoHint ? (
+                <span style={{ display: "block", marginTop: 4 }}>{autoHint}</span>
+              ) : null}
+              {formatSummaryScope(props.chapter.summaryScopeFromOrder, props.chapter.summaryScopeToOrder) ? (
+                <span style={{ display: "block", marginTop: 4 }}>
+                  {formatSummaryScope(props.chapter.summaryScopeFromOrder, props.chapter.summaryScopeToOrder)}
+                </span>
+              ) : null}
               {formatSummaryUpdatedAt(props.chapter.summaryUpdatedAt) ? (
                 <span style={{ display: "block", marginTop: 4 }}>
                   概要更新：{formatSummaryUpdatedAt(props.chapter.summaryUpdatedAt)}
@@ -186,7 +223,7 @@ export function BibleRightPanel(props: { workId: string }) {
     <div className="rr-panel">
       <div className="rr-panel-actions">
         <Link className="btn small" to={`/work/${props.workId}/bible`}>
-          打开圣经页
+          打开锦囊页
         </Link>
         <button type="button" className="btn small" onClick={() => void load()} disabled={busy}>
           {busy ? "加载中…" : md ? "刷新" : "加载"}
@@ -198,7 +235,7 @@ export function BibleRightPanel(props: { workId: string }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="rr-input"
-          placeholder="搜索圣经内容（本面板仅预览文本）"
+          placeholder="搜索锦囊内容（本面板仅预览文本）"
         />
       ) : null}
       {md ? (
@@ -216,7 +253,7 @@ export function BibleRightPanel(props: { workId: string }) {
           style={{ width: "100%", resize: "vertical" }}
         />
       ) : (
-        <p className="muted small">点击“加载”把圣经导出为 Markdown 预览（会根据上下文上限截断）。</p>
+        <p className="muted small">点击“加载”把本书锦囊导出为 Markdown 预览（会根据上下文上限截断）。</p>
       )}
     </div>
   );

@@ -13,4 +13,4 @@
 
 ## 用户文档：备份 → 升级 → 合并导入
 
-- 主路径见 **`docs/技术说明.md`** 中「导出 / 备份包」「`importAllDataMerge`」与 README；大版本升级时同步检查 README 与备份恢复段落是否仍可执行。
+- 主路径见 `**docs/技术说明.md`** 中「导出 / 备份包」「`importAllDataMerge`」与 README；大版本升级时同步检查 README 与备份恢复段落是否仍可执行。

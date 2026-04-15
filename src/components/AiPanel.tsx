@@ -1,22 +1,33 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { exportBibleMarkdown } from "../db/repo";
 import type { BibleGlossaryTerm, ReferenceExcerpt, ReferenceSearchHit, Work, Chapter } from "../db/types";
 import { approxRoughTokenCount } from "../ai/approx-tokens";
 import { addSessionApproxTokens, readSessionApproxTokens, resetSessionApproxTokens } from "../ai/sidepanel-session-tokens";
+import { addTodayApproxTokens, readTodayApproxTokens } from "../ai/daily-approx-tokens";
 import {
   buildWritingSidepanelInjectBlocks,
   buildWritingSidepanelMaterialsSummaryLines,
   buildWritingSidepanelMessages,
+  CHAPTER_BIBLE_FIELD_LABELS,
+  defaultChapterBibleInjectMask,
   validateDrawCardRequest,
+  type ChapterBibleFieldKey,
   type WritingSidepanelAssembleInput,
   type WritingSkillMode,
   type WritingStyleSampleSlice,
   type WritingGlossaryTermSlice,
 } from "../ai/assemble-context";
+import {
+  defaultWorkBibleSectionMask,
+  filterWorkBibleMarkdownBySections,
+  WORK_BIBLE_SECTION_HEADERS,
+} from "../ai/work-bible-sections";
 import { generateWithProviderStream, isFirstAiGateCancelledError } from "../ai/client";
 import { getProviderConfig, loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiChatMessage, AiProviderConfig, AiProviderId, AiSettings } from "../ai/types";
-import { formatInjectionConfirmDialogText, resolveInjectionConfirmPrompt } from "../util/ai-injection-confirm";
+import { resolveInjectionConfirmPrompt } from "../util/ai-injection-confirm";
+import { CostGateModal, type CostGatePayload } from "./CostGateModal";
 import {
   buildContextDegradeOverrides,
   errorSuggestsContextDegrade,
@@ -25,6 +36,9 @@ import {
 import { referenceReaderHref } from "../util/readUtf8TextFile";
 import { normalizeWorkTagList, workTagsToProfileText } from "../util/work-tags";
 import { computeToneDriftHints } from "../util/tone-drift-hint";
+import { cosineDistance } from "../util/vector-math";
+import { readEmbeddingCache, writeEmbeddingCache } from "../util/embedding-cache";
+import { embedWithProvider } from "../ai/client";
 import {
   DEFAULT_WRITING_RAG_SOURCES,
   isRuntimeRagHit,
@@ -34,7 +48,84 @@ import {
 import { AiDraftMergeDialog, type AiDraftMergePayload } from "./AiDraftMergeDialog";
 import { AiInlineErrorNotice } from "./AiInlineErrorNotice";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
+import { PromptPicker, PROMPT_PICKER_WRITING_TYPES, PROMPT_PICKER_WRITER_SLOTS } from "./PromptPicker";
+import { renderPromptTemplate } from "../util/render-prompt-template";
 import { cn } from "../lib/utils";
+import { listModelPersonas } from "../util/model-personas";
+import { aiPanelDraftStorageKey } from "../util/ai-panel-draft";
+import { isLocalAiProvider } from "../ai/local-provider";
+
+function providerLogoImgSrc(p: AiProviderId): string | null {
+  switch (p) {
+    case "openai":
+      return "/logos/openai.png";
+    case "anthropic":
+      return "/logos/claude.png";
+    case "gemini":
+      return "/logos/gemini.png";
+    case "ollama":
+    case "mlx":
+      return "/logos/ollama.png";
+    case "doubao":
+      return "/logos/doubao.png";
+    case "zhipu":
+      return "/logos/zhipu.png";
+    case "kimi":
+      return "/logos/kimi.png";
+    case "xiaomi":
+      return "/logos/xiaomi.png";
+    default:
+      return null;
+  }
+}
+
+function providerLogoFallbackText(p: AiProviderId): string {
+  switch (p) {
+    case "openai":
+      return "";
+    case "anthropic":
+      return "雨";
+    case "gemini":
+      return "云";
+    case "doubao":
+      return "豆";
+    case "zhipu":
+      return "谱";
+    case "kimi":
+      return "月";
+    case "xiaomi":
+      return "米";
+    case "ollama":
+    case "mlx":
+      return "龙";
+    default:
+      return "·";
+  }
+}
+
+/** 单一视觉：PNG 或一字回退，避免与侧栏列表双行文字错位 */
+function AiProviderLogo(props: { provider: AiProviderId }) {
+  const p = props.provider;
+  const imgSrc = providerLogoImgSrc(p);
+  const text = providerLogoFallbackText(p);
+  const [imgFailed, setImgFailed] = useState(false);
+  const showImg = Boolean(imgSrc) && !imgFailed;
+
+  return (
+    <span aria-hidden className="provider-logo" data-provider={p} title={p}>
+      {showImg ? (
+        <img
+          src={imgSrc!}
+          alt=""
+          className="provider-logo-img"
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <span className="provider-logo-fallback">{text || "·"}</span>
+      )}
+    </span>
+  );
+}
 
 export function AiPanel(props: {
   onClose: () => void;
@@ -50,7 +141,7 @@ export function AiPanel(props: {
   drawRunTick?: number;
   lastDrawConsumedTick?: number;
   onDrawRunConsumed?: (tick: number) => void;
-  /** 圣经「提示词」跳转：一次性覆盖侧栏「额外要求」 */
+  /** 锦囊「提示词」跳转：一次性覆盖侧栏「额外要求」 */
   prefillUserHint?: string | null;
   onPrefillUserHintConsumed?: () => void;
   workId: string;
@@ -66,7 +157,7 @@ export function AiPanel(props: {
     characterStateText: string;
   };
   glossaryTerms: BibleGlossaryTerm[];
-  /** §11 步 43：圣经「笔感」页维护的参考段落 */
+  /** §11 步 43：锦囊「笔感」页维护的参考段落 */
   styleSampleSlices: WritingStyleSampleSlice[];
   workStyle: { pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string };
   onUpdateWorkStyle: (patch: Partial<{ pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string }>) => void;
@@ -76,6 +167,8 @@ export function AiPanel(props: {
   appendToEnd: (text: string) => void;
   replaceSelection: (text: string) => void;
 }) {
+  const navigate = useNavigate();
+
   const GEMINI_MIND = {
     初见: "gemini-3.1-flash-lite-preview",
     入微: "gemini-3-flash-preview",
@@ -102,106 +195,6 @@ export function AiPanel(props: {
     if (band === "沉稳") return { left: "沉稳", right: "意兴渐起", center };
     if (band === "意兴渐起") return { left: "沉稳", right: "灵感喷发", center };
     return { left: "意兴渐起", right: "灵感喷发", center };
-  }
-
-  function ProviderLogo(props: { provider: AiProviderId }) {
-    const p = props.provider;
-    const imgSrc =
-      p === "openai"
-        ? "/logos/openai.png"
-        : p === "anthropic"
-          ? "/logos/claude.png"
-          : p === "gemini"
-            ? "/logos/gemini.png"
-            : p === "ollama"
-              ? "/logos/ollama.png"
-              : p === "doubao"
-                ? "/logos/doubao.png"
-                : p === "zhipu"
-                  ? "/logos/zhipu.png"
-                  : p === "kimi"
-                    ? "/logos/kimi.png"
-                    : p === "xiaomi"
-                      ? "/logos/xiaomi.png"
-                      : null;
-    const text =
-      p === "openai"
-        ? ""
-        : p === "anthropic"
-          ? "雨"
-          : p === "gemini"
-            ? "云"
-            : p === "doubao"
-              ? "豆"
-              : p === "zhipu"
-                ? "谱"
-                : p === "kimi"
-                  ? "月"
-                  : p === "xiaomi"
-                    ? "米"
-                    : "龙";
-    return (
-      <span
-        aria-hidden
-        className="provider-logo"
-        data-provider={p}
-        title={p}
-      >
-        {imgSrc ? (
-          <img
-            src={imgSrc}
-            alt=""
-            width={22}
-            height={22}
-            style={{ display: "block", width: 22, height: 22, objectFit: "contain" }}
-            onError={(e) => {
-              // Fallback to text badge if image not present.
-              (e.currentTarget as HTMLImageElement).style.display = "none";
-            }}
-          />
-        ) : null}
-        {p === "doubao" ? (
-          // Minimal linear flame icon (uses currentColor)
-          <svg
-            xmlns="http://www.w3.org/2000/svg"
-            viewBox="0 0 24 24"
-            width="16"
-            height="16"
-            fill="none"
-            aria-hidden
-            focusable="false"
-            style={{ display: "block" }}
-          >
-            <path
-              d="M13 3c.3 2.1-.9 3.6-2.2 5C9.7 9.2 9 10.2 9 12a3 3 0 0 0 6 0c0-1.2-.3-2.1-1-3.2.1 2.1-1.1 3.2-2.5 4.4"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M12 21a7 7 0 0 1-7-7c0-2.6 1.4-4.7 3.2-6.6"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            <path
-              d="M12 21a7 7 0 0 0 7-7c0-2.3-1.1-4.3-2.6-6"
-              stroke="currentColor"
-              strokeWidth="1.7"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        ) : imgSrc ? (
-          // If image failed to load, it will be hidden by onError, and we show text.
-          <span aria-hidden>{text}</span>
-        ) : (
-          text
-        )}
-      </span>
-    );
   }
 
   function Meter(props: { value: number; max?: number }) {
@@ -249,11 +242,11 @@ export function AiPanel(props: {
       label: "见山",
       subtitle: "逻辑之宗 · 纲举目张",
       tip: "见山（OpenAI）",
-      quote: "“初看是山，看久了还是那座稳健的大山。”",
+      quote: '"初看是山，看久了还是那座稳健的大山。"',
       core:
         "逻辑之宗，纲举目张。指令遵循极强，如利刃破竹，最擅长梳理宏大的世界观设定与严密的剧情逻辑。",
       meters: { prose: 5, follow: 5, cost: 2 },
-      note: "适合“一览众山小”的逻辑架构，若追求极致的辞藻修饰，建议配合“听雨”使用。",
+      note: "适合\"一览众山小\"的逻辑架构，若追求极致的辞藻修饰，建议配合\"听雨\"使用。",
     },
     anthropic: {
       label: "听雨",
@@ -261,9 +254,9 @@ export function AiPanel(props: {
       tip: "听雨（Claude）",
       quote: "“如檐下听雨，文字绵密入骨，最懂人心。”",
       core:
-        "辞藻丰盈，情感细腻。像一位共情力极强的老友，成文质感极佳，自带一种天然的去“AI味”滤镜，是描写人物内心与凄美画面的首选。",
+        "辞藻丰盈，情感细腻。像一位共情力极强的老友，成文质感极佳，自带一种天然的去\"AI味\"滤镜，是描写人物内心与凄美画面的首选。",
       meters: { prose: 5, follow: 4, cost: 3 },
-      note: "如遇敏感剧情可能像雨天一样“多愁善感”而断更，建议微调措辞或跳过该段落。",
+      note: "如遇敏感剧情可能像雨天一样\"多愁善感\"而断更，建议微调措辞或跳过该段落。",
     },
     gemini: {
       label: "观云",
@@ -271,19 +264,29 @@ export function AiPanel(props: {
       tip: "观云（Gemini）",
       quote: "“坐看云起，奇思妙想如漫天流云，不可捉摸。”",
       core:
-        "创意如云，变幻万千。拥有惊人的上下文联想能力，最擅长在陷入瓶颈时为你提供打破常规的“神来之笔”，让剧情走向峰回路转。",
+        "创意如云，变幻万千。拥有惊人的上下文联想能力，最擅长在陷入瓶颈时为你提供打破常规的\"神来之笔\"，让剧情走向峰回路转。",
       meters: { prose: 4, follow: 3, cost: 2 },
-      note: "云海辽阔，长文推理可能需要稍作等待，建议在开启“高思考预算”时保持耐心。",
+      note: "云海辽阔，长文推理可能需要稍作等待，建议在开启\"高思考预算\"时保持耐心。",
     },
     ollama: {
       label: "潜龙",
-      subtitle: "根植本地 · 私密纯粹",
+      subtitle: "本地 · Ollama",
       tip: "潜龙（Ollama）",
       quote: "“藏龙于渊，不假外求，深藏不露的底气。”",
       core:
         "根植本地，稳如泰山。不依赖云端，私密且纯粹。虽然平时深潜不出，但在处理基础创作任务时，有着龙跃于渊般的稳健爆发力。",
       meters: { prose: 3, follow: 3, cost: 1, costText: "极低消耗" },
       note: "本地运行受限于设备性能，适合快速草拟或在离线环境下作为创作基座。",
+    },
+    mlx: {
+      label: "潜龙",
+      subtitle: "本地 · MLX",
+      tip: "潜龙（Apple MLX）",
+      quote: "“藏龙于渊，不假外求，深藏不露的底气。”",
+      core:
+        "根植本地，稳如泰山。通过 Apple MLX 在本机推理，私密且纯粹；请确保已启动兼容 OpenAI 接口的本地服务并正确填写 Base URL。",
+      meters: { prose: 3, follow: 3, cost: 1, costText: "极低消耗" },
+      note: "MLX 的模型名与端口以你的部署为准；浏览器若遇 CORS 请用 dev 代理或桌面端。",
     },
     doubao: {
       label: "燎原",
@@ -311,7 +314,7 @@ export function AiPanel(props: {
       tip: "Kimi（Moonshot）",
       quote: "“月色入户，清辉满纸。”",
       core:
-        "Kimi 擅长在长上下文里保持线索不断裂，适合需要“带着前文记忆”续写与扩写的场景；流式输出与本 App 的生成体验契合。",
+        "Kimi 擅长在长上下文里保持线索不断裂，适合需要\"带着前文记忆\"续写与扩写的场景；流式输出与本 App 的生成体验契合。",
       meters: { prose: 4, follow: 4, cost: 3 },
       note: "默认 Base URL 为 Moonshot 文档中的 v1 根路径；模型名以控制台为准。",
     },
@@ -340,7 +343,7 @@ export function AiPanel(props: {
     }
     setUserHint(t);
     props.onPrefillUserHintConsumed?.();
-    // 仅响应圣经页注入的一次性 state，不依赖 callback 引用
+    // 仅响应锦囊页注入的一次性 state，不依赖 callback 引用
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onPrefillUserHintConsumed intentionally omitted
   }, [props.prefillUserHint]);
   const [storyBackground, setStoryBackground] = useState("");
@@ -351,13 +354,28 @@ export function AiPanel(props: {
   const [includeLinkedExcerpts, setIncludeLinkedExcerpts] = useState(true);
   const [includeRecentSummaries, setIncludeRecentSummaries] = useState(true);
   const [recentN, setRecentN] = useState(3);
+  /** 邻章概要：章 id → 是否纳入（步 9 勾选子集） */
+  const [neighborSummaryIncludeById, setNeighborSummaryIncludeById] = useState<Record<string, boolean>>({});
+  const [chapterBibleInjectMask, setChapterBibleInjectMask] = useState(() => defaultChapterBibleInjectMask());
+  const [workBibleSectionMask, setWorkBibleSectionMask] = useState(() => defaultWorkBibleSectionMask());
   const [currentContextMode, setCurrentContextMode] = useState<"full" | "summary" | "selection" | "none">("full");
   const [sessionBudgetUiTick, setSessionBudgetUiTick] = useState(0);
+  /** P1-04：今日用量刷新触发器（发送完成后 +1） */
+  const [dailyUsageTick, setDailyUsageTick] = useState(0);
+  /** P1-04：成本门控弹窗 pending（deferred-promise 模式） */
+  const [costGatePending, setCostGatePending] = useState<(CostGatePayload & { resolve: (ok: boolean) => void }) | null>(null);
   const [busy, setBusy] = useState(false);
   const sessionTokensUsed = useMemo(() => {
     void sessionBudgetUiTick;
     return settings.aiSessionApproxTokenBudget > 0 ? readSessionApproxTokens() : 0;
   }, [settings.aiSessionApproxTokenBudget, sessionBudgetUiTick, busy]);
+  /** P1-04：今日已用 tokens（始终展示，随 dailyUsageTick / busy 变化刷新） */
+  const todayTokensUsed = useMemo(() => {
+    void dailyUsageTick;
+    void busy;
+    return readTodayApproxTokens();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dailyUsageTick, busy]);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [biblePreview, setBiblePreview] = useState<{ text: string; chars: number } | null>(null);
@@ -367,6 +385,8 @@ export function AiPanel(props: {
   const [ragK, setRagK] = useState(6);
   const [ragHits, setRagHits] = useState<ReferenceSearchHit[]>([]);
   const [ragLoading, setRagLoading] = useState(false);
+  /** 用户单独取消的命中 chunkId 集合；换 query 时自动清空 */
+  const [ragExcluded, setRagExcluded] = useState<ReadonlySet<string>>(new Set());
   const [ragWorkSources, setRagWorkSources] = useState<WritingRagSources>(() => {
     try {
       const raw = localStorage.getItem("liubai:ragWorkSources:v1");
@@ -384,6 +404,9 @@ export function AiPanel(props: {
       /* ignore */
     }
   }, [ragWorkSources]);
+
+  // 换关键词时清空单条排除集合
+  useEffect(() => { setRagExcluded(new Set()); }, [ragQuery]);
   const abortRef = useRef<AbortController | null>(null);
   const lastReqRef = useRef<{
     provider: AiProviderId;
@@ -396,8 +419,7 @@ export function AiPanel(props: {
   const [mergePayload, setMergePayload] = useState<AiDraftMergePayload | null>(null);
   const skipDraftPersistRef = useRef(false);
 
-  const draftStorageKey =
-    props.chapter && props.workId ? `liubai:aiPanelDraft:v1:${props.workId}:${props.chapter.id}` : null;
+  const draftStorageKey = props.chapter && props.workId ? aiPanelDraftStorageKey(props.workId, props.chapter.id) : null;
 
   useLayoutEffect(() => {
     if (!draftStorageKey) {
@@ -430,7 +452,7 @@ export function AiPanel(props: {
 
   const providerCfg = useMemo(() => getProviderConfig(settings, settings.provider), [settings]);
 
-  const isCloudProvider = settings.provider !== "ollama";
+  const isCloudProvider = !isLocalAiProvider(settings.provider);
   const cloudAllowed = !isCloudProvider
     ? true
     : settings.privacy.consentAccepted && settings.privacy.allowCloudProviders;
@@ -444,7 +466,7 @@ export function AiPanel(props: {
   }, [providerPickerOpen]);
 
   useEffect(() => {
-    if (pickerActive === "ollama") setModelPickerTune(null);
+    if (isLocalAiProvider(pickerActive)) setModelPickerTune(null);
     else if (pickerActive !== "gemini" && modelPickerTune === "gear") setModelPickerTune(null);
   }, [pickerActive, modelPickerTune]);
 
@@ -460,6 +482,80 @@ export function AiPanel(props: {
       draftText: draft,
     });
   }, [settings.toneDriftHintEnabled, draft, props.workStyle.bannedPhrases, props.workStyle.styleAnchor]);
+
+  const [toneEmbedHint, setToneEmbedHint] = useState<string | null>(null);
+  const [toneEmbedBusy, setToneEmbedBusy] = useState(false);
+  const [toneEmbedErr, setToneEmbedErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!settings.toneDriftHintEnabled) {
+      setToneEmbedHint(null);
+      setToneEmbedErr(null);
+      setToneEmbedBusy(false);
+      return;
+    }
+    const provider = settings.provider;
+    if (isLocalAiProvider(provider) || !cloudAllowed) {
+      setToneEmbedHint(null);
+      setToneEmbedErr(null);
+      setToneEmbedBusy(false);
+      return;
+    }
+    const embModel = (providerCfg.embeddingModel ?? "").trim();
+    const anchor = (props.workStyle.styleAnchor ?? "").trim();
+    const t = draft.trim();
+    if (!embModel || anchor.length < 24 || t.length < 24) {
+      setToneEmbedHint(null);
+      setToneEmbedErr(null);
+      setToneEmbedBusy(false);
+      return;
+    }
+
+    let cancelled = false;
+    const ac = new AbortController();
+    setToneEmbedBusy(true);
+    setToneEmbedErr(null);
+    void (async () => {
+      try {
+        const aText = anchor.slice(0, 2400);
+        const bText = t.slice(0, 2400);
+        const cachedA = readEmbeddingCache(provider, embModel, aText);
+        const cachedB = readEmbeddingCache(provider, embModel, bText);
+        const a =
+          cachedA ??
+          (await embedWithProvider({ provider, config: providerCfg, input: aText, signal: ac.signal })).embedding;
+        const b =
+          cachedB ??
+          (await embedWithProvider({ provider, config: providerCfg, input: bText, signal: ac.signal })).embedding;
+        if (!cachedA) writeEmbeddingCache(provider, embModel, aText, a);
+        if (!cachedB) writeEmbeddingCache(provider, embModel, bText, b);
+        const dist = cosineDistance(a, b);
+        if (dist == null) throw new Error("embedding 距离计算失败");
+
+        // 经验阈值：>0.22 认为差异明显；>0.30 强提示。仅提示不阻断。
+        const line =
+          dist >= 0.3
+            ? `标杆段距离偏大（cos 距离≈${dist.toFixed(2)}），草稿调性可能明显偏离文风锚点。`
+            : dist >= 0.22
+              ? `标杆段距离略大（cos 距离≈${dist.toFixed(2)}），建议对照文风锚点检查节奏/用词。`
+              : null;
+        if (cancelled) return;
+        setToneEmbedHint(line);
+      } catch (e) {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : "embedding 计算失败";
+        setToneEmbedErr(msg);
+        setToneEmbedHint(null);
+      } finally {
+        if (!cancelled) setToneEmbedBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 该 effect 仅关心调性提示相关输入
+  }, [settings.toneDriftHintEnabled, cloudAllowed, providerCfg, props.workStyle.styleAnchor, draft]);
 
   const sessionBudget = settings.aiSessionApproxTokenBudget;
 
@@ -480,26 +576,57 @@ export function AiPanel(props: {
     return out.slice(0, 24);
   }, [draft, props.glossaryTerms]);
 
-  const recentSummaryText = useMemo(() => {
-    if (!props.chapter) return "";
-    if (!includeRecentSummaries) return "";
+  const neighborSummaryPoolChapters = useMemo(() => {
+    if (!props.chapter) return [];
     const n = Math.max(0, Math.min(12, recentN));
-    if (n <= 0) return "";
+    if (n <= 0) return [];
     const curOrder = props.chapter.order;
-    const prev = [...props.chapters]
+    return [...props.chapters]
       .filter((c) => c.order < curOrder)
       .sort((a, b) => b.order - a.order)
       .slice(0, n)
-      .reverse();
-    if (prev.length === 0) return "";
+      .reverse()
+      .filter((c) => (c.summary ?? "").trim());
+  }, [props.chapter, props.chapters, recentN]);
+
+  useEffect(() => {
+    const ids = new Set(neighborSummaryPoolChapters.map((c) => c.id));
+    setNeighborSummaryIncludeById((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const id of ids) {
+        next[id] = prev[id] !== false;
+      }
+      return next;
+    });
+  }, [neighborSummaryPoolChapters]);
+
+  useEffect(() => {
+    setChapterBibleInjectMask(defaultChapterBibleInjectMask());
+  }, [props.chapter?.id]);
+
+  useEffect(() => {
+    setWorkBibleSectionMask(defaultWorkBibleSectionMask());
+  }, [props.workId]);
+
+  const neighborSummaryPoolCount = neighborSummaryPoolChapters.length;
+  const neighborSummaryIncludedCount = useMemo(
+    () => neighborSummaryPoolChapters.filter((c) => neighborSummaryIncludeById[c.id] !== false).length,
+    [neighborSummaryPoolChapters, neighborSummaryIncludeById],
+  );
+
+  const recentSummaryText = useMemo(() => {
+    if (!props.chapter) return "";
+    if (!includeRecentSummaries) return "";
+    if (neighborSummaryPoolChapters.length === 0) return "";
     const lines: string[] = [];
-    for (const c of prev) {
+    for (const c of neighborSummaryPoolChapters) {
+      if (neighborSummaryIncludeById[c.id] === false) continue;
       const s = (c.summary ?? "").trim();
       if (!s) continue;
       lines.push(`## ${c.title}`, s, "");
     }
     return lines.join("\n");
-  }, [props.chapter, props.chapters, includeRecentSummaries, recentN]);
+  }, [props.chapter, includeRecentSummaries, neighborSummaryPoolChapters, neighborSummaryIncludeById]);
 
   const skillPresetText = useMemo(() => {
     if (skillPreset === "tight") return "写作技巧：更紧凑、减少解释性文字，多用具体动作与感官细节；避免空泛形容。";
@@ -549,13 +676,19 @@ export function AiPanel(props: {
       isCloudProvider,
       privacy: settings.privacy,
       includeBible: settings.includeBible,
-      bibleMarkdown: biblePreview?.text ?? "",
+      bibleMarkdown:
+        settings.includeBible && biblePreview?.text
+          ? filterWorkBibleMarkdownBySections(biblePreview.text, workBibleSectionMask)
+          : "",
+      chapterBibleInjectMask,
+      workBibleSectionMask,
+      neighborSummaryIncludedCount,
       recentSummaryText,
       includeRecentSummaries,
       ragEnabled,
       ragQuery,
       ragK,
-      ragHits,
+      ragHits: ragHits.filter((h) => !ragExcluded.has(h.chunkId)),
       ragSources: ragWorkSources,
       chapterContent: props.chapterContent,
       chapterSummary: props.chapter.summary,
@@ -583,12 +716,16 @@ export function AiPanel(props: {
     settings.includeBible,
     isCloudProvider,
     biblePreview?.text,
+    workBibleSectionMask,
+    chapterBibleInjectMask,
+    neighborSummaryIncludedCount,
     recentSummaryText,
     includeRecentSummaries,
     ragEnabled,
     ragQuery,
     ragK,
     ragHits,
+    ragExcluded,
     ragWorkSources,
     props.chapterContent,
     props.chapter?.summary,
@@ -645,6 +782,10 @@ export function AiPanel(props: {
       tagCount,
       styleSampleCount: styleSampleCountForSummary,
       glossaryTermCount: glossaryTermCountForSummary,
+      neighborSummaryPoolCount,
+      neighborSummaryIncludedCount,
+      chapterBibleInjectMask,
+      workBibleSectionMask,
       approxInjectChars,
       approxInjectTokens,
     });
@@ -675,6 +816,10 @@ export function AiPanel(props: {
     tagCount,
     styleSampleCountForSummary,
     glossaryTermCountForSummary,
+    neighborSummaryPoolCount,
+    neighborSummaryIncludedCount,
+    chapterBibleInjectMask,
+    workBibleSectionMask,
   ]);
 
   function updateSettings(patch: Partial<AiSettings>) {
@@ -750,23 +895,27 @@ export function AiPanel(props: {
           ragWorkSources.workBibleExport &&
           (!isCloudProvider || settings.privacy.allowRagSnippets);
 
-        let bible = "";
+        let bibleRaw = "";
         const needBibleFull = effIncludeBible && (!isCloudProvider || settings.privacy.allowBible);
         if (needBibleFull || needBibleForRagChunks) {
           if (needBibleFull) {
             try {
               setBibleLoading(true);
-              bible = await exportBibleMarkdown(props.workId);
-              setBiblePreview({ text: bible, chars: bible.length });
+              bibleRaw = await exportBibleMarkdown(props.workId);
+              setBiblePreview({ text: bibleRaw, chars: bibleRaw.length });
             } finally {
               setBibleLoading(false);
             }
           } else {
-            bible = await exportBibleMarkdown(props.workId);
+            bibleRaw = await exportBibleMarkdown(props.workId);
           }
         }
+        const bibleForPrompt =
+          effIncludeBible && bibleRaw.trim()
+            ? filterWorkBibleMarkdownBySections(bibleRaw, workBibleSectionMask)
+            : "";
 
-        let ragHitsForRequest: ReferenceSearchHit[] = effRag ? ragHits : [];
+        let ragHitsForRequest: ReferenceSearchHit[] = effRag ? ragHits.filter((h) => !ragExcluded.has(h.chunkId)) : [];
         if (effRag && (!isCloudProvider || settings.privacy.allowRagSnippets) && qRag) {
           try {
             setRagLoading(true);
@@ -778,10 +927,10 @@ export function AiPanel(props: {
               chapters: props.chapters,
               progressCursorChapterId: props.work.progressCursor,
               excludeManuscriptChapterId: props.chapter?.id ?? null,
-              bibleMarkdownOverride: bible.trim() ? bible : undefined,
+              bibleMarkdownOverride: bibleRaw.trim() ? bibleRaw : undefined,
             });
             setRagHits(hits);
-            ragHitsForRequest = hits;
+            ragHitsForRequest = hits.filter((h) => !ragExcluded.has(h.chunkId));
           } finally {
             setRagLoading(false);
           }
@@ -801,6 +950,8 @@ export function AiPanel(props: {
           characters,
           relations,
           chapterBible: props.chapterBible,
+          chapterBibleInjectMask,
+          workBibleSectionMask,
           skillPresetText,
           includeLinkedExcerpts: effLinked,
           linkedExcerpts: linkedForAssemble,
@@ -808,9 +959,10 @@ export function AiPanel(props: {
           isCloudProvider,
           privacy: settings.privacy,
           includeBible: effIncludeBible,
-          bibleMarkdown: bible,
+          bibleMarkdown: bibleForPrompt,
           recentSummaryText: recentForAssemble,
           includeRecentSummaries: effRecent,
+          neighborSummaryIncludedCount,
           ragEnabled: effRag,
           ragQuery,
           ragK,
@@ -834,21 +986,64 @@ export function AiPanel(props: {
           effIncludeBible &&
           isCloudProvider &&
           settings.privacy.allowBible &&
-          bible.trim().length > 0;
+          bibleForPrompt.trim().length > 0;
         const injPrompt = resolveInjectionConfirmPrompt({
           messages,
           settings,
           willSendBibleToCloud,
         });
-        if (injPrompt.shouldPrompt && !window.confirm(formatInjectionConfirmDialogText(injPrompt))) {
-          return;
+        if (injPrompt.shouldPrompt) {
+          const ok = await new Promise<boolean>((resolve) => {
+            setCostGatePending({
+              reasons: injPrompt.reasons,
+              tokensApprox: injPrompt.tokensApprox,
+              dailyUsed: readTodayApproxTokens(),
+              dailyBudget: settings.dailyTokenBudget,
+              triggerLabel: "注入量确认",
+              resolve,
+            });
+          });
+          if (!ok) return;
         }
       }
 
       const sessionBudgetCap = settings.aiSessionApproxTokenBudget;
-      let requestTokApprox = 0;
+      const requestTokApprox = messages.reduce((sum, m) => sum + approxRoughTokenCount(m.content), 0);
+
+      // P1-04：单次调用预警（singleCallWarnTokens）—— 低于 injectConfirmOnOversizeTokens 才生效
+      if (settings.singleCallWarnTokens > 0 && requestTokApprox >= settings.singleCallWarnTokens) {
+        const ok = await new Promise<boolean>((resolve) => {
+          setCostGatePending({
+            reasons: [`本次请求粗估约 ${requestTokApprox.toLocaleString()} tokens，已超过单次预警阈值 ${settings.singleCallWarnTokens.toLocaleString()}。`],
+            tokensApprox: requestTokApprox,
+            dailyUsed: readTodayApproxTokens(),
+            dailyBudget: settings.dailyTokenBudget,
+            triggerLabel: "单次调用预警",
+            resolve,
+          });
+        });
+        if (!ok) return;
+      }
+
+      // P1-04：日预算超出预警
+      if (settings.dailyTokenBudget > 0) {
+        const todayUsed = readTodayApproxTokens();
+        if (todayUsed + requestTokApprox > settings.dailyTokenBudget) {
+          const ok = await new Promise<boolean>((resolve) => {
+            setCostGatePending({
+              reasons: [`今日累计（${todayUsed.toLocaleString()} tokens）加本次（约 ${requestTokApprox.toLocaleString()} tokens）将超过日预算 ${settings.dailyTokenBudget.toLocaleString()} tokens。`],
+              tokensApprox: requestTokApprox,
+              dailyUsed: todayUsed,
+              dailyBudget: settings.dailyTokenBudget,
+              triggerLabel: "日预算预警",
+              resolve,
+            });
+          });
+          if (!ok) return;
+        }
+      }
+
       if (sessionBudgetCap > 0) {
-        requestTokApprox = messages.reduce((sum, m) => sum + approxRoughTokenCount(m.content), 0);
         const used = readSessionApproxTokens();
         if (used + requestTokApprox > sessionBudgetCap) {
           setError(
@@ -865,16 +1060,16 @@ export function AiPanel(props: {
         messages,
         signal: ac.signal,
         onDelta: (d) => setDraft((prev) => prev + d),
-        temperature: usedProvider !== "ollama" ? settings.geminiTemperature : undefined,
+        temperature: !isLocalAiProvider(usedProvider) ? settings.geminiTemperature : undefined,
       });
       if (!draft.trim() && (r.text ?? "").trim()) {
         setDraft((r.text ?? "").trim());
       }
-      if (sessionBudgetCap > 0) {
-        const outTok = approxRoughTokenCount((r.text ?? "").trim());
-        addSessionApproxTokens(requestTokApprox + Math.max(0, outTok));
-        setSessionBudgetUiTick((x) => x + 1);
-      }
+      const outTok = approxRoughTokenCount((r.text ?? "").trim());
+      addSessionApproxTokens(requestTokApprox + Math.max(0, outTok));
+      addTodayApproxTokens(requestTokApprox + Math.max(0, outTok));
+      setSessionBudgetUiTick((x) => x + 1);
+      setDailyUsageTick((x) => x + 1);
     } catch (e) {
       if (isFirstAiGateCancelledError(e)) return;
       const aborted = e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message));
@@ -942,7 +1137,7 @@ export function AiPanel(props: {
       </div>
 
       <div className="ai-panel-body-stack">
-        <section className="ai-panel-section" aria-labelledby="ai-panel-model-h">
+        <section className="ai-panel-section card" aria-labelledby="ai-panel-model-h">
           <h3 id="ai-panel-model-h" className="ai-panel-section-title">
             模型
           </h3>
@@ -954,7 +1149,7 @@ export function AiPanel(props: {
               title={PROVIDER_UI[settings.provider]?.tip ?? ""}
               onClick={() => setProviderPickerOpen(true)}
             >
-              <ProviderLogo provider={settings.provider} />
+              <AiProviderLogo provider={settings.provider} />
               <span>{PROVIDER_UI[settings.provider]?.label ?? settings.provider}</span>
             </button>
           </div>
@@ -988,9 +1183,21 @@ export function AiPanel(props: {
           <div className="model-picker model-picker--dialog">
             <div className="model-picker-body">
               <div className="model-picker-left" role="tablist" aria-label="模型列表">
-                {(["openai", "anthropic", "gemini", "doubao", "zhipu", "kimi", "xiaomi", "ollama"] as AiProviderId[]).map((id) => {
+                {(
+                  [
+                    "openai",
+                    "anthropic",
+                    "gemini",
+                    "doubao",
+                    "zhipu",
+                    "kimi",
+                    "xiaomi",
+                    "ollama",
+                    "mlx",
+                  ] as AiProviderId[]
+                ).map((id) => {
                   const ui = PROVIDER_UI[id];
-                  const isCloud = id !== "ollama";
+                  const isCloud = !isLocalAiProvider(id);
                   const disabled = isCloud && !(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);
                   const active = pickerActive === id;
                   return (
@@ -1000,23 +1207,19 @@ export function AiPanel(props: {
                       role="tab"
                       data-provider={id}
                       aria-selected={active}
-                      aria-disabled={disabled}
                       className={
                         "model-picker-item" +
                         (active ? " is-active" : "") +
                         (disabled ? " is-disabled" : "")
                       }
-                      title={disabled ? "去设置开启" : ui.tip}
-                      onClick={() => {
-                        if (disabled) {
-                          setProviderPickerOpen(false);
-                          window.location.href = "/settings#ai-privacy";
-                          return;
-                        }
-                        setPickerActive(id);
-                      }}
+                      title={
+                        disabled
+                          ? `${ui.tip}（云端未开启：可查看介绍，确认使用请点右下角「使用」）`
+                          : ui.tip
+                      }
+                      onClick={() => setPickerActive(id)}
                     >
-                      <ProviderLogo provider={id} />
+                      <AiProviderLogo provider={id} />
                       <span className="model-picker-item-main">
                         <span className="model-picker-item-title">{ui.label}</span>
                         <span className="model-picker-item-sub muted small">{ui.subtitle}</span>
@@ -1029,13 +1232,13 @@ export function AiPanel(props: {
 
               {(() => {
                 const ui = PROVIDER_UI[pickerActive];
-                const isCloud = pickerActive !== "ollama";
+                const isCloud = !isLocalAiProvider(pickerActive);
                 const disabled = isCloud && !(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);
                 return (
                   <div className="model-picker-right" role="tabpanel" aria-label="模型介绍" data-provider={pickerActive}>
                     <div className="model-picker-right-head">
                       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <ProviderLogo provider={pickerActive} />
+                        <AiProviderLogo provider={pickerActive} />
                         <div>
                           <div style={{ fontWeight: 900, fontSize: 18 }}>
                             {ui.label}
@@ -1061,18 +1264,69 @@ export function AiPanel(props: {
                         <div className="muted small">字数消耗</div>
                         <Meter
                           value={
-                            pickerActive !== "ollama"
+                            !isLocalAiProvider(pickerActive)
                               ? geminiCostStarsFromShensi(settings.geminiTemperature)
                               : ui.meters.cost
                           }
                         />
-                        {pickerActive === "ollama" && ui.meters.costText ? (
+                        {isLocalAiProvider(pickerActive) && ui.meters.costText ? (
                           <span className="muted small" style={{ marginLeft: 8 }}>
                             （{ui.meters.costText}）
                           </span>
                         ) : null}
                       </div>
                     </div>
+
+                    {(() => {
+                      const cfg = getProviderConfig(settings, pickerActive);
+                      const personas = listModelPersonas(pickerActive).filter((p) => p.modelId);
+                      if (personas.length === 0) return null;
+                      return (
+                        <div className="model-persona">
+                          <div style={{ fontWeight: 800, margin: "14px 0 8px" }}>推荐模型</div>
+                          <div className="model-persona-grid" role="list" aria-label="推荐模型列表">
+                            {personas.map((p) => {
+                              const on = (cfg.model ?? "").trim() === p.modelId;
+                              const stars = p.costStars ?? ui.meters.cost;
+                              return (
+                                <button
+                                  key={p.modelId}
+                                  type="button"
+                                  role="listitem"
+                                  className={"model-persona-card" + (on ? " is-on" : "")}
+                                  title={p.modelId}
+                                  onClick={() => {
+                                    const cur = getProviderConfig(settings, pickerActive);
+                                    updateSettings(
+                                      { [pickerActive]: { ...cur, model: p.modelId } } as Partial<AiSettings>,
+                                    );
+                                  }}
+                                >
+                                  <div className="model-persona-card-head">
+                                    <div className="model-persona-card-title">{p.title}</div>
+                                    <div className="model-persona-card-badges">
+                                      {p.tags?.slice(0, 2).map((t) => (
+                                        <span key={t} className="model-persona-badge muted small">
+                                          {t}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <div className="muted small">{p.subtitle}</div>
+                                  <div className="model-persona-card-desc muted small">{p.description}</div>
+                                  <div className="model-persona-card-foot muted small">
+                                    <span className="model-persona-modelid">{p.modelId}</span>
+                                    <span className="model-persona-cost">
+                                      {Array.from({ length: stars }).fill("★").join("")}
+                                    </span>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     <div className="model-picker-note">
                       <div style={{ fontWeight: 800, marginBottom: 6 }}>注意事项</div>
@@ -1088,7 +1342,7 @@ export function AiPanel(props: {
                         aria-label={
                           pickerActive === "gemini"
                             ? "观云调参"
-                            : pickerActive === "ollama"
+                            : isLocalAiProvider(pickerActive)
                               ? "本地模型"
                               : "云端调参"
                         }
@@ -1146,7 +1400,7 @@ export function AiPanel(props: {
                           </div>
                         ) : null}
 
-                        {pickerActive !== "ollama" ? (
+                        {!isLocalAiProvider(pickerActive) ? (
                           <div className="model-picker-dock-anchor">
                             {modelPickerTune === "shensi" ? (
                               <div className="model-picker-mini-pop model-picker-mini-pop--shensi" role="dialog" aria-label="神思">
@@ -1204,7 +1458,7 @@ export function AiPanel(props: {
                           onClick={() => {
                             if (disabled) {
                               setProviderPickerOpen(false);
-                              window.location.href = "/settings#ai-privacy";
+                              void navigate("/settings#ai-privacy");
                               return;
                             }
                             updateProvider(pickerActive);
@@ -1223,7 +1477,7 @@ export function AiPanel(props: {
         </DialogContent>
       </Dialog>
 
-        <section className="ai-panel-section" aria-labelledby="ai-panel-mode-h">
+        <section className="ai-panel-section card" aria-labelledby="ai-panel-mode-h">
           <h3 id="ai-panel-mode-h" className="ai-panel-section-title">
             运行模式
           </h3>
@@ -1256,7 +1510,13 @@ export function AiPanel(props: {
         </label>
         <div className="ai-panel-row">
           <label className="small muted">技巧预设</label>
-          <select name="skillPreset" value={skillPreset} onChange={(e) => setSkillPreset(e.target.value as any)}>
+          <select
+            name="skillPreset"
+            value={skillPreset}
+            onChange={(e) =>
+              setSkillPreset(e.target.value as "none" | "tight" | "dialogue" | "describe" | "custom")
+            }
+          >
             <option value="none">无</option>
             <option value="tight">紧凑</option>
             <option value="dialogue">对话推进</option>
@@ -1364,7 +1624,7 @@ export function AiPanel(props: {
                 });
               }}
             />
-            <span>本书 · 创作圣经（导出分块）</span>
+            <span>本书 · 锦囊导出（分块）</span>
           </label>
           <label className="ai-panel-check row row--check">
             <input
@@ -1446,38 +1706,110 @@ export function AiPanel(props: {
         </div>
         {ragEnabled && ragQuery.trim() ? (
           ragHits.length > 0 ? (
-            <ul className="rr-list">
-              {ragHits.slice(0, Math.max(0, Math.min(12, ragK))).map((h) => (
-                <li key={`${h.chunkId}-${h.highlightStart}-${h.highlightEnd}`} className="rr-list-item">
-                  {isRuntimeRagHit(h) ? (
-                    <span className="rr-link" title="本书运行时检索命中（无参考库深链）">
-                      {h.refTitle}
-                    </span>
-                  ) : (
-                    <a
-                      className="rr-link"
-                      href={referenceReaderHref({
-                        refWorkId: h.refWorkId,
-                        ordinal: h.ordinal,
-                        startOffset: h.highlightStart,
-                        endOffset: h.highlightEnd,
-                      })}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="在参考库打开（新标签页）"
+            <>
+              <p className="muted small" style={{ marginBottom: 6 }}>
+                {ragHits.length} 条命中 · {ragExcluded.size > 0 ? `已取消 ${ragExcluded.size} 条 · ` : ""}注入 {ragHits.filter(h => !ragExcluded.has(h.chunkId)).length} 条
+              </p>
+              <ul className="rr-list" style={{ gap: 6 }}>
+                {ragHits.slice(0, Math.max(0, Math.min(12, ragK))).map((h) => {
+                  const excluded = ragExcluded.has(h.chunkId);
+                  const isRuntime = isRuntimeRagHit(h);
+                  const srcBadge = h.refTitle.startsWith("本书锦囊")
+                    ? "锦囊"
+                    : h.refTitle.startsWith("正文")
+                    ? "正文"
+                    : "藏经";
+                  return (
+                    <li
+                      key={`${h.chunkId}-${h.highlightStart}-${h.highlightEnd}`}
+                      className="rr-list-item"
+                      style={{
+                        flexDirection: "column",
+                        alignItems: "stretch",
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        padding: "6px 8px",
+                        opacity: excluded ? 0.45 : 1,
+                        background: excluded ? "transparent" : "var(--card)",
+                      }}
                     >
-                      {h.refTitle} · 段 {h.ordinal + 1}
-                    </a>
-                  )}
-                  <div className="muted small">{h.snippetBefore}{h.snippetMatch}{h.snippetAfter}</div>
-                </li>
-              ))}
-            </ul>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                        <span
+                          style={{
+                            fontSize: 10,
+                            padding: "1px 5px",
+                            borderRadius: 4,
+                            background: "var(--primary)",
+                            color: "var(--primary-foreground)",
+                            flexShrink: 0,
+                          }}
+                        >
+                          {srcBadge}
+                        </span>
+                        {isRuntime ? (
+                          <span className="rr-link small" title="本书运行时检索命中（无参考库深链）" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {h.refTitle}
+                          </span>
+                        ) : (
+                          <a
+                            className="rr-link small"
+                            href={referenceReaderHref({
+                              refWorkId: h.refWorkId,
+                              ordinal: h.ordinal,
+                              startOffset: h.highlightStart,
+                              endOffset: h.highlightEnd,
+                            })}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="在参考库打开（新标签页）"
+                            style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                          >
+                            {h.refTitle} · 段 {h.ordinal + 1}
+                          </a>
+                        )}
+                        <button
+                          type="button"
+                          title={excluded ? "重新纳入此条" : "取消注入此条"}
+                          style={{
+                            border: "none",
+                            background: "none",
+                            cursor: "pointer",
+                            padding: "0 2px",
+                            fontSize: 12,
+                            color: excluded ? "var(--primary)" : "var(--muted-foreground)",
+                            flexShrink: 0,
+                          }}
+                          onClick={() =>
+                            setRagExcluded((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(h.chunkId)) next.delete(h.chunkId);
+                              else next.add(h.chunkId);
+                              return next;
+                            })
+                          }
+                        >
+                          {excluded ? "＋" : "×"}
+                        </button>
+                      </div>
+                      <p className="muted small" style={{ margin: 0, lineHeight: 1.5, wordBreak: "break-all" }}>
+                        {h.snippetBefore}
+                        {h.snippetMatch && (
+                          <mark style={{ background: "var(--primary)", color: "var(--primary-foreground)", borderRadius: 2, padding: "0 1px" }}>
+                            {h.snippetMatch}
+                          </mark>
+                        )}
+                        {h.snippetAfter}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
           ) : (
             <p className="muted small">暂无命中。你可以换关键词，或先去「参考库」确认已导入原著。</p>
           )
         ) : (
-          <p className="muted small">提示：这是关键词检索注入（非向量）。用于把“参考原文片段”带进本次请求。</p>
+          <p className="muted small">提示：这是关键词检索注入（非向量）。用于把"参考原文片段\"带进本次请求。</p>
         )}
       </details>
 
@@ -1490,7 +1822,7 @@ export function AiPanel(props: {
             checked={settings.includeBible}
             onChange={(e) => updateSettings({ includeBible: e.target.checked })}
           />
-          <span>注入创作圣经</span>
+          <span>注入本书锦囊</span>
         </label>
         <label className="ai-panel-check row row--check">
           <input
@@ -1522,9 +1854,80 @@ export function AiPanel(props: {
             title="最近 N 章"
           />
         </div>
+        {includeRecentSummaries && neighborSummaryPoolChapters.length > 0 ? (
+          <div className="ai-panel-subchecks" style={{ marginTop: 8 }}>
+            <div className="muted small" style={{ marginBottom: 6 }}>
+              邻章概要包含章节（仅包含有概要的章；未勾选的章不会注入）
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
+              {neighborSummaryPoolChapters.map((c) => (
+                <label key={c.id} className="ai-panel-check row row--check" style={{ margin: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={neighborSummaryIncludeById[c.id] !== false}
+                    onChange={(e) =>
+                      setNeighborSummaryIncludeById((prev) => ({ ...prev, [c.id]: e.target.checked }))
+                    }
+                  />
+                  <span className="small">{c.title}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : includeRecentSummaries && props.chapter ? (
+          <p className="muted small" style={{ marginTop: 6 }}>
+            邻章概要：当前窗口内无已填概要的章节（可先为前几章生成概要）。
+          </p>
+        ) : null}
+        <div className="ai-panel-subchecks" style={{ marginTop: 10 }}>
+          <div className="muted small" style={{ marginBottom: 6 }}>
+            本章锦囊字段（user 上下文）— 未勾选的字段不会注入
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, flexWrap: "wrap" as const }}>
+            {(Object.keys(CHAPTER_BIBLE_FIELD_LABELS) as ChapterBibleFieldKey[]).map((k) => (
+              <label key={k} className="ai-panel-check row row--check" style={{ margin: 0 }}>
+                <input
+                  type="checkbox"
+                  checked={chapterBibleInjectMask[k] !== false}
+                  onChange={(e) =>
+                    setChapterBibleInjectMask((prev) => ({ ...prev, [k]: e.target.checked }))
+                  }
+                />
+                <span className="small">{CHAPTER_BIBLE_FIELD_LABELS[k]}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+        {settings.includeBible ? (
+          <div className="ai-panel-subchecks" style={{ marginTop: 10 }}>
+            <div className="muted small" style={{ marginBottom: 6 }}>
+              本书锦囊（全书导出 Markdown）板块 — 未勾选的板块不会注入
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto" }}>
+              {WORK_BIBLE_SECTION_HEADERS.map((h) => (
+                <label key={h} className="ai-panel-check row row--check" style={{ margin: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={workBibleSectionMask[h] !== false}
+                    onChange={(e) =>
+                      setWorkBibleSectionMask((prev) => ({ ...prev, [h]: e.target.checked }))
+                    }
+                  />
+                  <span className="small">{h}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : null}
         <div className="ai-panel-row">
           <label className="small muted">当前章注入</label>
-          <select name="currentContextMode" value={currentContextMode} onChange={(e) => setCurrentContextMode(e.target.value as any)}>
+          <select
+            name="currentContextMode"
+            value={currentContextMode}
+            onChange={(e) =>
+              setCurrentContextMode(e.target.value as "full" | "summary" | "selection" | "none")
+            }
+          >
             <option value="full">全文</option>
             <option value="summary">概要</option>
             <option value="selection">选区</option>
@@ -1538,7 +1941,7 @@ export function AiPanel(props: {
         </p>
         {settings.includeBible ? (
           <p className="muted small" style={{ marginTop: "-0.25rem" }}>
-            注：圣经内容在运行时抓取并截断，token/字符估算会偏保守。
+            注：锦囊内容在运行时抓取并截断，token/字符估算会偏保守。
           </p>
         ) : null}
       </details>
@@ -1559,11 +1962,11 @@ export function AiPanel(props: {
                 setBibleLoading(true);
                 void exportBibleMarkdown(props.workId)
                   .then((t) => setBiblePreview({ text: t, chars: t.length }))
-                  .catch((e) => setError(e instanceof Error ? e.message : "圣经预览加载失败"))
+                  .catch((e) => setError(e instanceof Error ? e.message : "锦囊预览加载失败"))
                   .finally(() => setBibleLoading(false));
               }}
             >
-              {bibleLoading ? "加载圣经…" : biblePreview?.text ? "刷新圣经预览" : "加载圣经预览"}
+              {bibleLoading ? "加载锦囊…" : biblePreview?.text ? "刷新锦囊预览" : "加载锦囊预览"}
             </button>
           ) : null}
         </div>
@@ -1586,7 +1989,43 @@ export function AiPanel(props: {
       </details>
 
       <label className="ai-panel-field">
-        <span className="small muted">额外要求（可空）</span>
+        <span className="small muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          额外要求（可空）
+          <PromptPicker
+            filterTypes={PROMPT_PICKER_WRITING_TYPES}
+            filterSlots={PROMPT_PICKER_WRITER_SLOTS}
+            onPick={(t) => {
+              if (!t) return;
+              const rendered = renderPromptTemplate(t.body, {
+                work_title:      props.work.title ?? "",
+                work_tags:       (props.work.tags ?? []).join("，"),
+                chapter_title:   props.chapter?.title ?? "",
+                chapter_summary: props.chapter?.summary ?? "",
+                chapter_content: props.chapter?.content ?? "",
+              });
+              setUserHint(rendered);
+            }}
+            trigger={({ open }) => (
+              <button
+                type="button"
+                onClick={open}
+                style={{
+                  fontSize: 11,
+                  padding: "1px 7px",
+                  borderRadius: 999,
+                  border: "1px solid var(--color-border, #e2e8f0)",
+                  background: "transparent",
+                  color: "var(--color-muted-fg, #888)",
+                  cursor: "pointer",
+                  lineHeight: 1.6,
+                }}
+                title="从提示词库选择模板注入额外要求"
+              >
+                + 选模板
+              </button>
+            )}
+          />
+        </span>
         <textarea name="userHint" value={userHint} onChange={(e) => setUserHint(e.target.value)} rows={3} />
       </label>
 
@@ -1624,7 +2063,7 @@ export function AiPanel(props: {
             精简并重试
           </button>
           <span className="muted small" style={{ marginLeft: 8 }}>
-            减半字数上限，并暂时关闭全书圣经、RAG、邻章概要、关联摘录；全文且本章有概要时改为概要模式。
+            减半字数上限，并暂时关闭全书锦囊、RAG、邻章概要、关联摘录；全文且本章有概要时改为概要模式。
           </span>
         </div>
       ) : null}
@@ -1639,6 +2078,47 @@ export function AiPanel(props: {
         <label className="ai-panel-field ai-panel-field--draft">
           <textarea name="aiDraft" value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} />
         </label>
+
+        {/* P1-04：今日已用 token 始终显示 */}
+        <p className="muted small ai-panel-session-budget" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+          <span>
+            今日已用（粗估）
+            <strong style={{ marginLeft: 4 }}>{todayTokensUsed.toLocaleString()}</strong>
+            {settings.dailyTokenBudget > 0 && (
+              <span
+                style={{
+                  color: todayTokensUsed >= settings.dailyTokenBudget ? "var(--destructive)" : "inherit",
+                }}
+              >
+                {" "}/ {settings.dailyTokenBudget.toLocaleString()}
+              </span>
+            )}
+            {" "}tokens
+          </span>
+          {settings.dailyTokenBudget > 0 && (
+            <span
+              style={{
+                display: "inline-block",
+                width: 64,
+                height: 4,
+                borderRadius: 2,
+                background: "var(--border)",
+                overflow: "hidden",
+                verticalAlign: "middle",
+              }}
+            >
+              <span
+                style={{
+                  display: "block",
+                  height: "100%",
+                  width: `${Math.min(100, Math.round((todayTokensUsed / settings.dailyTokenBudget) * 100))}%`,
+                  background: todayTokensUsed >= settings.dailyTokenBudget ? "var(--destructive)" : "var(--primary)",
+                  borderRadius: 2,
+                }}
+              />
+            </span>
+          )}
+        </p>
 
         {sessionBudget > 0 ? (
           <p className="muted small ai-panel-session-budget">
@@ -1657,7 +2137,7 @@ export function AiPanel(props: {
           </p>
         ) : null}
 
-        {toneDriftHints.length > 0 ? (
+        {toneDriftHints.length > 0 || toneEmbedHint || toneEmbedErr || toneEmbedBusy ? (
           <div className="rr-block ai-tone-drift-hint" role="status">
             <div className="rr-block-title">调性提示（轻量规则 · 仅参考）</div>
             <ul className="rr-list">
@@ -1666,6 +2146,9 @@ export function AiPanel(props: {
                   {h}
                 </li>
               ))}
+              {toneEmbedBusy ? <li className="rr-list-item muted small">标杆段距离计算中…</li> : null}
+              {toneEmbedHint ? <li className="rr-list-item muted small">{toneEmbedHint}</li> : null}
+              {toneEmbedErr ? <li className="rr-list-item muted small">标杆段距离不可用：{toneEmbedErr}</li> : null}
             </ul>
           </div>
         ) : null}
@@ -1740,6 +2223,19 @@ export function AiPanel(props: {
         onCancel={() => setMergePayload(null)}
         onConfirm={confirmDraftMerge}
       />
+
+      {/* P1-04：成本门控弹窗 */}
+      {costGatePending && (
+        <CostGateModal
+          reasons={costGatePending.reasons}
+          tokensApprox={costGatePending.tokensApprox}
+          dailyUsed={costGatePending.dailyUsed}
+          dailyBudget={costGatePending.dailyBudget}
+          triggerLabel={costGatePending.triggerLabel}
+          onConfirm={() => { costGatePending.resolve(true); setCostGatePending(null); }}
+          onCancel={() => { costGatePending.resolve(false); setCostGatePending(null); }}
+        />
+      )}
     </aside>
   );
 }

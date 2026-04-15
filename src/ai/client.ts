@@ -5,6 +5,7 @@
 import {
   generateWithProvider as generateWithProviderImpl,
   generateWithProviderStream as generateWithProviderStreamImpl,
+  embedWithProvider as embedWithProviderImpl,
 } from "./providers";
 import { FirstAiGateCancelledError, requestFirstAiUseGate } from "./first-ai-gate";
 import type { AiChatMessage, AiGenerateResult, AiProviderConfig, AiProviderId } from "./types";
@@ -37,4 +38,15 @@ export async function generateWithProviderStream(args: {
   const ok = await requestFirstAiUseGate();
   if (!ok) throw new FirstAiGateCancelledError();
   return generateWithProviderStreamImpl(args);
+}
+
+export async function embedWithProvider(args: {
+  provider: AiProviderId;
+  config: AiProviderConfig;
+  input: string;
+  signal?: AbortSignal;
+}): Promise<{ embedding: number[] }> {
+  const ok = await requestFirstAiUseGate();
+  if (!ok) throw new FirstAiGateCancelledError();
+  return embedWithProviderImpl(args);
 }

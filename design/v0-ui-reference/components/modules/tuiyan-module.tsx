@@ -43,6 +43,7 @@ import {
   Upload,
   Settings,
   Layers,
+  AlignLeft,
   GitMerge,
   Milestone,
   Calendar,
@@ -101,12 +102,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { useToast } from "@/components/ui/use-toast"
 
 // ============ Types ============
 interface OutlineNode {
   id: string
   title: string
-  type: "volume" | "chapter" | "scene"
+  type: "volume" | "chapter" | "scene" // scene 在 UI 中显示为「细纲」
   status: "draft" | "refining" | "finalized" | "locked"
   summary?: string
   wordCountTarget?: number
@@ -180,7 +182,7 @@ const mockOutline: OutlineNode[] = [
         children: [
           {
             id: "s1-1-1",
-            title: "场景1：被逐出家门",
+            title: "细纲1：被逐出家门",
             type: "scene",
             status: "finalized",
             summary: "继母设计陷害，林风被赶出林家大宅",
@@ -188,7 +190,7 @@ const mockOutline: OutlineNode[] = [
           },
           {
             id: "s1-1-2",
-            title: "场景2：荒野求生",
+            title: "细纲2：荒野求生",
             type: "scene",
             status: "finalized",
             summary: "林风在山林中艰难求生，展现坚韧性格",
@@ -196,7 +198,7 @@ const mockOutline: OutlineNode[] = [
           },
           {
             id: "s1-1-3",
-            title: "场景3：古洞奇遇",
+            title: "细纲3：古洞奇遇",
             type: "scene",
             status: "finalized",
             summary: "意外发现上古修士洞府，获得传承",
@@ -217,14 +219,14 @@ const mockOutline: OutlineNode[] = [
         children: [
           {
             id: "s1-2-1",
-            title: "场景1：初次修炼",
+            title: "细纲1：初次修炼",
             type: "scene",
             status: "refining",
             summary: "按照传承功法修炼，却毫无进展",
           },
           {
             id: "s1-2-2",
-            title: "场景2：发现秘密",
+            title: "细纲2：发现秘密",
             type: "scene",
             status: "draft",
             summary: "无意中激活石碑隐藏阵法，发现逆天机缘",
@@ -470,7 +472,7 @@ function OutlineTreeNode({
   const typeConfig = {
     volume: { icon: BookOpen, color: "text-primary" },
     chapter: { icon: FileText, color: "text-muted-foreground" },
-    scene: { icon: Layers, color: "text-muted-foreground/70" },
+    scene: { icon: AlignLeft, color: "text-muted-foreground/70" },
   }
 
   const status = statusConfig[node.status]
@@ -892,12 +894,114 @@ export function TuiYanModule() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>(mockChatHistory)
   const [chatInput, setChatInput] = useState("")
   const [activeTab, setActiveTab] = useState<"outline" | "mindmap" | "wence">("outline")
-  const [rightPanelTab, setRightPanelTab] = useState<"detail" | "chat" | "reference">("detail")
+  const [rightPanelTab, setRightPanelTab] = useState<"detail" | "chat" | "reference" | "prompts">("detail")
   const [showLeftPanel, setShowLeftPanel] = useState(true)
   const [showRightPanel, setShowRightPanel] = useState(true)
   const [outlineViewMode, setOutlineViewMode] = useState<"tree" | "kanban">("tree")
   const [isGenerating, setIsGenerating] = useState(false)
   const chatScrollRef = useRef<HTMLDivElement>(null)
+
+  // 作品构思区
+  const [conceptExpanded, setConceptExpanded] = useState(true)
+  const [conceptText, setConceptText] = useState("")
+  const [showCardPicker, setShowCardPicker] = useState(false)
+  const [pickerSelectedIds, setPickerSelectedIds] = useState<Set<string>>(new Set())
+  const [pickerSearchQuery, setPickerSearchQuery] = useState("")
+
+  // 推送到写作页
+  const [showPushModal, setShowPushModal] = useState(false)
+  const [pushTargetChapterId, setPushTargetChapterId] = useState<string | null>(null)
+
+  // 提示词面板：各阶段已选模板（id），null 表示未选
+  const [selectedPromptIds, setSelectedPromptIds] = useState<Record<string, string | null>>({
+    concept: null, volume: null, chapter: null, detail_outline: null,
+  })
+
+  // 五步向导阶段
+  type Stage = "concept" | "volume" | "chapter" | "detail_outline" | "push"
+  const [currentStage, setCurrentStage] = useState<Stage>("concept")
+  const [stageManualOverride, setStageManualOverride] = useState(false)
+
+  const { toast } = useToast()
+
+  // 选中节点变化时自动推进阶段（未手动覆盖时）
+  useEffect(() => {
+    if (stageManualOverride) return
+    if (!selectedNode) { setCurrentStage("concept"); return }
+    if (selectedNode.type === "volume")  { setCurrentStage("volume"); return }
+    if (selectedNode.type === "chapter") { setCurrentStage("chapter"); return }
+    if (selectedNode.type === "scene")   { setCurrentStage("detail_outline"); return }
+  }, [selectedNode, stageManualOverride])
+
+  const stageConfig: { key: Stage; label: string }[] = [
+    { key: "concept",        label: "构思" },
+    { key: "volume",         label: "卷纲" },
+    { key: "chapter",        label: "章"   },
+    { key: "detail_outline", label: "细纲" },
+    { key: "push",           label: "推送" },
+  ]
+
+  const stageActionLabel: Record<Stage, string> = {
+    concept:        "AI 扩写构思",
+    volume:         "AI 生成卷纲",
+    chapter:        "AI 生成章节",
+    detail_outline: "AI 生成细纲",
+    push:           "确认推送",
+  }
+
+  // 阶段顺序权重，用于判断是否跨阶段
+  const stageOrder: Record<Stage, number> = {
+    concept: 0, volume: 1, chapter: 2, detail_outline: 3, push: 4,
+  }
+
+  // AI 生成按钮的前置检查（软向导）
+  function handleStageAction() {
+    const conceptReady = conceptText.trim().length > 0
+    const volumeReady  = outline.some((n) => n.type === "volume")
+
+    if (currentStage !== "concept" && !conceptReady) {
+      toast({
+        title: "建议先完成构思",
+        description: "构思未填写，生成的内容可能缺乏方向感。",
+        action: (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setCurrentStage("concept"); setStageManualOverride(true) }}
+          >
+            先写构思
+          </Button>
+        ),
+      })
+      return
+    }
+
+    if (stageOrder[currentStage] >= stageOrder["chapter"] && !volumeReady) {
+      toast({
+        title: "建议先完成卷纲",
+        description: "尚无卷纲，生成的章节结构可能松散。",
+        action: (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setCurrentStage("volume"); setStageManualOverride(true) }}
+          >
+            先建卷纲
+          </Button>
+        ),
+      })
+      return
+    }
+
+    if (currentStage === "push") {
+      setShowPushModal(true)
+      return
+    }
+
+    // 正常触发 AI 生成（实装时调用对应 API）
+    setIsGenerating(true)
+    setTimeout(() => setIsGenerating(false), 1500)
+  }
 
   // 查找选中的节点
   const findNode = (nodes: OutlineNode[], id: string): OutlineNode | null => {
@@ -1100,11 +1204,47 @@ export function TuiYanModule() {
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Progress */}
-          <div className="flex items-center gap-2 rounded-lg bg-muted/30 px-3 py-1.5">
-            <span className="text-xs text-muted-foreground">定稿进度</span>
-            <Progress value={progressPercent} className="h-1.5 w-20" />
-            <span className="text-xs font-medium text-foreground">{progressPercent.toFixed(0)}%</span>
+          {/* 五步向导进度条 */}
+          <div className="flex items-center rounded-lg bg-muted/30 p-1 gap-0.5">
+            {stageConfig.map((s, i) => (
+              <div key={s.key} className="flex items-center">
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        className={cn(
+                          "flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+                          currentStage === s.key
+                            ? "bg-primary text-primary-foreground shadow-sm"
+                            : stageOrder[s.key] < stageOrder[currentStage]
+                              ? "text-[oklch(0.7_0.15_145)] hover:bg-muted"
+                              : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                        )}
+                        onClick={() => {
+                          setCurrentStage(s.key)
+                          setStageManualOverride(true)
+                        }}
+                      >
+                        {stageOrder[s.key] < stageOrder[currentStage] && (
+                          <CheckCircle className="h-3 w-3" />
+                        )}
+                        {s.label}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="text-xs">
+                      {s.key === "concept"        && "填写作品构思"}
+                      {s.key === "volume"         && "生成 / 编辑卷纲"}
+                      {s.key === "chapter"        && "生成 / 编辑章节"}
+                      {s.key === "detail_outline" && "生成 / 打磨细纲"}
+                      {s.key === "push"           && "推送细纲到写作页"}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+                {i < stageConfig.length - 1 && (
+                  <ChevronRight className="h-3 w-3 text-muted-foreground/40 shrink-0 mx-0.5" />
+                )}
+              </div>
+            ))}
           </div>
 
           <div className="h-5 w-px bg-border/50" />
@@ -1132,9 +1272,14 @@ export function TuiYanModule() {
             </Tooltip>
           </TooltipProvider>
 
-          <Button size="sm" className="h-8 gap-2">
+          <Button
+            size="sm"
+            className="h-8 gap-2"
+            disabled={isGenerating}
+            onClick={handleStageAction}
+          >
             <Sparkles className="h-4 w-4" />
-            AI 生成
+            {stageActionLabel[currentStage]}
           </Button>
         </div>
       </div>
@@ -1144,6 +1289,53 @@ export function TuiYanModule() {
         {/* Left Panel - Outline Tree */}
         {showLeftPanel && (
           <div className="flex w-80 flex-col border-r border-border/40 bg-card/20">
+            {/* 作品构思区 */}
+            <div className="border-b border-border/40">
+              <button
+                className="flex w-full items-center justify-between px-3 py-2.5 text-sm font-medium transition-colors hover:bg-muted/30"
+                onClick={() => setConceptExpanded(!conceptExpanded)}
+              >
+                <span className="flex items-center gap-2">
+                  <Lightbulb className="h-4 w-4 text-amber-400" />
+                  作品构思
+                </span>
+                {conceptExpanded
+                  ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                  : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+              </button>
+
+              {conceptExpanded && (
+                <div className="px-3 pb-3 space-y-2">
+                  <Textarea
+                    value={conceptText}
+                    onChange={(e) => setConceptText(e.target.value)}
+                    placeholder="类型、核心矛盾、世界规则、主角动机……手动输入或从落笔导入"
+                    className="min-h-[80px] resize-none text-sm"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 gap-1.5 text-xs"
+                      disabled={!conceptText.trim()}
+                    >
+                      <Wand2 className="h-3.5 w-3.5" />
+                      AI 扩写构思
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 gap-1.5 text-xs"
+                      onClick={() => setShowCardPicker(true)}
+                    >
+                      <Sparkles className="h-3.5 w-3.5" />
+                      从落笔导入
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             {/* Search */}
             <div className="border-b border-border/40 p-3">
               <div className="flex items-center gap-2 rounded-lg bg-muted/30 px-3 py-2">
@@ -1161,7 +1353,7 @@ export function TuiYanModule() {
               {[
                 { label: "卷", value: countNodes(outline, "volume"), color: "text-primary" },
                 { label: "章", value: countNodes(outline, "chapter"), color: "text-amber-400" },
-                { label: "场景", value: countNodes(outline, "scene"), color: "text-muted-foreground" },
+                { label: "细纲", value: countNodes(outline, "scene"), color: "text-muted-foreground" },
                 { label: "已定", value: finalizedNodes, color: "text-[oklch(0.7_0.15_145)]" },
               ].map((stat) => (
                 <div key={stat.label} className="text-center">
@@ -1219,7 +1411,7 @@ export function TuiYanModule() {
                     >
                       {selectedNode.type === "volume" && "卷"}
                       {selectedNode.type === "chapter" && "章"}
-                      {selectedNode.type === "scene" && "场景"}
+                      {selectedNode.type === "scene" && "细纲"}
                     </Badge>
                     <Badge
                       variant="secondary"
@@ -1416,9 +1608,19 @@ export function TuiYanModule() {
                     <Sparkles className="h-4 w-4" />
                     AI 优化
                   </Button>
-                  <Button variant="outline" size="sm" className="gap-2">
+                  <Button
+                    variant={
+                      selectedNode.type === "scene" && selectedNode.status === "finalized"
+                        ? "default"
+                        : "outline"
+                    }
+                    size="sm"
+                    className="gap-2"
+                    disabled={selectedNode.type !== "scene"}
+                    onClick={() => setShowPushModal(true)}
+                  >
                     <ArrowRight className="h-4 w-4" />
-                    进入生辉
+                    推送到写作页
                   </Button>
                 </div>
               </div>
@@ -1602,6 +1804,20 @@ export function TuiYanModule() {
                   <span className="absolute bottom-0 left-1/2 h-0.5 w-8 -translate-x-1/2 rounded-full bg-primary" />
                 )}
               </button>
+              <button
+                className={cn(
+                  "flex-1 py-3 text-sm font-medium transition-colors relative",
+                  rightPanelTab === "prompts"
+                    ? "text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => setRightPanelTab("prompts")}
+              >
+                提示词
+                {rightPanelTab === "prompts" && (
+                  <span className="absolute bottom-0 left-1/2 h-0.5 w-8 -translate-x-1/2 rounded-full bg-primary" />
+                )}
+              </button>
             </div>
 
             {/* Panel Content */}
@@ -1749,6 +1965,124 @@ export function TuiYanModule() {
               </ScrollArea>
             )}
 
+            {/* 提示词面板 */}
+            {rightPanelTab === "prompts" && (
+              <ScrollArea className="flex-1">
+                <div className="p-4 space-y-3">
+
+                  {/* 当前节点层级标识 */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-foreground">分阶段提示词</span>
+                    <Badge variant="secondary" className="h-5 text-[10px]">
+                      {!selectedNode && "构思阶段"}
+                      {selectedNode?.type === "volume" && "卷纲阶段"}
+                      {selectedNode?.type === "chapter" && "章节阶段"}
+                      {selectedNode?.type === "scene" && "细纲阶段"}
+                    </Badge>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    每个阶段可关联不同的提示词风格，AI 生成时自动带入。
+                  </p>
+
+                  {/* 四个阶段 */}
+                  {(
+                    [
+                      { key: "concept",        label: "构思提示词",  active: !selectedNode },
+                      { key: "volume",         label: "卷纲提示词",  active: selectedNode?.type === "volume" },
+                      { key: "chapter",        label: "章节提示词",  active: selectedNode?.type === "chapter" },
+                      { key: "detail_outline", label: "细纲提示词",  active: selectedNode?.type === "scene" },
+                    ] as const
+                  ).map(({ key, label, active }) => (
+                    <div
+                      key={key}
+                      className={cn(
+                        "rounded-xl border p-3 space-y-2 transition-colors",
+                        active ? "border-primary/40 bg-primary/5" : "border-border/40"
+                      )}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={cn("text-sm font-medium", active ? "text-primary" : "text-foreground")}>
+                          {label}
+                        </span>
+                        {active && (
+                          <Badge className="h-4 text-[10px] bg-primary/20 text-primary border-0">
+                            当前阶段
+                          </Badge>
+                        )}
+                      </div>
+
+                      {/* 模板选择（Phase 7 联调时替换为真实 API 数据） */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className={cn(
+                              "w-full justify-between text-xs",
+                              active && "border-primary/30"
+                            )}
+                          >
+                            <span className="text-muted-foreground">
+                              {selectedPromptIds[key] ?? "未选择模板"}
+                            </span>
+                            <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="w-56">
+                          <DropdownMenuItem
+                            onClick={() =>
+                              setSelectedPromptIds((p) => ({ ...p, [key]: null }))
+                            }
+                          >
+                            <span className="text-muted-foreground">不使用模板</span>
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          {/* 占位系统默认模板，Phase 7 替换为 /api/tuiyan/prompts?stage= 数据 */}
+                          {[
+                            "玄幻热血风",
+                            "克苏鲁压抑风",
+                            "轻松日常风",
+                          ].map((t) => (
+                            <DropdownMenuItem
+                              key={t}
+                              onClick={() =>
+                                setSelectedPromptIds((p) => ({ ...p, [key]: t }))
+                              }
+                            >
+                              {t}
+                              {selectedPromptIds[key] === t && (
+                                <CheckCircle className="ml-auto h-3.5 w-3.5 text-primary" />
+                              )}
+                            </DropdownMenuItem>
+                          ))}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem>
+                            <Plus className="mr-2 h-4 w-4" />
+                            新建模板
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+
+                      {/* 追加补充说明 */}
+                      {active && (
+                        <Textarea
+                          placeholder="追加要求（可留空，AI 生成时附加到提示词末尾）"
+                          className="min-h-[60px] resize-none text-xs"
+                        />
+                      )}
+                    </div>
+                  ))}
+
+                  {/* 跳转管理 */}
+                  <Button variant="ghost" size="sm" className="w-full gap-2 text-xs text-muted-foreground">
+                    <Settings className="h-3.5 w-3.5" />
+                    管理推演提示词库
+                  </Button>
+                </div>
+              </ScrollArea>
+            )}
+
             {rightPanelTab === "detail" && selectedNode && (
               <ScrollArea className="flex-1">
                 <div className="p-4 space-y-4">
@@ -1809,9 +2143,19 @@ export function TuiYanModule() {
                         <CheckCircle className="h-4 w-4" />
                         标记定稿
                       </Button>
-                      <Button variant="outline" size="sm" className="gap-2">
+                      <Button
+                        variant={
+                          selectedNode.type === "scene" && selectedNode.status === "finalized"
+                            ? "default"
+                            : "outline"
+                        }
+                        size="sm"
+                        className="gap-2"
+                        disabled={selectedNode.type !== "scene"}
+                        onClick={() => setShowPushModal(true)}
+                      >
                         <ArrowRight className="h-4 w-4" />
-                        进入生辉
+                        推送到写作页
                       </Button>
                     </div>
                   </div>
@@ -1821,6 +2165,310 @@ export function TuiYanModule() {
           </div>
         )}
       </div>
+
+      {/* 推送到写作页 Dialog */}
+      <Dialog open={showPushModal} onOpenChange={setShowPushModal}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>推送细纲到写作页</DialogTitle>
+            <DialogDescription>
+              确认后，此细纲将作为章纲快照写入对应章节，推演侧变为只读。
+              之后可在写作页用细纲一键生成正文。
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            {/* 细纲内容预览 */}
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground">细纲内容预览</p>
+              <div className="rounded-lg bg-muted/30 p-3 text-sm text-foreground/80 leading-relaxed max-h-32 overflow-y-auto">
+                {selectedNode?.summary ?? "（此细纲暂无摘要）"}
+              </div>
+            </div>
+
+            {/* 关联章节选择 */}
+            <div className="space-y-1.5">
+              <p className="text-xs font-medium text-muted-foreground">关联到章节</p>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="w-full justify-between">
+                    <span className={pushTargetChapterId ? "text-foreground" : "text-muted-foreground"}>
+                      {pushTargetChapterId
+                        ? (() => {
+                            const flat: OutlineNode[] = []
+                            const collect = (nodes: OutlineNode[]) => {
+                              nodes.forEach((n) => {
+                                if (n.type === "chapter") flat.push(n)
+                                if (n.children) collect(n.children)
+                              })
+                            }
+                            collect(outline)
+                            return flat.find((c) => c.id === pushTargetChapterId)?.title ?? "选择章节"
+                          })()
+                        : "选择已有章节 / 新建章节"}
+                    </span>
+                    <ChevronDown className="h-4 w-4 shrink-0" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-full">
+                  {/* 从大纲树中提取所有 chapter 节点 */}
+                  {(() => {
+                    const flat: OutlineNode[] = []
+                    const collect = (nodes: OutlineNode[]) => {
+                      nodes.forEach((n) => {
+                        if (n.type === "chapter") flat.push(n)
+                        if (n.children) collect(n.children)
+                      })
+                    }
+                    collect(outline)
+                    return flat.map((c) => (
+                      <DropdownMenuItem
+                        key={c.id}
+                        onClick={() => setPushTargetChapterId(c.id)}
+                      >
+                        <FileText className="mr-2 h-4 w-4 text-muted-foreground" />
+                        {c.title}
+                        {pushTargetChapterId === c.id && (
+                          <CheckCircle className="ml-auto h-4 w-4 text-primary" />
+                        )}
+                      </DropdownMenuItem>
+                    ))
+                  })()}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => setPushTargetChapterId("__new__")}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    新建章节
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+
+            {/* 推送后行为说明 */}
+            <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                推送后推演侧该细纲节点状态变为「已锁定」，如需修改请先在写作页清除章纲。
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowPushModal(false)
+                setPushTargetChapterId(null)
+              }}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={!pushTargetChapterId}
+              onClick={() => {
+                // Phase 4 联调：调用 POST /api/tuiyan/push-outline
+                // 成功后将对应 outline 节点 status 改为 "locked"
+                setShowPushModal(false)
+                setPushTargetChapterId(null)
+              }}
+            >
+              确认推送
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 从落笔导入——卡片选择器 Dialog */}
+      {(() => {
+        // 占位数据：Phase 6 联调时替换为 GET /api/inspiration-fragments?workId= 数据
+        const mockCards = [
+          {
+            id: "f1",
+            title: "废柴少年得奇遇",
+            tags: ["玄幻", "废柴流"],
+            content: "类型：玄幻修仙\n母题：废柴逆袭\n核心冲突：天赋平平的少年意外获得上古传承，在强者林立的世界中寻求生存与突破。",
+          },
+          {
+            id: "f2",
+            title: "上古传承觉醒",
+            tags: ["修仙", "传承"],
+            content: "世界规则：修仙体系分筑基→结丹→元婴→化神四阶，传承者可跨越资质限制。\n伏笔：传承来源不明，背后隐藏着上古大战的秘密。",
+          },
+          {
+            id: "f3",
+            title: "女主神秘登场",
+            tags: ["人物", "伏笔"],
+            content: "人物：苏瑶，青云宗外门弟子，表面平平无奇，实为隐藏宗门的特使。\n动机：奉命调查古洞传承的来源，与主角命运产生交集。",
+          },
+          {
+            id: "f4",
+            title: "宗门内部派系争斗",
+            tags: ["宗门", "权谋"],
+            content: "世界背景：青云宗分内外两门，内门把持资源，外门弟子受压制。\n矛盾：主角入内门后打破原有势力格局，引发派系冲突。",
+          },
+          {
+            id: "f5",
+            title: "反派伏笔设计",
+            tags: ["反派", "伏笔"],
+            content: "反派：魔教暗子潜伏宗门十余年，与主角获得的传承有直接关联。\n节奏：第一卷末尾露出冰山一角，第三卷揭晓真实身份。",
+          },
+        ]
+
+        const filtered = mockCards.filter(
+          (c) =>
+            !pickerSearchQuery ||
+            c.title.includes(pickerSearchQuery) ||
+            c.tags.some((t) => t.includes(pickerSearchQuery))
+        )
+
+        function toggleCard(id: string) {
+          setPickerSelectedIds((prev) => {
+            const next = new Set(prev)
+            next.has(id) ? next.delete(id) : next.add(id)
+            return next
+          })
+        }
+
+        function handleConfirmImport() {
+          const selected = mockCards.filter((c) => pickerSelectedIds.has(c.id))
+          if (selected.length === 0) return
+
+          const appended = selected
+            .map((c) => `【${c.title}】\n${c.content}`)
+            .join("\n\n")
+
+          setConceptText((prev) =>
+            prev.trim() ? `${prev.trim()}\n\n${appended}` : appended
+          )
+          // 导入后自动展开构思区
+          setConceptExpanded(true)
+          // 阶段自动切换到构思
+          setCurrentStage("concept")
+          setStageManualOverride(true)
+
+          setPickerSelectedIds(new Set())
+          setPickerSearchQuery("")
+          setShowCardPicker(false)
+
+          toast({
+            title: `已导入 ${selected.length} 张卡片`,
+            description: "内容已追加到作品构思区。",
+          })
+        }
+
+        return (
+          <Dialog
+            open={showCardPicker}
+            onOpenChange={(open) => {
+              if (!open) {
+                setPickerSelectedIds(new Set())
+                setPickerSearchQuery("")
+              }
+              setShowCardPicker(open)
+            }}
+          >
+            <DialogContent className="max-w-lg">
+              <DialogHeader>
+                <DialogTitle>从落笔导入构思碎片</DialogTitle>
+                <DialogDescription>
+                  选择灵感卡片，内容将追加合并到作品构思区
+                </DialogDescription>
+              </DialogHeader>
+
+              {/* 搜索 */}
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="搜索标题或标签…"
+                  className="pl-9"
+                  value={pickerSearchQuery}
+                  onChange={(e) => setPickerSearchQuery(e.target.value)}
+                />
+              </div>
+
+              {/* 卡片列表 */}
+              <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                {filtered.length === 0 ? (
+                  <p className="py-8 text-center text-sm text-muted-foreground">
+                    未找到匹配的卡片
+                  </p>
+                ) : (
+                  filtered.map((card) => {
+                    const checked = pickerSelectedIds.has(card.id)
+                    return (
+                      <div
+                        key={card.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => toggleCard(card.id)}
+                        onKeyDown={(e) => e.key === "Enter" && toggleCard(card.id)}
+                        className={cn(
+                          "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
+                          checked
+                            ? "border-primary/40 bg-primary/5"
+                            : "border-border/40 bg-card/30 hover:bg-card/50"
+                        )}
+                      >
+                        {/* 勾选框 */}
+                        <div className={cn(
+                          "mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                          checked
+                            ? "border-primary bg-primary"
+                            : "border-muted-foreground/40"
+                        )}>
+                          {checked && <CheckCircle className="h-3 w-3 text-primary-foreground" />}
+                        </div>
+
+                        <div className="flex-1 space-y-1 min-w-0">
+                          <p className="text-sm font-medium text-foreground">{card.title}</p>
+                          <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                            {card.content.split("\n")[0]}
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {card.tags.map((t) => (
+                              <span
+                                key={t}
+                                className="rounded-full bg-muted/50 px-2 py-0.5 text-[10px] text-muted-foreground"
+                              >
+                                #{t}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+
+              {/* 已选数量提示 */}
+              {pickerSelectedIds.size > 0 && (
+                <p className="text-xs text-primary">
+                  已选 {pickerSelectedIds.size} 张，导入后内容将追加到构思区末尾
+                </p>
+              )}
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setPickerSelectedIds(new Set())
+                    setPickerSearchQuery("")
+                    setShowCardPicker(false)
+                  }}
+                >
+                  取消
+                </Button>
+                <Button
+                  disabled={pickerSelectedIds.size === 0}
+                  onClick={handleConfirmImport}
+                >
+                  导入选中（{pickerSelectedIds.size}）
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )
+      })()}
     </div>
   )
 }

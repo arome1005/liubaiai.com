@@ -1,5 +1,6 @@
 import { formatWorkStyleAndTagProfileBlock, type WritingWorkStyleSlice } from "./assemble-context";
 import { generateWithProvider } from "./client";
+import { isLocalAiProvider } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 
@@ -28,7 +29,7 @@ export class LogicBranchPredictError extends Error {
 }
 
 function assertCanSendLogicBranch(settings: AiSettings): void {
-  const cloud = settings.provider !== "ollama";
+  const cloud = !isLocalAiProvider(settings.provider);
   if (!cloud) return;
   if (!settings.privacy.consentAccepted || !settings.privacy.allowCloudProviders) {
     throw new LogicBranchPredictError("请先在设置中同意云端 AI 并允许调用。");
@@ -88,7 +89,7 @@ export async function generateLogicThreeBranches(args: {
   const settings = args.settings ?? loadAiSettings();
   assertCanSendLogicBranch(settings);
   const cfg = getProviderConfig(settings, settings.provider);
-  if (settings.provider !== "ollama" && !cfg.apiKey?.trim()) {
+  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
     throw new LogicBranchPredictError("请先在设置中填写当前模型的 API Key。");
   }
   const body = args.chapterContent.trim();

@@ -4,7 +4,7 @@ export function workIdFromPath(pathname: string): string | null {
   return m?.[1] ?? null;
 }
 
-/** 作品下「圣经 / 概要」子页：`BiblePage` / `SummaryOverviewPage` 自带 `page-header`，可隐藏 AppShell 薄 `app-topbar` */
+/** 作品下「锦囊 / 概要」子页：`BiblePage` / `SummaryOverviewPage` 自带 `page-header`，可隐藏 AppShell 薄 `app-topbar` */
 export function isWorkBibleOrSummaryPath(pathname: string): boolean {
   return /^\/work\/[^/]+\/(bible|summary)$/.test(pathname);
 }
