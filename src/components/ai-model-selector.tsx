@@ -237,7 +237,6 @@ export function AIModelSelector({
   const [previewModelId, setPreviewModelId] = useState(selectedModelId)
   
   const previewModel = AI_MODELS.find(m => m.id === previewModelId) || AI_MODELS[0]
-  const currentModel = AI_MODELS.find(m => m.id === selectedModelId)
 
   const handleConfirm = () => {
     onSelectModel(previewModelId)

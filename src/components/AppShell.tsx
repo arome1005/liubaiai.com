@@ -4,7 +4,7 @@ import { getWork, listChapters } from "../db/repo";
 import { useAuthUserState } from "../hooks/useAuthUserState";
 import { GlobalCommandPalette } from "./GlobalCommandPalette";
 import { shortcutModifierSymbol } from "../util/keyboardHints";
-import { persistThemePreference, readThemePreference } from "../theme";
+import { persistThemePreference } from "../theme";
 import { wordCount } from "../util/wordCount";
 import { resolveDefaultChapterId } from "../util/resolve-default-chapter";
 import { isWorkBibleOrSummaryPath, workIdFromPath } from "../util/workPath";

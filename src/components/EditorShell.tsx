@@ -256,7 +256,6 @@ export function EditorShell() {
                   搜索
                   <kbd className="app-editor-command-kbd">{cmdModKey}+K</kbd>
                 </Button>
-                <UserAccountMenu authUser={authUser} onAuthUpdated={refreshAuth} />
                 <Button
                   type="button"
                   variant={rightOpen ? "default" : "outline"}
