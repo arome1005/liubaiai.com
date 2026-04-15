@@ -1,11 +1,26 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { Button } from "../components/ui/button";
+import { Input } from "../components/ui/input";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog";
+import { cn } from "../lib/utils";
+import {
+  addBibleCharacter,
+  addBibleWorldEntry,
+  addBibleTimelineEvent,
+  addWritingStyleSample,
   addReferenceExcerpt,
+  addReferenceExtract,
   clearAllReferenceLibraryData,
   createReferenceFromPlainText,
   createReferenceTag,
   deleteReferenceExcerpt,
+  deleteReferenceExtract,
   deleteReferenceLibraryEntry,
   deleteReferenceTag,
   getReferenceChunkAt,
@@ -13,12 +28,14 @@ import {
   listChapters,
   listReferenceExcerptsWithTagIds,
   listReferenceChapterHeads,
+  listReferenceExtracts,
   listReferenceLibrary,
   listReferenceTags,
   listWorks,
   rebuildAllReferenceSearchIndex,
   searchReferenceLibrary,
   updateReferenceExcerpt,
+  updateReferenceExtract,
   updateReferenceLibraryEntry,
 } from "../db/repo";
 import type {
@@ -26,13 +43,70 @@ import type {
   ReferenceChapterHead,
   ReferenceChunk,
   ReferenceExcerpt,
+  ReferenceExtract,
+  ReferenceExtractType,
   ReferenceLibraryEntry,
   ReferenceSearchHit,
   ReferenceTag,
   Work,
 } from "../db/types";
-import { REFERENCE_CHUNK_CHAR_TARGET, REFERENCE_IMPORT_HEAVY_BYTES } from "../db/types";
+import { REFERENCE_IMPORT_HEAVY_BYTES } from "../db/types";
+import {
+  extractReferenceContent,
+  getExtractTypeLabel,
+  EXTRACT_TYPES,
+  ReferenceExtractError,
+} from "../ai/reference-extract";
+import { getDB } from "../db/database";
+import { extractPlainTextFromDocx } from "../util/extract-docx-text";
+import { extractPlainTextFromPdf } from "../util/extract-pdf-text";
 import { readUtf8TextFileWithCheck } from "../util/readUtf8TextFile";
+import { downloadReferenceLibraryZip } from "../util/reference-batch-export";
+import {
+  loadReferenceFavoriteIds,
+  loadReferenceFavoriteScope,
+  saveReferenceFavoriteIds,
+  saveReferenceFavoriteScope,
+  type ReferenceFavoriteScope,
+} from "../util/reference-favorites";
+import { Badge } from "../components/ui/badge";
+import { Progress } from "../components/ui/progress";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu";
+import {
+  Book,
+  HardDrive,
+  FileText,
+  Star,
+  Grid3X3,
+  List,
+  Filter,
+  ChevronDown,
+  Search,
+  Upload,
+  Download,
+  Eye,
+  Edit3,
+  MoreVertical,
+  Tag,
+  Trash2,
+  X,
+  SortAsc,
+  Bookmark,
+  Clock,
+  BarChart3,
+  TrendingUp,
+  Reply,
+  Wand2,
+  Sparkles,
+} from "lucide-react";
+import { PromptExtractDialog } from "../components/PromptExtractDialog";
+import { ReferenceAiChatDialog } from "../components/ReferenceAiChatDialog";
 
 const CONTEXT_TAIL = 280;
 const CONTEXT_HEAD = 280;
@@ -40,6 +114,26 @@ const CONTEXT_HEAD = 280;
 const LS_REF_PROGRESS_FILTER = "liubai-ref3_8-progress-filter";
 const LS_REF_PROGRESS_WORK = "liubai-ref3_8-progress-work";
 const LS_REF_READER_POS_PREFIX = "liubai-ref:readerPos:";
+const LS_REF_VIEW_MODE = "liubai:referenceViewMode";
+const LS_REF_SEARCH_MODE = "liubai:referenceSearchMode";
+const LS_REF_SORT_BY = "liubai:referenceSortBy";
+type ReferenceSortBy = "recent" | "words" | "progress";
+
+/** 统计非标点符号字符数 */
+function countNonPunctuation(s: string): number {
+  return s.replace(/[\s\p{P}\p{S}]/gu, "").length;
+}
+
+type ReferenceViewMode = "grid" | "list";
+type ReferenceSearchMode = "strict" | "hybrid";
+
+function loadReferenceSearchMode(): ReferenceSearchMode {
+  try {
+    return localStorage.getItem(LS_REF_SEARCH_MODE) === "hybrid" ? "hybrid" : "strict";
+  } catch {
+    return "strict";
+  }
+}
 
 function loadProgressFilterEnabled(): boolean {
   try {
@@ -68,6 +162,12 @@ function isLinkedChapterBeforeProgress(
   const linkCh = chapters.find((c) => c.id === linkedChapterId);
   if (!cur || !linkCh) return true;
   return linkCh.order < cur.order;
+}
+
+function refCoverHue(refId: string): number {
+  let h = 0;
+  for (let i = 0; i < refId.length; i++) h = (h * 31 + refId.charCodeAt(i)) >>> 0;
+  return h % 360;
 }
 
 function highlightChunkText(text: string, start: number, end: number) {
@@ -107,8 +207,11 @@ export function ReferenceLibraryPage() {
   const [searchQ, setSearchQ] = useState("");
   const [searchHits, setSearchHits] = useState<ReferenceSearchHit[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
+  const [refSearchMode, setRefSearchMode] = useState<ReferenceSearchMode>(loadReferenceSearchMode);
   /** 仅搜当前打开的书；null = 全库 */
   const [searchScopeRefId, setSearchScopeRefId] = useState<string | null>(null);
+  const [searchDialogOpen, setSearchDialogOpen] = useState(false);
+  const searchDialogRef = useRef<HTMLTextAreaElement>(null);
 
   const [activeRefId, setActiveRefId] = useState<string | null>(null);
   const [activeTitle, setActiveTitle] = useState("");
@@ -142,6 +245,50 @@ export function ReferenceLibraryPage() {
   /** 书目 id → 检测到的章节标题行（展开时懒加载） */
   const [refChapterHeadsById, setRefChapterHeadsById] = useState<Record<string, ReferenceChapterHead[]>>({});
   const [refHeadsForHits, setRefHeadsForHits] = useState<Record<string, ReferenceChapterHead[]>>({});
+  const [viewMode, setViewMode] = useState<ReferenceViewMode>(() => {
+    try {
+      const v = localStorage.getItem(LS_REF_VIEW_MODE);
+      return v === "list" ? "list" : "grid";
+    } catch {
+      return "grid";
+    }
+  });
+
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(() => loadReferenceFavoriteIds());
+  const [favoriteScope, setFavoriteScope] = useState<ReferenceFavoriteScope>(() => loadReferenceFavoriteScope());
+  const [exportSelection, setExportSelection] = useState<Set<string>>(() => new Set());
+  const [sortBy, setSortBy] = useState<ReferenceSortBy>(() => {
+    try {
+      const v = localStorage.getItem(LS_REF_SORT_BY);
+      if (v === "words" || v === "progress") return v;
+      return "recent";
+    } catch { return "recent"; }
+  });
+  const [extractCountById, setExtractCountById] = useState<Record<string, number>>({});
+
+  // ── 提炼要点（P1-03）状态 ──────────────────────────────────────────────
+  // ── 提炼提示词 Dialog 状态 ──────────────────────────────────────────────────
+  const [promptExtractDialogOpen, setPromptExtractDialogOpen] = useState(false);
+  const [promptExtractSource, setPromptExtractSource] = useState<
+    | { kind: "excerpt"; excerptText: string; excerptNote?: string; excerptId: string; bookTitle?: string }
+    | { kind: "book"; chunkCount: number; bookTitle?: string }
+    | null
+  >(null);
+  const promptExtractChunksRef = useRef<string[]>([]);
+
+  // ── 藏经 AI 聊天弹窗（自由提炼提示词） ───────────────────────────────────────
+  const [aiChatDialogOpen, setAiChatDialogOpen] = useState(false);
+  const [aiChatBookChunks, setAiChatBookChunks] = useState<string[]>([]);
+
+  const [extractPanelOpen, setExtractPanelOpen] = useState(false);
+  const [extractType, setExtractType] = useState<ReferenceExtractType>("characters");
+  const [extractStreaming, setExtractStreaming] = useState("");
+  const [extractLoading, setExtractLoading] = useState(false);
+  const [extractError, setExtractError] = useState<string | null>(null);
+  const [savedExtracts, setSavedExtracts] = useState<ReferenceExtract[]>([]);
+  const [importWorkId, setImportWorkId] = useState<string>("");
+  const [importBusy, setImportBusy] = useState<Record<string, boolean>>({});
+  const extractAbortRef = useRef<AbortController | null>(null);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const chunkAnchorRef = useRef<HTMLDivElement>(null);
@@ -182,9 +329,65 @@ export function ReferenceLibraryPage() {
   }, [items]);
 
   const filteredItems = useMemo(() => {
-    if (!categoryFilter) return items;
-    return items.filter((it) => (it.category ?? "").trim() === categoryFilter);
-  }, [items, categoryFilter]);
+    let list = items;
+    if (categoryFilter) list = list.filter((it) => (it.category ?? "").trim() === categoryFilter);
+    if (favoriteScope === "favorites") list = list.filter((it) => favoriteIds.has(it.id));
+    list = [...list].sort((a, b) => {
+      if (sortBy === "words") return b.totalChars - a.totalChars;
+      if (sortBy === "progress") {
+        const pctA = a.chunkCount > 1 ? ((loadReaderPos(a.id) ?? 0) / (a.chunkCount - 1)) : 0;
+        const pctB = b.chunkCount > 1 ? ((loadReaderPos(b.id) ?? 0) / (b.chunkCount - 1)) : 0;
+        return pctB - pctA;
+      }
+      return b.updatedAt - a.updatedAt;
+    });
+    return list;
+  }, [items, categoryFilter, favoriteScope, favoriteIds, sortBy]);
+
+  useEffect(() => {
+    const valid = new Set(items.map((i) => i.id));
+    setFavoriteIds((prev) => {
+      const next = new Set([...prev].filter((id) => valid.has(id)));
+      if (next.size !== prev.size) saveReferenceFavoriteIds(next);
+      return next;
+    });
+    setExportSelection((prev) => {
+      const next = new Set([...prev].filter((id) => valid.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [items]);
+
+  useEffect(() => {
+    saveReferenceFavoriteScope(favoriteScope);
+  }, [favoriteScope]);
+
+  const libraryTotals = useMemo(() => {
+    let chars = 0;
+    for (const it of items) chars += it.totalChars;
+    return { count: items.length, chars };
+  }, [items]);
+
+  const totalExtracts = useMemo(() => Object.values(extractCountById).reduce((a, b) => a + b, 0), [extractCountById]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_REF_VIEW_MODE, viewMode);
+    } catch {
+      /* ignore */
+    }
+  }, [viewMode]);
+
+  useEffect(() => {
+    try { localStorage.setItem(LS_REF_SORT_BY, sortBy); } catch { /* ignore */ }
+  }, [sortBy]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_REF_SEARCH_MODE, refSearchMode);
+    } catch {
+      /* ignore */
+    }
+  }, [refSearchMode]);
 
   useEffect(() => {
     void (async () => {
@@ -196,6 +399,28 @@ export function ReferenceLibraryPage() {
       }
     })();
   }, []);
+
+  // 加载每本书的提炼条目数
+  useEffect(() => {
+    if (items.length === 0) { setExtractCountById({}); return; }
+    let cancelled = false;
+    void (async () => {
+      const entries = await Promise.all(
+        items.map(async (it) => [it.id, (await listReferenceExtracts(it.id)).length] as const)
+      );
+      if (cancelled) return;
+      const counts: Record<string, number> = {};
+      for (const [id, n] of entries) counts[id] = n;
+      setExtractCountById(counts);
+    })();
+    return () => { cancelled = true; };
+  }, [items]);
+
+  // 提炼面板变化时同步当前书的计数
+  useEffect(() => {
+    if (!activeRefId) return;
+    setExtractCountById(prev => ({ ...prev, [activeRefId]: savedExtracts.length }));
+  }, [activeRefId, savedExtracts.length]);
 
   const loadExcerpts = useCallback(async (refId: string) => {
     setExcerpts(await listReferenceExcerptsWithTagIds(refId));
@@ -296,6 +521,53 @@ export function ReferenceLibraryPage() {
     [loadExcerpts],
   );
 
+  const toggleReferenceFavorite = useCallback((id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    e?.preventDefault();
+    setFavoriteIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      saveReferenceFavoriteIds(next);
+      return next;
+    });
+  }, []);
+
+  const selectAllFilteredForExport = useCallback(() => {
+    setExportSelection(new Set(filteredItems.map((r) => r.id)));
+  }, [filteredItems]);
+
+  const clearExportSelection = useCallback(() => {
+    setExportSelection(new Set());
+  }, []);
+
+  const runExportZip = useCallback(async () => {
+    if (exportSelection.size === 0) return;
+    setBusy(true);
+    try {
+      await downloadReferenceLibraryZip(items, [...exportSelection]);
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [exportSelection, items]);
+
+  const filterEmptyHint = useMemo(() => {
+    if (items.length === 0) return "";
+    if (filteredItems.length > 0) return "";
+    if (favoriteScope === "favorites" && categoryFilter) {
+      return "当前分类下没有已收藏的书目，可调整分类或改为「全部书目」。";
+    }
+    if (favoriteScope === "favorites") {
+      return "暂无符合筛选的收藏书目。点击书目旁的星标可将原著加入收藏（仅本机）。";
+    }
+    if (categoryFilter) {
+      return "当前分类下没有书目，请调整分类筛选。";
+    }
+    return "没有符合筛选的书目。";
+  }, [items.length, filteredItems.length, favoriteScope, categoryFilter]);
+
   /** 从编辑器「在参考库打开」等深链进入：?ref=&ord=&hs=&he= */
   const deepLinkKeyRef = useRef<string | null>(null);
   useEffect(() => {
@@ -329,6 +601,161 @@ export function ReferenceLibraryPage() {
     });
   }, [loading, items, searchParams, openReader, setSearchParams]);
 
+  // ── 提炼要点：加载已保存条目 ─────────────────────────────────────────
+  useEffect(() => {
+    if (!activeRefId || !extractPanelOpen) return;
+    void listReferenceExtracts(activeRefId).then(setSavedExtracts);
+  }, [activeRefId, extractPanelOpen]);
+
+  // 切换书目时重置提炼面板
+  useEffect(() => {
+    setExtractStreaming("");
+    setExtractError(null);
+    setExtractLoading(false);
+    setSavedExtracts([]);
+  }, [activeRefId]);
+
+  const handleStartExtract = useCallback(async () => {
+    if (!activeRefId || !activeTitle) return;
+    setExtractError(null);
+    setExtractStreaming("");
+    setExtractLoading(true);
+    const ctrl = new AbortController();
+    extractAbortRef.current = ctrl;
+
+    try {
+      // 加载该书目所有分块文本
+      const db = getDB();
+      const chunks = await db.referenceChunks
+        .where("refWorkId")
+        .equals(activeRefId)
+        .sortBy("ordinal");
+      const chunkTexts = chunks.map((c) => c.content);
+
+      const fullResult = await extractReferenceContent({
+        chunkTexts,
+        type: extractType,
+        bookTitle: activeTitle,
+        signal: ctrl.signal,
+        onDelta: (delta) => setExtractStreaming((prev) => prev + delta),
+      });
+
+      if (!ctrl.signal.aborted && fullResult.trim()) {
+        const saved = await addReferenceExtract({
+          refWorkId: activeRefId,
+          type: extractType,
+          body: fullResult,
+        });
+        setSavedExtracts((prev) => [saved, ...prev]);
+        setExtractStreaming("");
+      }
+    } catch (err) {
+      if (err instanceof ReferenceExtractError) {
+        setExtractError(err.message);
+      } else if (!ctrl.signal.aborted) {
+        setExtractError(err instanceof Error ? err.message : "提炼失败");
+      }
+    } finally {
+      setExtractLoading(false);
+      extractAbortRef.current = null;
+    }
+  }, [activeRefId, activeTitle, extractType]);
+
+  const handleImportExtract = useCallback(async (extract: ReferenceExtract) => {
+    const wid = importWorkId;
+    if (!wid) {
+      window.alert("请先在上方选择要导入的作品。");
+      return;
+    }
+    setImportBusy((prev) => ({ ...prev, [extract.id]: true }));
+    try {
+      let bibleId: string | undefined;
+      const body = extract.body;
+      const titlePrefix = `【藏经提炼·${activeTitle}】`;
+      if (extract.type === "characters") {
+        const entity = await addBibleCharacter(wid, {
+          name: titlePrefix + "人物关系网络",
+          motivation: body,
+          relationships: "",
+          voiceNotes: "",
+          taboos: "",
+        });
+        bibleId = entity.id;
+      } else if (extract.type === "worldbuilding") {
+        const entity = await addBibleWorldEntry(wid, {
+          entryKind: "世界观",
+          title: titlePrefix + "世界观规则",
+          body,
+        });
+        bibleId = entity.id;
+      } else if (extract.type === "plot_beats") {
+        const entity = await addBibleTimelineEvent(wid, {
+          label: titlePrefix + "情节节拍",
+          note: body,
+          chapterId: null,
+        });
+        bibleId = entity.id;
+      } else {
+        // craft → 笔感样本
+        const entity = await addWritingStyleSample(wid, {
+          title: titlePrefix + "技法摘要",
+          body,
+        });
+        bibleId = entity.id;
+      }
+      if (bibleId) {
+        await updateReferenceExtract(extract.id, { importedBibleId: bibleId });
+        setSavedExtracts((prev) =>
+          prev.map((e) => (e.id === extract.id ? { ...e, importedBibleId: bibleId } : e)),
+        );
+      }
+      window.alert("已导入锦囊，请前往「锦囊」页查看。");
+    } catch (err) {
+      window.alert("导入失败：" + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setImportBusy((prev) => ({ ...prev, [extract.id]: false }));
+    }
+  }, [activeTitle, importWorkId]);
+
+  // ── 打开「提炼提示词」Dialog ───────────────────────────────────────────────
+
+  const openPromptExtractFromExcerpt = useCallback(
+    (ex: ReferenceExcerpt) => {
+      setPromptExtractSource({
+        kind: "excerpt",
+        excerptText: ex.text,
+        excerptNote: ex.note ?? "",
+        excerptId: ex.id,
+      });
+      setPromptExtractDialogOpen(true);
+    },
+    [],
+  );
+
+  const openPromptExtractFromBook = useCallback(async () => {
+    if (!activeRefId) return;
+    const db = getDB();
+    const chunks = await db.referenceChunks
+      .where("refWorkId")
+      .equals(activeRefId)
+      .sortBy("ordinal");
+    promptExtractChunksRef.current = chunks.map((c) => c.content);
+    setPromptExtractSource({ kind: "book", chunkCount: chunks.length });
+    setPromptExtractDialogOpen(true);
+  }, [activeRefId]);
+
+  /** 从书架卡片直接触发整书提炼，不需要先打开阅读器 */
+  const openPromptExtractFromEntry = useCallback(async (entry: ReferenceLibraryEntry) => {
+    const db = getDB();
+    const chunks = await db.referenceChunks
+      .where("refWorkId")
+      .equals(entry.id)
+      .sortBy("ordinal");
+    promptExtractChunksRef.current = chunks.map((c) => c.content);
+    setPromptExtractSource({ kind: "book", chunkCount: chunks.length, bookTitle: entry.title });
+    setPromptExtractDialogOpen(true);
+  }, []);
+
   const jumpExcerptToReader = useCallback(
     async (ex: ReferenceExcerpt) => {
       const entry = items.find((x) => x.id === ex.refWorkId);
@@ -351,7 +778,7 @@ export function ReferenceLibraryPage() {
     if (searchScopeRefId !== null && activeRefId) {
       setSearchScopeRefId(activeRefId);
     }
-  }, [activeRefId]);
+  }, [activeRefId, searchScopeRefId]);
 
   useEffect(() => {
     if (searchScopeRefId && !activeRefId) setSearchScopeRefId(null);
@@ -368,6 +795,24 @@ export function ReferenceLibraryPage() {
       const hits = await searchReferenceLibrary(q, {
         refWorkId: searchScopeRefId ?? undefined,
         limit: 80,
+        mode: refSearchMode,
+      });
+      setSearchHits(hits);
+    } finally {
+      setSearchLoading(false);
+    }
+  }
+
+  async function switchRefSearchMode(next: ReferenceSearchMode) {
+    setRefSearchMode(next);
+    const q = searchQ.trim();
+    if (!q) return;
+    setSearchLoading(true);
+    try {
+      const hits = await searchReferenceLibrary(q, {
+        refWorkId: searchScopeRefId ?? undefined,
+        limit: 80,
+        mode: next,
       });
       setSearchHits(hits);
     } finally {
@@ -417,16 +862,42 @@ export function ReferenceLibraryPage() {
     if (picked.length === 0) return;
 
     const txtFiles = picked.filter((f) => f.name.toLowerCase().endsWith(".txt"));
-    if (txtFiles.length === 0) {
-      window.alert("仅支持 .txt 原著导入（分块存储，可支持百万字级）。可多选文件。");
+    const pdfFiles = picked.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
+    const docxFiles = picked.filter((f) => f.name.toLowerCase().endsWith(".docx"));
+
+    const formatCount =
+      (txtFiles.length > 0 ? 1 : 0) + (pdfFiles.length > 0 ? 1 : 0) + (docxFiles.length > 0 ? 1 : 0);
+    if (formatCount > 1) {
+      window.alert("请勿在同一批选择中混合 .txt、.pdf 与 .docx，请按格式分开导入。");
       return;
     }
-    if (txtFiles.length < picked.length) {
+
+    if (formatCount === 0) {
       window.alert(
-        `已忽略 ${picked.length - txtFiles.length} 个非 .txt 文件，将导入 ${txtFiles.length} 个 .txt。`,
+        "支持 UTF-8 的 .txt、带文本层的 .pdf、以及 Word 的 .docx（均在浏览器内本地解析，不上传）。旧版 .doc 请先用 Word 另存为 .docx。可多选同类型文件。",
+      );
+      return;
+    }
+
+    if (txtFiles.length > 0) {
+      if (txtFiles.length < picked.length) {
+        window.alert(
+          `已忽略 ${picked.length - txtFiles.length} 个非 .txt 文件，将导入 ${txtFiles.length} 个 .txt。`,
+        );
+      }
+    } else if (pdfFiles.length > 0) {
+      if (pdfFiles.length < picked.length) {
+        window.alert(
+          `已忽略 ${picked.length - pdfFiles.length} 个非 .pdf 文件，将导入 ${pdfFiles.length} 个 .pdf。`,
+        );
+      }
+    } else if (docxFiles.length < picked.length) {
+      window.alert(
+        `已忽略 ${picked.length - docxFiles.length} 个非 .docx 文件，将导入 ${docxFiles.length} 个 .docx。`,
       );
     }
 
+    if (txtFiles.length > 0) {
     if (txtFiles.length === 1) {
       const file = txtFiles[0]!;
       setBusy(true);
@@ -478,32 +949,167 @@ export function ReferenceLibraryPage() {
       return;
     }
 
-    const batchCat =
+      const batchCat =
+        window.prompt("批量导入默认分类（可空；留空则仅按书名管理）", "") ?? "";
+
+      setBusy(true);
+      setImportProgress({ current: 0, total: txtFiles.length, fileName: "" });
+      const errors: string[] = [];
+      let ok = 0;
+      try {
+        for (let i = 0; i < txtFiles.length; i++) {
+          const file = txtFiles[i]!;
+          setImportProgress({ current: i + 1, total: txtFiles.length, fileName: file.name });
+          try {
+            const { text, suspiciousEncoding } = await readUtf8TextFileWithCheck(file);
+            if (suspiciousEncoding) {
+              const go = window.confirm(
+                `${file.name}：疑似非 UTF-8 或无法解码字符较多，继续导入可能乱码。仍要继续？`,
+              );
+              if (!go) continue;
+            }
+            const stem = file.name.replace(/\.txt$/i, "").trim() || "未命名";
+            const large = new Blob([text]).size >= REFERENCE_IMPORT_HEAVY_BYTES;
+            if (large) {
+              setHeavyJob({
+                phase: "chunks",
+                percent: 0,
+                label: `批量 ${i + 1}/${txtFiles.length}`,
+                fileName: file.name,
+              });
+            }
+            await createReferenceFromPlainText(
+              {
+                title: stem,
+                sourceName: file.name,
+                fullText: text,
+                category: batchCat.trim(),
+              },
+              large
+                ? {
+                    onProgress: (p) =>
+                      setHeavyJob({
+                        phase: p.phase,
+                        percent: p.percent,
+                        label: `${p.label ?? ""}（${i + 1}/${txtFiles.length}）`,
+                        fileName: file.name,
+                      }),
+                  }
+                : undefined,
+            );
+            setHeavyJob(null);
+            ok++;
+            await refresh();
+          } catch (err) {
+            setHeavyJob(null);
+            errors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
+          }
+          await new Promise<void>((r) => requestAnimationFrame(() => r()));
+        }
+      } finally {
+        setImportProgress(null);
+        setHeavyJob(null);
+        setBusy(false);
+      }
+
+      if (errors.length > 0) {
+        const head = errors.slice(0, 8);
+        const more = errors.length > 8 ? `\n… 共 ${errors.length} 条失败` : "";
+        window.alert(`批量导入完成：成功 ${ok}，失败 ${errors.length}。\n\n${head.join("\n")}${more}`);
+      }
+      return;
+    }
+
+    if (pdfFiles.length > 0) {
+    if (pdfFiles.length === 1) {
+      const file = pdfFiles[0]!;
+      setBusy(true);
+      try {
+        setHeavyJob({ phase: "chunks", percent: 0, label: "正在读取 PDF…", fileName: file.name });
+        const buf = await file.arrayBuffer();
+        const { text } = await extractPlainTextFromPdf(buf, {
+          onProgress: ({ page, totalPages }) => {
+            setHeavyJob({
+              phase: "chunks",
+              percent: Math.min(48, Math.round((page / Math.max(1, totalPages)) * 48)),
+              label: `解析 PDF ${page}/${totalPages} 页`,
+              fileName: file.name,
+            });
+          },
+        });
+        setHeavyJob(null);
+        const title =
+          window.prompt("参考库标题（书名）", file.name.replace(/\.pdf$/i, "").trim() || "未命名") ?? "";
+        if (title === "") return;
+        const cat =
+          window.prompt("分类（可空，便于筛选。如：科幻设定、历史资料）", "") ?? "";
+        const large = new Blob([text]).size >= REFERENCE_IMPORT_HEAVY_BYTES;
+        if (large) {
+          setHeavyJob({ phase: "chunks", percent: 0, label: "解析完成，准备写入…", fileName: file.name });
+        }
+        const entry = await createReferenceFromPlainText(
+          {
+            title: title.trim() || "未命名",
+            sourceName: file.name,
+            fullText: text,
+            category: cat.trim(),
+          },
+          large
+            ? {
+                onProgress: (p) =>
+                  setHeavyJob({
+                    phase: p.phase,
+                    percent: p.percent,
+                    label: p.label,
+                    fileName: file.name,
+                  }),
+              }
+            : undefined,
+        );
+        setHeavyJob(null);
+        await refresh();
+        await openReader(entry, 0, null);
+      } catch (err) {
+        setHeavyJob(null);
+        window.alert(err instanceof Error ? err.message : "导入失败");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    const batchCatPdf =
       window.prompt("批量导入默认分类（可空；留空则仅按书名管理）", "") ?? "";
 
     setBusy(true);
-    setImportProgress({ current: 0, total: txtFiles.length, fileName: "" });
-    const errors: string[] = [];
-    let ok = 0;
+    setImportProgress({ current: 0, total: pdfFiles.length, fileName: "" });
+    const pdfErrors: string[] = [];
+    let pdfOk = 0;
     try {
-      for (let i = 0; i < txtFiles.length; i++) {
-        const file = txtFiles[i]!;
-        setImportProgress({ current: i + 1, total: txtFiles.length, fileName: file.name });
+      for (let i = 0; i < pdfFiles.length; i++) {
+        const file = pdfFiles[i]!;
+        setImportProgress({ current: i + 1, total: pdfFiles.length, fileName: file.name });
         try {
-          const { text, suspiciousEncoding } = await readUtf8TextFileWithCheck(file);
-          if (suspiciousEncoding) {
-            const go = window.confirm(
-              `${file.name}：疑似非 UTF-8 或无法解码字符较多，继续导入可能乱码。仍要继续？`,
-            );
-            if (!go) continue;
-          }
-          const stem = file.name.replace(/\.txt$/i, "").trim() || "未命名";
+          setHeavyJob({ phase: "chunks", percent: 0, label: "正在读取 PDF…", fileName: file.name });
+          const buf = await file.arrayBuffer();
+          const { text } = await extractPlainTextFromPdf(buf, {
+            onProgress: ({ page, totalPages }) => {
+              setHeavyJob({
+                phase: "chunks",
+                percent: Math.min(48, Math.round((page / Math.max(1, totalPages)) * 48)),
+                label: `解析 ${i + 1}/${pdfFiles.length} · ${page}/${totalPages} 页`,
+                fileName: file.name,
+              });
+            },
+          });
+          setHeavyJob(null);
+          const stem = file.name.replace(/\.pdf$/i, "").trim() || "未命名";
           const large = new Blob([text]).size >= REFERENCE_IMPORT_HEAVY_BYTES;
           if (large) {
             setHeavyJob({
               phase: "chunks",
               percent: 0,
-              label: `批量 ${i + 1}/${txtFiles.length}`,
+              label: `批量 ${i + 1}/${pdfFiles.length}`,
               fileName: file.name,
             });
           }
@@ -512,7 +1118,7 @@ export function ReferenceLibraryPage() {
               title: stem,
               sourceName: file.name,
               fullText: text,
-              category: batchCat.trim(),
+              category: batchCatPdf.trim(),
             },
             large
               ? {
@@ -520,18 +1126,18 @@ export function ReferenceLibraryPage() {
                     setHeavyJob({
                       phase: p.phase,
                       percent: p.percent,
-                      label: `${p.label ?? ""}（${i + 1}/${txtFiles.length}）`,
+                      label: `${p.label ?? ""}（${i + 1}/${pdfFiles.length}）`,
                       fileName: file.name,
                     }),
                 }
               : undefined,
           );
           setHeavyJob(null);
-          ok++;
+          pdfOk++;
           await refresh();
         } catch (err) {
           setHeavyJob(null);
-          errors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
+          pdfErrors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
         }
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
@@ -541,10 +1147,126 @@ export function ReferenceLibraryPage() {
       setBusy(false);
     }
 
-    if (errors.length > 0) {
-      const head = errors.slice(0, 8);
-      const more = errors.length > 8 ? `\n… 共 ${errors.length} 条失败` : "";
-      window.alert(`批量导入完成：成功 ${ok}，失败 ${errors.length}。\n\n${head.join("\n")}${more}`);
+    if (pdfErrors.length > 0) {
+      const head = pdfErrors.slice(0, 8);
+      const more = pdfErrors.length > 8 ? `\n… 共 ${pdfErrors.length} 条失败` : "";
+      window.alert(`批量导入完成：成功 ${pdfOk}，失败 ${pdfErrors.length}。\n\n${head.join("\n")}${more}`);
+    }
+    return;
+    }
+
+    if (docxFiles.length === 1) {
+      const file = docxFiles[0]!;
+      setBusy(true);
+      try {
+        setHeavyJob({ phase: "chunks", percent: 0, label: "正在解析 Word 文档…", fileName: file.name });
+        const buf = await file.arrayBuffer();
+        const text = await extractPlainTextFromDocx(buf);
+        setHeavyJob(null);
+        const title =
+          window.prompt("参考库标题（书名）", file.name.replace(/\.docx$/i, "").trim() || "未命名") ?? "";
+        if (title === "") return;
+        const cat =
+          window.prompt("分类（可空，便于筛选。如：科幻设定、历史资料）", "") ?? "";
+        const large = new Blob([text]).size >= REFERENCE_IMPORT_HEAVY_BYTES;
+        if (large) {
+          setHeavyJob({ phase: "chunks", percent: 0, label: "解析完成，准备写入…", fileName: file.name });
+        }
+        const entry = await createReferenceFromPlainText(
+          {
+            title: title.trim() || "未命名",
+            sourceName: file.name,
+            fullText: text,
+            category: cat.trim(),
+          },
+          large
+            ? {
+                onProgress: (p) =>
+                  setHeavyJob({
+                    phase: p.phase,
+                    percent: p.percent,
+                    label: p.label,
+                    fileName: file.name,
+                  }),
+              }
+            : undefined,
+        );
+        setHeavyJob(null);
+        await refresh();
+        await openReader(entry, 0, null);
+      } catch (err) {
+        setHeavyJob(null);
+        window.alert(err instanceof Error ? err.message : "导入失败");
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
+    const batchCatDocx =
+      window.prompt("批量导入默认分类（可空；留空则仅按书名管理）", "") ?? "";
+
+    setBusy(true);
+    setImportProgress({ current: 0, total: docxFiles.length, fileName: "" });
+    const docxErrors: string[] = [];
+    let docxOk = 0;
+    try {
+      for (let i = 0; i < docxFiles.length; i++) {
+        const file = docxFiles[i]!;
+        setImportProgress({ current: i + 1, total: docxFiles.length, fileName: file.name });
+        try {
+          setHeavyJob({ phase: "chunks", percent: 0, label: "正在解析 Word 文档…", fileName: file.name });
+          const buf = await file.arrayBuffer();
+          const text = await extractPlainTextFromDocx(buf);
+          setHeavyJob(null);
+          const stem = file.name.replace(/\.docx$/i, "").trim() || "未命名";
+          const large = new Blob([text]).size >= REFERENCE_IMPORT_HEAVY_BYTES;
+          if (large) {
+            setHeavyJob({
+              phase: "chunks",
+              percent: 0,
+              label: `批量 ${i + 1}/${docxFiles.length}`,
+              fileName: file.name,
+            });
+          }
+          await createReferenceFromPlainText(
+            {
+              title: stem,
+              sourceName: file.name,
+              fullText: text,
+              category: batchCatDocx.trim(),
+            },
+            large
+              ? {
+                  onProgress: (p) =>
+                    setHeavyJob({
+                      phase: p.phase,
+                      percent: p.percent,
+                      label: `${p.label ?? ""}（${i + 1}/${docxFiles.length}）`,
+                      fileName: file.name,
+                    }),
+                }
+              : undefined,
+          );
+          setHeavyJob(null);
+          docxOk++;
+          await refresh();
+        } catch (err) {
+          setHeavyJob(null);
+          docxErrors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
+        }
+        await new Promise<void>((r) => requestAnimationFrame(() => r()));
+      }
+    } finally {
+      setImportProgress(null);
+      setHeavyJob(null);
+      setBusy(false);
+    }
+
+    if (docxErrors.length > 0) {
+      const head = docxErrors.slice(0, 8);
+      const more = docxErrors.length > 8 ? `\n… 共 ${docxErrors.length} 条失败` : "";
+      window.alert(`批量导入完成：成功 ${docxOk}，失败 ${docxErrors.length}。\n\n${head.join("\n")}${more}`);
     }
   }
 
@@ -581,7 +1303,7 @@ export function ReferenceLibraryPage() {
       window.alert("请先在阅读器中划选要保存的文字。");
       return;
     }
-    let start = ch.content.indexOf(t);
+    const start = ch.content.indexOf(t);
     if (start < 0) {
       window.alert("无法定位选区，请缩短选区或避免跨段选择。");
       return;
@@ -648,254 +1370,335 @@ export function ReferenceLibraryPage() {
 
   if (loading) {
     return (
-      <div className="page reference-page">
-        <p className="muted">加载中…</p>
+      <div className={cn("page reference-page flex flex-col gap-4")}>
+        <div className="flex flex-col items-center justify-center py-16">
+          <Book className="h-10 w-10 text-muted-foreground/40 mb-3" />
+          <p className="text-muted-foreground">加载中…</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="page reference-page reference-page--split">
-      <header className="page-header">
-        <Link to="/library" className="back-link">
-          ← 作品库
-        </Link>
-        <h1>参考库</h1>
-        <div className="header-actions">
-          <button type="button" className="btn primary" disabled={busy} onClick={openPicker}>
-            {busy
-              ? importProgress
-                ? `导入中 ${importProgress.current}/${importProgress.total}…`
-                : "导入中…"
-              : "导入 .txt（可多选）"}
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".txt,text/plain"
-            multiple
-            className="visually-hidden"
-            onChange={(ev) => void handleFiles(ev)}
-          />
+    <div className={cn("page reference-page reference-page--split flex flex-col gap-4")}>
+
+      <header className="rounded-xl border border-black/5 dark:border-border/40 bg-white dark:bg-card/30 px-6 py-3 shadow-sm transition-all duration-300">
+        {/* 搜索与筛选工具栏 */}
+        <div className="flex flex-wrap items-center gap-3">
+          {/* 全文搜索框 */}
+          <div className="relative w-[160px] min-w-[120px]">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              id="reference-fulltext-search"
+              type="search"
+              placeholder="搜索全文…"
+              value={searchQ}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSearchQ(val);
+                if (countNonPunctuation(val) > 10) {
+                  setSearchDialogOpen(true);
+                }
+              }}
+              onKeyDown={(e) => { if (e.key === "Enter") void runSearch(); }}
+              className="pl-9 bg-background/50 border-border/50"
+              autoComplete="off"
+            />
+            {searchQ && (
+              <button
+                type="button"
+                onClick={() => { setSearchQ(""); setSearchHits([]); }}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+
+          <Button type="button" size="sm" disabled={searchLoading} onClick={() => void runSearch()}>
+            {searchLoading ? "…" : "搜索"}
+          </Button>
+          <label className="flex cursor-pointer items-center gap-1 text-xs text-muted-foreground" title={!activeRefId ? "先打开一本书" : "仅在当前打开的书中搜索"}>
+            <input
+              type="checkbox"
+              checked={searchScopeRefId !== null}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  if (activeRefId) setSearchScopeRefId(activeRefId);
+                } else setSearchScopeRefId(null);
+              }}
+              disabled={!activeRefId}
+              className="h-3 w-3"
+            />
+            当前书
+          </label>
+
+          {/* 分类筛选 */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-2">
+                <Filter className="h-4 w-4" />
+                {categoryFilter || "全部分类"}
+                <ChevronDown className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-44">
+              <DropdownMenuItem
+                onClick={() => setCategoryFilter("")}
+                className={cn(!categoryFilter && "bg-primary/10 text-primary")}
+              >
+                全部分类
+              </DropdownMenuItem>
+              {categoryOptions.length > 0 && <DropdownMenuSeparator />}
+              {categoryOptions.map((c) => (
+                <DropdownMenuItem
+                  key={c}
+                  onClick={() => setCategoryFilter(c)}
+                  className={cn(categoryFilter === c && "bg-primary/10 text-primary")}
+                >
+                  {c}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* 检索模式切换 */}
+          <div className="flex items-center rounded-lg border border-border/50 p-0.5" role="group" aria-label="检索模式">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={cn("h-7 px-2.5 text-xs rounded-md", refSearchMode === "strict" && "bg-primary/20 text-primary")}
+              aria-pressed={refSearchMode === "strict"}
+              title="多词须同时出现，且整段查询需字面命中"
+              onClick={() => void switchRefSearchMode("strict")}
+            >
+              精确
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className={cn("h-7 px-2.5 text-xs rounded-md", refSearchMode === "hybrid" && "bg-primary/20 text-primary")}
+              aria-pressed={refSearchMode === "hybrid"}
+              title="多词任一命中即可参与排序；整句命中优先"
+              onClick={() => void switchRefSearchMode("hybrid")}
+            >
+              扩展
+            </Button>
+          </div>
+
+          {/* 排序 */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-2">
+                <SortAsc className="h-4 w-4" />
+                {sortBy === "recent" ? "最近" : sortBy === "words" ? "字数" : "进度"}
+                <ChevronDown className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem
+                onClick={() => setSortBy("recent")}
+                className={cn(sortBy === "recent" && "bg-primary/10 text-primary")}
+              >
+                <Clock className="mr-2 h-4 w-4" />
+                最近更新
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => setSortBy("words")}
+                className={cn(sortBy === "words" && "bg-primary/10 text-primary")}
+              >
+                <BarChart3 className="mr-2 h-4 w-4" />
+                字数排序
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => setSortBy("progress")}
+                className={cn(sortBy === "progress" && "bg-primary/10 text-primary")}
+              >
+                <TrendingUp className="mr-2 h-4 w-4" />
+                阅读进度
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* 收藏筛选 */}
+          <Button
+            type="button"
+            variant={favoriteScope === "favorites" ? "secondary" : "outline"}
+            size="sm"
+            className="gap-2"
+            onClick={() => setFavoriteScope(favoriteScope === "favorites" ? "all" : "favorites")}
+          >
+            <Star className={cn("h-4 w-4", favoriteScope === "favorites" && "fill-current")} />
+            收藏
+          </Button>
+
+          {/* 藏经统计概览 */}
+          {libraryTotals.count > 0 && (
+            <div className="group relative">
+              <div className="flex h-8 w-8 cursor-default items-center justify-center rounded-lg border border-border/50 text-muted-foreground transition-colors hover:border-primary/30 hover:text-primary">
+                <Book className="h-4 w-4" />
+              </div>
+              <div className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-border/60 bg-popover px-3 py-2 text-xs text-popover-foreground shadow-lg opacity-0 transition-opacity group-hover:opacity-100">
+                <div className="flex items-center gap-4">
+                  <span className="flex items-center gap-1.5"><Book className="h-3.5 w-3.5 text-primary" />{libraryTotals.count} 本</span>
+                  <span className="flex items-center gap-1.5"><FileText className="h-3.5 w-3.5 text-amber-500" />{Math.round(libraryTotals.chars / 10000)} 万字</span>
+                  <span className="flex items-center gap-1.5"><Bookmark className="h-3.5 w-3.5 text-purple-500" />{totalExtracts} 提炼</span>
+                  <span className="flex items-center gap-1.5"><Star className="h-3.5 w-3.5 text-amber-400" />{favoriteIds.size} 收藏</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 导入与导出 */}
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="gap-2"
+              onClick={() => {
+                void (async () => {
+                  // 若已打开书，预取前 N 段用于 system 注入；未打开也允许进入（空态提示用户描述需求）
+                  if (activeRefId) {
+                    const db = getDB();
+                    const chunks = await db.referenceChunks
+                      .where("refWorkId")
+                      .equals(activeRefId)
+                      .sortBy("ordinal");
+                    setAiChatBookChunks(chunks.slice(0, 4).map((c) => c.content));
+                  } else {
+                    setAiChatBookChunks([]);
+                  }
+                  setAiChatDialogOpen(true);
+                })();
+              }}
+              title={activeRefId ? "打开 AI 聊天提炼" : "打开 AI 聊天（可不选书）"}
+            >
+              <Sparkles className="h-4 w-4" />
+              AI
+            </Button>
+            {items.length > 0 && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                disabled={busy || exportSelection.size === 0}
+                onClick={() => void runExportZip()}
+              >
+                <Download className="h-4 w-4" />
+                导出{exportSelection.size > 0 ? ` (${exportSelection.size})` : ""}
+              </Button>
+            )}
+            <Button type="button" size="sm" className="gap-2" disabled={busy} onClick={openPicker}>
+              <Upload className="h-4 w-4" />
+              {busy
+                ? importProgress
+                  ? `导入 ${importProgress.current}/${importProgress.total}…`
+                  : "导入中…"
+                : "导入"}
+            </Button>
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".txt,.pdf,.docx,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              multiple
+              className="visually-hidden"
+              onChange={(ev) => void handleFiles(ev)}
+            />
+          </div>
+
+          {/* 视图切换 */}
+          <div className="flex items-center gap-1 rounded-lg border border-border/50 p-1" role="group" aria-label="书目视图">
+            <button
+              type="button"
+              onClick={() => setViewMode("grid")}
+              aria-pressed={viewMode === "grid"}
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                viewMode === "grid" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground",
+              )}
+              title="网格视图"
+            >
+              <Grid3X3 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("list")}
+              aria-pressed={viewMode === "list"}
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                viewMode === "list" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground",
+              )}
+              title="列表视图"
+            >
+              <List className="h-4 w-4" />
+            </button>
+          </div>
+
+          <Link
+            to="/library"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-border/50 text-muted-foreground transition-colors hover:border-primary/30 hover:text-primary"
+            title="返回作品库"
+          >
+            <Reply className="h-4 w-4" />
+          </Link>
         </div>
+
+
       </header>
 
+      {/* 导入进度条 */}
       {importProgress && (
-        <div className="reference-import-progress" role="status" aria-live="polite">
-          <div className="reference-progress-meta">
-            <span>
-              正在导入第 {importProgress.current} / {importProgress.total} 个
-            </span>
-            {importProgress.fileName ? (
-              <span className="muted truncate" title={importProgress.fileName}>
+        <div className="rounded-xl border border-border/40 bg-card/30 px-4 py-3 shadow-sm" role="status" aria-live="polite">
+          <div className="mb-2 flex items-center justify-between text-sm">
+            <span>正在导入 {importProgress.current} / {importProgress.total}</span>
+            {importProgress.fileName && (
+              <span className="ml-2 truncate text-muted-foreground" title={importProgress.fileName}>
                 {importProgress.fileName}
               </span>
-            ) : null}
+            )}
           </div>
-          <div
-            className="reference-progress-bar"
-            aria-valuenow={importProgress.current}
-            aria-valuemax={importProgress.total}
-            role="progressbar"
-          >
+          <div className="h-1.5 overflow-hidden rounded-full bg-border">
             <div
-              className="reference-progress-bar-fill"
-              style={{
-                width: `${Math.min(100, (importProgress.current / importProgress.total) * 100)}%`,
-              }}
+              className="h-full rounded-full bg-primary transition-all"
+              style={{ width: `${Math.min(100, (importProgress.current / importProgress.total) * 100)}%` }}
             />
           </div>
         </div>
       )}
 
-      <p className="muted small import-hint">
-        导入时建立<strong>关键词倒排索引</strong>；检索为索引召回 + 字面量确认。可选中多个 .txt 批量导入。
-        分块约 <strong>{REFERENCE_CHUNK_CHAR_TARGET.toLocaleString()}</strong> 字/段。
-      </p>
-
+      {/* 主内容区（分栏布局） */}
       <div className="reference-page-layout">
         <main className="reference-main">
-          <div className="reference-search-block">
-            <div className="reference-filter-row">
-              <label className="small muted">
-                分类筛选
-                <select
-                  className="input reference-category-select"
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value)}
-                >
-                  <option value="">全部</option>
-                  {categoryOptions.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="reference-search-row">
-              <input
-                type="search"
-                className="input reference-search-input"
-                placeholder="搜索参考库全文…"
-                value={searchQ}
-                onChange={(e) => setSearchQ(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void runSearch();
-                }}
-              />
-              <button type="button" className="btn small" disabled={searchLoading} onClick={() => void runSearch()}>
-                {searchLoading ? "…" : "搜索"}
-              </button>
-            </div>
-            <label className="reference-scope small muted">
-              <input
-                type="checkbox"
-                checked={searchScopeRefId !== null}
-                onChange={(e) => {
-                  if (e.target.checked) {
-                    if (activeRefId) setSearchScopeRefId(activeRefId);
-                  } else setSearchScopeRefId(null);
-                }}
-                disabled={!activeRefId}
-              />{" "}
-              仅搜当前阅读中的书
-              {!activeRefId ? "（先打开一本书）" : ""}
-            </label>
-            <p className="muted small reference-search-note">
-              全文检索命中的是参考正文<strong>分块</strong>，无法按写作进度裁剪；若需与 2.6 游标一致防剧透，请为摘录<strong>关联创作章节</strong>并在侧栏用「进度前」过滤。
-            </p>
-            <div className="reference-excerpt-filters">
-              <label className="small muted">
-                摘录按标签筛选
-                <select
-                  className="input reference-category-select"
-                  value={excerptTagFilterId}
-                  onChange={(e) => setExcerptTagFilterId(e.target.value)}
-                >
-                  <option value="">全部</option>
-                  {allTags.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="reference-progress-filter small muted">
-                <input
-                  type="checkbox"
-                  checked={progressFilterEnabled}
-                  onChange={(e) => {
-                    const v = e.target.checked;
-                    setProgressFilterEnabled(v);
-                    try {
-                      localStorage.setItem(LS_REF_PROGRESS_FILTER, v ? "1" : "0");
-                    } catch {
-                      /* ignore */
-                    }
-                  }}
-                />{" "}
-                摘录仅保留关联章节在<strong>写作进度前</strong>（与全书「仅进度前」一致，不含游标章）
-              </label>
-              <label className="small muted">
-                进度参照作品
-                <select
-                  className="input reference-category-select"
-                  value={progressFilterWorkId}
-                  disabled={!progressFilterEnabled}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setProgressFilterWorkId(v);
-                    try {
-                      localStorage.setItem(LS_REF_PROGRESS_WORK, v);
-                    } catch {
-                      /* ignore */
-                    }
-                  }}
-                >
-                  <option value="">选择作品</option>
-                  {worksList.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-            <div className="reference-tag-manage">
-              <span className="small muted">摘录标签（全局）</span>
-              <div className="reference-tag-manage-row">
-                <input
-                  type="text"
-                  className="input reference-tag-input"
-                  placeholder="新标签名称"
-                  value={newTagName}
-                  onChange={(e) => setNewTagName(e.target.value)}
-                />
-                <button
-                  type="button"
-                  className="btn small"
-                  disabled={!newTagName.trim()}
-                  onClick={() => {
-                    void (async () => {
-                      try {
-                        await createReferenceTag(newTagName);
-                        setNewTagName("");
-                        await refresh();
-                      } catch (err) {
-                        window.alert(err instanceof Error ? err.message : "创建失败");
-                      }
-                    })();
-                  }}
-                >
-                  添加标签
-                </button>
-              </div>
-              {allTags.length > 0 ? (
-                <ul className="reference-tag-list">
-                  {allTags.map((t) => (
-                    <li key={t.id}>
-                      <span className="reference-tag-name">{t.name}</span>
-                      <button
-                        type="button"
-                        className="btn ghost small"
-                        onClick={() => {
-                          if (!window.confirm(`删除标签「${t.name}」？摘录上的该标签会一并移除。`)) return;
-                          void (async () => {
-                            await deleteReferenceTag(t.id);
-                            if (excerptTagFilterId === t.id) setExcerptTagFilterId("");
-                            await refresh();
-                            if (activeRefId) await loadExcerpts(activeRefId);
-                          })();
-                        }}
-                      >
-                        删除
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="muted small">暂无标签；添加后可在侧栏摘录上勾选。</p>
-              )}
-            </div>
-          </div>
 
+
+
+          {/* 搜索结果 */}
           {searchHits.length > 0 && (
-            <div className="reference-search-hits">
-              <div className="reference-search-hits-title">搜索结果</div>
-              <ul className="reference-hit-list">
+            <div className="mb-4 rounded-xl border border-black/5 dark:border-border/40 bg-white dark:bg-card/30 p-4 shadow-sm">
+              <div className="mb-3 text-sm font-medium text-foreground">
+                搜索结果 · {searchHits.length} 处
+              </div>
+              <ul className="space-y-2">
                 {searchHits.map((h) => (
                   <li key={`${h.chunkId}-${h.ordinal}-${h.highlightStart}-${h.snippetMatch}`}>
-                    <button type="button" className="reference-hit-btn" onClick={() => void onHitClick(h)}>
-                      <span className="reference-hit-title">{h.refTitle}</span>
-                      <span className="muted small">
-                        {chapterLabelForHit(h.refWorkId, h.ordinal) ? `章：${chapterLabelForHit(h.refWorkId, h.ordinal)} · ` : ""}
-                        存储段 {h.ordinal + 1} · {h.matchCount} 处
+                    <button
+                      type="button"
+                      className="w-full rounded-lg border border-black/5 dark:border-border/40 bg-slate-50 dark:bg-background/50 p-3 text-left transition-all duration-300 hover:border-primary/30 hover:bg-white dark:hover:bg-card/80 hover:shadow-sm"
+                      onClick={() => void onHitClick(h)}
+                    >
+                      <span className="text-sm font-medium text-foreground">{h.refTitle}</span>
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        {chapterLabelForHit(h.refWorkId, h.ordinal) ? `${chapterLabelForHit(h.refWorkId, h.ordinal)} · ` : ""}
+                        段 {h.ordinal + 1} · {h.matchCount} 处命中
                       </span>
-                      <p className="reference-hit-snippet">
-                        <span className="reference-hit-snippet-before">{h.snippetBefore}</span>
-                        <mark className="reference-hit-snippet-match">{h.snippetMatch}</mark>
-                        <span className="reference-hit-snippet-after">{h.snippetAfter}</span>
+                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                        {h.snippetBefore}
+                        <mark className="rounded bg-primary/20 px-0.5 text-primary">{h.snippetMatch}</mark>
+                        {h.snippetAfter}
                       </p>
                     </button>
                   </li>
@@ -904,158 +1707,596 @@ export function ReferenceLibraryPage() {
             </div>
           )}
 
+          {/* 书目区域 */}
           {items.length === 0 ? (
-            <p className="muted">暂无参考库。请先导入 .txt。</p>
-          ) : (
-            <ul className="reference-list">
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-black/10 dark:border-border/60 bg-white/50 dark:bg-transparent py-16 shadow-sm">
+              <Book className="h-12 w-12 text-muted-foreground/40" />
+              <p className="mt-4 text-muted-foreground">暂无参考书目</p>
+              <p className="mt-1 text-sm text-muted-foreground/60">导入 .txt、.pdf 或 .docx 文件开始搭建参考书库</p>
+              <Button type="button" className="mt-4 gap-2" onClick={openPicker}>
+                <Upload className="h-4 w-4" />
+                导入书籍
+              </Button>
+            </div>
+          ) : filteredItems.length === 0 ? (
+            <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/60 py-12">
+              <Book className="h-10 w-10 text-muted-foreground/40" />
+              <p className="mt-3 text-muted-foreground">{filterEmptyHint}</p>
+              <Button variant="link" className="mt-2" onClick={() => { setCategoryFilter(""); setFavoriteScope("all"); }}>
+                清除筛选条件
+              </Button>
+            </div>
+          ) : viewMode === "grid" ? (
+            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
               {filteredItems.map((r) => {
+                const hue = refCoverHue(r.id);
                 const chCount = r.chapterHeadCount ?? 0;
+                const isFav = favoriteIds.has(r.id);
+                const isSelected = exportSelection.has(r.id);
+                const readPos = loadReaderPos(r.id);
+                const readPct =
+                  r.chunkCount > 1 && readPos !== null
+                    ? Math.round((readPos / (r.chunkCount - 1)) * 100)
+                    : readPos !== null
+                      ? 100
+                      : 0;
                 return (
-                  <li key={r.id} className="reference-row">
-                    <div className="reference-row-line">
+                  <div
+                    key={r.id}
+                    className="group relative flex flex-col overflow-hidden rounded-xl border border-black/5 dark:border-border/40 bg-white dark:bg-card/50 shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-black/10 dark:hover:border-primary/30 hover:shadow-md hover:shadow-black/5 dark:hover:shadow-primary/5"
+                  >
+                    {/* 书籍封面 */}
+                    <div
+                      className="relative aspect-[3/4] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.2)]"
+                      style={{
+                        background: `linear-gradient(135deg, hsl(${hue} 40% 42%), hsl(${(hue + 42) % 360} 36% 26%))`,
+                      }}
+                    >
+                      <div className="absolute inset-0 flex items-center justify-center px-4 text-center">
+                        <div>
+                          <div className="text-base font-semibold leading-tight text-white/90">{r.title}</div>
+                          {r.sourceName && (
+                            <div className="mt-1 max-w-[8rem] truncate text-[10px] text-white/50">{r.sourceName}</div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 导出选中角标 */}
+                      <label
+                        className="absolute left-2 top-2 flex h-6 w-6 cursor-pointer items-center justify-center rounded-full bg-black/30 backdrop-blur-sm transition-opacity"
+                        title="选中以批量导出"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          className="sr-only"
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            setExportSelection((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(r.id);
+                              else next.delete(r.id);
+                              return next;
+                            });
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <span className={cn("text-[10px] font-bold", isSelected ? "text-primary" : "text-white/50")}>
+                          {isSelected ? "✓" : "○"}
+                        </span>
+                      </label>
+
+                      {/* 收藏星 */}
                       <button
                         type="button"
-                        className="reference-row-main"
-                        onClick={() => void openReader(r, 0, null)}
+                        className="absolute right-2 top-2 transition-colors"
+                        title={isFav ? "取消收藏" : "加入收藏（仅本机）"}
+                        onClick={(e) => toggleReferenceFavorite(r.id, e)}
                       >
-                        <span className="reference-title">{r.title}</span>
-                        {(r.category ?? "").trim() ? (
-                          <span className="reference-category-badge">{(r.category ?? "").trim()}</span>
-                        ) : null}
-                        <span className="muted small">
-                          {r.totalChars.toLocaleString()} 字 · {r.chunkCount} 段
-                          {chCount > 0 ? ` · ${chCount} 章` : ""}
-                          {r.sourceName ? ` · ${r.sourceName}` : ""}
-                        </span>
+                        <Star
+                          className={cn(
+                            "h-4 w-4",
+                            isFav ? "fill-amber-400 text-amber-400" : "text-white/40 hover:text-amber-300",
+                          )}
+                        />
                       </button>
-                      <div className="reference-row-actions">
-                        <button
+
+                      {/* 阅读进度条 */}
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-3 pt-8">
+                        <div className="flex items-center justify-between text-[10px] text-white/70">
+                          <span>阅读进度</span>
+                          <span>{readPct}%</span>
+                        </div>
+                        <Progress value={readPct} className="mt-1 h-1 bg-white/20" />
+                      </div>
+
+                      {/* 悬浮操作层 */}
+                      <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/60 opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
+                        <Button
                           type="button"
-                          className="btn ghost small"
-                          title="编辑分类"
+                          size="sm"
+                          variant="secondary"
+                          className="gap-1.5 text-xs"
+                          onClick={() => void openReader(r, 0, null)}
+                        >
+                          <Eye className="h-3.5 w-3.5" />
+                          阅读
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="gap-1.5 text-xs"
+                          onClick={async () => { await openReader(r, 0, null); setExtractPanelOpen(true); }}
+                        >
+                          <Edit3 className="h-3.5 w-3.5" />
+                          提炼
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="gap-1.5 text-xs"
+                          onClick={() => void openPromptExtractFromEntry(r)}
+                        >
+                          <Wand2 className="h-3.5 w-3.5" />
+                          提示词
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* 书目信息 */}
+                    <div className="flex flex-col gap-1.5 p-3">
+                      {(r.category ?? "").trim() && (
+                        <Badge variant="secondary" className="w-fit h-5 bg-primary/10 px-1.5 text-[10px] font-normal text-primary">
+                          {(r.category ?? "").trim()}
+                        </Badge>
+                      )}
+                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                        <span>{chCount > 0 ? `${chCount} 章` : `${r.chunkCount} 段`}</span>
+                        {r.totalChars > 0 && <span>{Math.round(r.totalChars / 10000)} 万字</span>}
+                      </div>
+                      {(extractCountById[r.id] ?? 0) > 0 && (
+                        <div className="flex items-center gap-1 text-xs text-purple-400">
+                          <Bookmark className="h-3 w-3" />
+                          <span>已提炼 {extractCountById[r.id]} 条</span>
+                        </div>
+                      )}
+                      {/* 分类编辑 & 删除（悬浮显示） */}
+                      <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-1.5 text-[10px]"
                           onClick={(e) => {
                             e.stopPropagation();
-                            const c =
-                              window.prompt("分类（可空）", (r.category ?? "").trim()) ?? "";
+                            const c = window.prompt("分类（可空）", (r.category ?? "").trim()) ?? "";
                             void (async () => {
                               await updateReferenceLibraryEntry(r.id, { category: c.trim() || undefined });
                               await refresh();
                             })();
                           }}
                         >
+                          <Tag className="mr-0.5 h-3 w-3" />
                           分类
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           type="button"
-                          className="btn danger small"
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-1.5 text-[10px] text-destructive hover:text-destructive"
                           onClick={() => void handleDelete(r.id, r.title)}
                         >
+                          <Trash2 className="mr-0.5 h-3 w-3" />
                           删除
-                        </button>
+                        </Button>
                       </div>
                     </div>
-                    {chCount > 0 ? (
-                      <details
-                        className="reference-chapter-collapse"
-                        onToggle={(e) => {
-                          const el = e.currentTarget;
-                          if (!el.open || refChapterHeadsById[r.id]) return;
-                          void listReferenceChapterHeads(r.id).then((list) =>
-                            setRefChapterHeadsById((prev) => ({ ...prev, [r.id]: list })),
-                          );
-                        }}
-                      >
-                        <summary className="reference-chapter-summary">章节列表（{chCount}）</summary>
-                        <ul className="reference-chapter-sublist">
-                          {(refChapterHeadsById[r.id] ?? []).map((h, idx) => (
-                            <li key={h.id}>
-                              <button
-                                type="button"
-                                className="reference-chapter-link"
-                                onClick={() => void openReader(r, h.ordinal, null)}
-                              >
-                                <span className="reference-chapter-idx">{idx + 1}.</span>
-                                <span className="reference-chapter-title">{h.title}</span>
-                                <span className="muted small">存储段 {h.ordinal + 1}</span>
-                              </button>
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    ) : null}
-                  </li>
+                  </div>
                 );
               })}
-            </ul>
+            </div>
+          ) : (
+            /* 列表视图 */
+            <div className="space-y-2">
+              {filteredItems.map((r) => {
+                const hue = refCoverHue(r.id);
+                const chCount = r.chapterHeadCount ?? 0;
+                const isFav = favoriteIds.has(r.id);
+                const isSelected = exportSelection.has(r.id);
+                const readPos = loadReaderPos(r.id);
+                const readPct =
+                  r.chunkCount > 1 && readPos !== null
+                    ? Math.round((readPos / (r.chunkCount - 1)) * 100)
+                    : readPos !== null
+                      ? 100
+                      : 0;
+                return (
+                  <div
+                    key={r.id}
+                    className="group flex items-center gap-4 rounded-xl border border-black/5 dark:border-border/40 bg-white dark:bg-card/30 p-4 transition-all duration-300 shadow-sm hover:-translate-y-1 hover:border-black/10 dark:hover:border-primary/30 hover:shadow-md hover:shadow-black/5 dark:hover:shadow-primary/5"
+                  >
+                    {/* 缩略封面 */}
+                    <div
+                      className="relative flex h-20 w-14 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg shadow-[inset_0_0_0_1px_rgba(255,255,255,0.2)]"
+                      style={{
+                        background: `linear-gradient(135deg, hsl(${hue} 40% 42%), hsl(${(hue + 42) % 360} 36% 26%))`,
+                      }}
+                      onClick={() => void openReader(r, 0, null)}
+                    >
+                      <span className="px-1 text-center text-sm font-medium leading-tight text-white/80">
+                        {r.title.slice(0, 4)}
+                      </span>
+                      {isFav && (
+                        <Star className="absolute right-1 top-1 h-3 w-3 fill-amber-400 text-amber-400" />
+                      )}
+                    </div>
+
+                    {/* 书目内容 */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          className="truncate font-medium text-foreground transition-colors hover:text-primary"
+                          onClick={() => void openReader(r, 0, null)}
+                        >
+                          {r.title}
+                        </button>
+                        {(r.category ?? "").trim() && (
+                          <Badge variant="secondary" className="h-5 shrink-0 bg-primary/10 px-1.5 text-[10px] font-normal text-primary">
+                            {(r.category ?? "").trim()}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                        {r.sourceName && <span className="max-w-[14rem] truncate">{r.sourceName}</span>}
+                        <span>{chCount > 0 ? `${chCount} 章` : `${r.chunkCount} 段`}</span>
+                        {r.totalChars > 0 && <span>{r.totalChars.toLocaleString()} 字</span>}
+                      </div>
+                      {r.chunkCount > 0 && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">进度</span>
+                          <Progress value={readPct} className="h-1.5 w-20" />
+                          <span className="text-xs text-muted-foreground">{readPct}%</span>
+                        </div>
+                      )}
+                      {(extractCountById[r.id] ?? 0) > 0 && (
+                        <div className="mt-1.5 flex items-center gap-1 text-xs text-purple-400">
+                          <Bookmark className="h-3 w-3" />
+                          <span>已提炼 {extractCountById[r.id]} 条</span>
+                        </div>
+                      )}
+                      {/* 章节列表折叠 */}
+                      {chCount > 0 && (
+                        <details
+                          className="mt-1"
+                          onToggle={(e) => {
+                            const el = e.currentTarget;
+                            if (!el.open || refChapterHeadsById[r.id]) return;
+                            void listReferenceChapterHeads(r.id).then((list) =>
+                              setRefChapterHeadsById((prev) => ({ ...prev, [r.id]: list })),
+                            );
+                          }}
+                        >
+                          <summary className="cursor-pointer text-xs text-muted-foreground transition-colors hover:text-foreground">
+                            章节列表（{chCount}）
+                          </summary>
+                          <ul className="ml-3 mt-1 space-y-0.5">
+                            {(refChapterHeadsById[r.id] ?? []).map((h, idx) => (
+                              <li key={h.id}>
+                                <button
+                                  type="button"
+                                  className="text-left text-xs text-muted-foreground transition-colors hover:text-primary"
+                                  onClick={() => void openReader(r, h.ordinal, null)}
+                                >
+                                  {idx + 1}. {h.title}
+                                  <span className="ml-1 text-muted-foreground/50">· 段 {h.ordinal + 1}</span>
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
+                      )}
+                    </div>
+
+                    {/* 操作区（悬浮显示） */}
+                    <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                      <label
+                        className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-accent"
+                        title="选中以批量导出"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          className="sr-only"
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            setExportSelection((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) next.add(r.id);
+                              else next.delete(r.id);
+                              return next;
+                            });
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                        <span className={cn("text-sm font-bold", isSelected ? "text-primary" : "text-muted-foreground")}>
+                          {isSelected ? "✓" : "○"}
+                        </span>
+                      </label>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8"
+                        title={isFav ? "取消收藏" : "加入收藏"}
+                        onClick={(e) => toggleReferenceFavorite(r.id, e)}
+                      >
+                        <Star className={cn("h-4 w-4", isFav && "fill-amber-400 text-amber-400")} />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8"
+                        title="阅读"
+                        onClick={() => void openReader(r, 0, null)}
+                      >
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        type="button"
+                        size="icon"
+                        variant="ghost"
+                        className="h-8 w-8"
+                        title="提炼要点"
+                        onClick={async () => { await openReader(r, 0, null); setExtractPanelOpen(true); }}
+                      >
+                        <Edit3 className="h-4 w-4" />
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button type="button" size="icon" variant="ghost" className="h-8 w-8">
+                            <MoreVertical className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => void openPromptExtractFromEntry(r)}>
+                            <Wand2 className="mr-2 h-4 w-4 text-primary" />
+                            <span className="text-primary">提炼提示词</span>
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const c = window.prompt("分类（可空）", (r.category ?? "").trim()) ?? "";
+                              void (async () => {
+                                await updateReferenceLibraryEntry(r.id, { category: c.trim() || undefined });
+                                await refresh();
+                              })();
+                            }}
+                          >
+                            <Tag className="mr-2 h-4 w-4" />
+                            编辑分类
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onClick={() => void handleDelete(r.id, r.title)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" />
+                            删除
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           )}
 
-          <section className="reference-maintain" aria-labelledby="ref-maintain-title">
-            <h3 id="ref-maintain-title" className="reference-maintain-title">
-              参考库维护
-            </h3>
-            <p className="muted small reference-maintain-hint">
-              以下仅影响<strong>参考库</strong>（导入原著与摘录索引），<strong>不会</strong>删除作品正文。升级 Schema
-              后若检索异常，可先试「重建索引」。
-            </p>
-            <div className="reference-maintain-btns">
-              <button
-                type="button"
-                className="btn"
-                disabled={maintainBusy || busy}
-                onClick={() => {
-                  void (async () => {
-                    setMaintainBusy(true);
-                    setHeavyJob({ phase: "index", percent: 0, label: "准备重建…" });
-                    try {
-                      await rebuildAllReferenceSearchIndex((p) =>
-                        setHeavyJob({
-                          phase: "index",
-                          percent: p.percent,
-                          label: p.label,
-                        }),
-                      );
-                    } finally {
-                      setHeavyJob(null);
-                      setMaintainBusy(false);
-                      await refresh();
-                    }
-                  })();
-                }}
-              >
-                重建参考库索引
-              </button>
-              <button
-                type="button"
-                className="btn danger"
-                disabled={maintainBusy || busy}
-                onClick={() => {
-                  if (
-                    !window.confirm(
-                      "将清空全部参考库（原著、索引、摘录），不影响作品与章节正文。此操作不可撤销。确定？",
-                    )
-                  ) {
-                    return;
-                  }
-                  void (async () => {
-                    setMaintainBusy(true);
-                    try {
-                      await clearAllReferenceLibraryData();
-                      setActiveRefId(null);
-                      setActiveChunkCount(0);
-                      setLoadedChunks({});
-                      setExcerpts([]);
-                      setSearchHits([]);
-                      await refresh();
-                    } finally {
-                      setMaintainBusy(false);
-                    }
-                  })();
-                }}
-              >
-                清空参考库
-              </button>
+          {/* 摘录、标签与进度过滤（折叠面板） */}
+          <details className="mt-4">
+            <summary className="cursor-pointer rounded-xl border border-border/40 bg-card/30 px-4 py-3 text-sm font-medium text-muted-foreground transition-all hover:bg-card/50 hover:text-foreground">
+              摘录、标签与进度过滤
+            </summary>
+            <div className="mt-2 space-y-5 rounded-xl border border-border/40 bg-card/30 p-5 shadow-sm">
+              {/* 摘录与进度 */}
+              <section aria-labelledby="ref-panel-excerpt-filters">
+                <h2 id="ref-panel-excerpt-filters" className="mb-3 text-sm font-medium text-foreground">摘录与进度</h2>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    摘录按标签筛选
+                    <select
+                      className="input reference-category-select ml-auto"
+                      value={excerptTagFilterId}
+                      onChange={(e) => setExcerptTagFilterId(e.target.value)}
+                    >
+                      <option value="">全部</option>
+                      {allTags.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="flex items-start gap-2 text-sm text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={progressFilterEnabled}
+                      className="mt-0.5"
+                      onChange={(e) => {
+                        const v = e.target.checked;
+                        setProgressFilterEnabled(v);
+                        try { localStorage.setItem(LS_REF_PROGRESS_FILTER, v ? "1" : "0"); } catch { /* ignore */ }
+                      }}
+                    />
+                    <span>摘录仅保留关联章节在<strong>写作进度前</strong>（与全书「仅进度前」一致）</span>
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                    进度参照作品
+                    <select
+                      className="input reference-category-select ml-auto"
+                      value={progressFilterWorkId}
+                      disabled={!progressFilterEnabled}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setProgressFilterWorkId(v);
+                        try { localStorage.setItem(LS_REF_PROGRESS_WORK, v); } catch { /* ignore */ }
+                      }}
+                    >
+                      <option value="">选择作品</option>
+                      {worksList.map((w) => (
+                        <option key={w.id} value={w.id}>{w.title}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </section>
+
+              {/* 摘录标签 */}
+              <section aria-labelledby="ref-panel-tags">
+                <h2 id="ref-panel-tags" className="mb-3 text-sm font-medium text-foreground">摘录标签</h2>
+                <div className="space-y-3">
+                  <div className="flex gap-2">
+                    <Input
+                      type="text"
+                      className="flex-1"
+                      placeholder="新标签名称"
+                      value={newTagName}
+                      onChange={(e) => setNewTagName(e.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={!newTagName.trim()}
+                      onClick={() => {
+                        void (async () => {
+                          try {
+                            await createReferenceTag(newTagName);
+                            setNewTagName("");
+                            await refresh();
+                          } catch (err) {
+                            window.alert(err instanceof Error ? err.message : "创建失败");
+                          }
+                        })();
+                      }}
+                    >
+                      添加
+                    </Button>
+                  </div>
+                  {allTags.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {allTags.map((t) => (
+                        <div key={t.id} className="flex items-center gap-1 rounded-full border border-border/50 bg-primary/10 px-2.5 py-0.5">
+                          <span className="text-xs text-primary">{t.name}</span>
+                          <button
+                            type="button"
+                            className="text-muted-foreground transition-colors hover:text-destructive"
+                            onClick={() => {
+                              if (!window.confirm(`删除标签「${t.name}」？摘录上的该标签会一并移除。`)) return;
+                              void (async () => {
+                                await deleteReferenceTag(t.id);
+                                if (excerptTagFilterId === t.id) setExcerptTagFilterId("");
+                                await refresh();
+                                if (activeRefId) await loadExcerpts(activeRefId);
+                              })();
+                            }}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">暂无标签；添加后可在侧栏摘录上勾选。</p>
+                  )}
+                </div>
+              </section>
+
+              {/* 批量导出 */}
+              {items.length > 0 && (
+                <section>
+                  <h2 className="mb-3 text-sm font-medium text-foreground">批量导出</h2>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-muted-foreground">全文导出为 ZIP（每部一个 .txt，不上传）</span>
+                    <Button type="button" variant="outline" size="sm" disabled={busy || filteredItems.length === 0} onClick={selectAllFilteredForExport}>全选当前</Button>
+                    <Button type="button" variant="outline" size="sm" disabled={busy || exportSelection.size === 0} onClick={clearExportSelection}>清空选择</Button>
+                    <Button type="button" size="sm" disabled={busy || exportSelection.size === 0} onClick={() => void runExportZip()}>
+                      <Download className="mr-1.5 h-4 w-4" />
+                      导出 ZIP
+                    </Button>
+                    <span className="text-xs text-muted-foreground">已选 {exportSelection.size} 部</span>
+                  </div>
+                </section>
+              )}
             </div>
-          </section>
+          </details>
+
+          {/* 参考库维护（折叠面板） */}
+          <details className="mt-2">
+            <summary className="cursor-pointer rounded-xl border border-border/40 bg-card/30 px-4 py-3 text-sm font-medium text-muted-foreground transition-all hover:bg-card/50 hover:text-foreground">
+              参考库维护
+            </summary>
+            <div className="mt-2 rounded-xl border border-border/40 bg-card/30 p-5 shadow-sm">
+              <p className="mb-3 text-xs text-muted-foreground">
+                以下仅影响<strong>参考库</strong>（导入原著与摘录索引），<strong>不会</strong>删除作品正文。升级 Schema 后若检索异常，可先试「重建索引」。
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={maintainBusy || busy}
+                  onClick={() => {
+                    void (async () => {
+                      setMaintainBusy(true);
+                      setHeavyJob({ phase: "index", percent: 0, label: "准备重建…" });
+                      try {
+                        await rebuildAllReferenceSearchIndex((p) =>
+                          setHeavyJob({ phase: "index", percent: p.percent, label: p.label }),
+                        );
+                      } finally {
+                        setHeavyJob(null);
+                        setMaintainBusy(false);
+                        await refresh();
+                      }
+                    })();
+                  }}
+                >
+                  重建参考库索引
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  disabled={maintainBusy || busy}
+                  onClick={() => {
+                    if (!window.confirm("将清空全部参考库（原著、索引、摘录），不影响作品与章节正文。此操作不可撤销。确定？")) return;
+                    void (async () => {
+                      setMaintainBusy(true);
+                      try {
+                        await clearAllReferenceLibraryData();
+                        setActiveRefId(null);
+                        setActiveChunkCount(0);
+                        setLoadedChunks({});
+                        setExcerpts([]);
+                        setSearchHits([]);
+                        await refresh();
+                      } finally {
+                        setMaintainBusy(false);
+                      }
+                    })();
+                  }}
+                >
+                  清空参考库
+                </Button>
+              </div>
+            </div>
+          </details>
+
         </main>
 
         <aside className={`reference-reader-aside ${readerCollapsed ? "collapsed" : ""}`}>
@@ -1069,7 +2310,7 @@ export function ReferenceLibraryPage() {
             {readerCollapsed ? "⟨" : "⟩"}
           </button>
           {!readerCollapsed && (
-            <div className="reference-reader-inner">
+            <div className="reference-reader-inner card">
               {!activeRefId ? (
                 <p className="muted small reference-reader-placeholder">
                   从左侧打开一本书，或点击搜索结果，在此阅读原文上下文。
@@ -1085,9 +2326,10 @@ export function ReferenceLibraryPage() {
                     <div className="reference-reader-nav">
                       {activeChapterHeads.length > 0 ? (
                         <>
-                          <button
+                          <Button
                             type="button"
-                            className="btn ghost small"
+                            variant="ghost"
+                            size="sm"
                             disabled={currentChapterIndex <= 0}
                             onClick={() => {
                               const prev = activeChapterHeads[currentChapterIndex - 1];
@@ -1097,7 +2339,7 @@ export function ReferenceLibraryPage() {
                             }}
                           >
                             上一章
-                          </button>
+                          </Button>
                           <label className="reference-chapter-picker">
                             <span className="visually-hidden">章节</span>
                             <select
@@ -1117,9 +2359,10 @@ export function ReferenceLibraryPage() {
                               ))}
                             </select>
                           </label>
-                          <button
+                          <Button
                             type="button"
-                            className="btn ghost small"
+                            variant="ghost"
+                            size="sm"
                             disabled={currentChapterIndex < 0 || currentChapterIndex >= activeChapterHeads.length - 1}
                             onClick={() => {
                               const next = activeChapterHeads[currentChapterIndex + 1];
@@ -1129,12 +2372,13 @@ export function ReferenceLibraryPage() {
                             }}
                           >
                             下一章
-                          </button>
+                          </Button>
                         </>
                       ) : (
-                      <button
+                      <Button
                         type="button"
-                        className="btn ghost small"
+                        variant="ghost"
+                        size="sm"
                         disabled={focusOrdinal <= 0}
                         onClick={() => {
                           setFocusOrdinal((o) => o - 1);
@@ -1142,7 +2386,7 @@ export function ReferenceLibraryPage() {
                         }}
                       >
                         上一段
-                      </button>
+                      </Button>
                       )}
                       <span className="muted small">
                         {activeChapterHeads.length > 0
@@ -1154,9 +2398,10 @@ export function ReferenceLibraryPage() {
                         存储段 {focusOrdinal + 1} / {activeChunkCount}
                       </span>
                       {activeChapterHeads.length > 0 ? null : (
-                      <button
+                      <Button
                         type="button"
-                        className="btn ghost small"
+                        variant="ghost"
+                        size="sm"
                         disabled={focusOrdinal >= activeChunkCount - 1}
                         onClick={() => {
                           setFocusOrdinal((o) => o + 1);
@@ -1164,12 +2409,12 @@ export function ReferenceLibraryPage() {
                         }}
                       >
                         下一段
-                      </button>
+                      </Button>
                       )}
                     </div>
-                    <button type="button" className="btn small" onClick={() => void saveSelectionAsExcerpt()}>
+                    <Button type="button" size="sm" onClick={() => void saveSelectionAsExcerpt()}>
                       保存划选为摘录
-                    </button>
+                    </Button>
                   </div>
 
                   {prevChunk ? (
@@ -1234,27 +2479,40 @@ export function ReferenceLibraryPage() {
                               ) : null}
                             </div>
                             <div className="reference-excerpt-actions">
-                              <button
+                              <Button
                                 type="button"
-                                className="btn ghost small"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => void jumpExcerptToReader(ex)}
                               >
                                 跳转到原文
-                              </button>
-                              <button
+                              </Button>
+                              <Button
                                 type="button"
-                                className="btn ghost small"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => beginEditExcerpt(ex)}
                               >
                                 编辑
-                              </button>
-                              <button
+                              </Button>
+                              <Button
                                 type="button"
-                                className="btn ghost small"
+                                variant="ghost"
+                                size="sm"
+                                className="gap-1 text-primary hover:text-primary"
+                                onClick={() => openPromptExtractFromExcerpt(ex)}
+                              >
+                                <Wand2 className="h-3.5 w-3.5" />
+                                提炼为提示词
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => void removeExcerpt(ex.id)}
                               >
                                 删除
-                              </button>
+                              </Button>
                             </div>
                           </li>
                         ))}
@@ -1327,21 +2585,187 @@ export function ReferenceLibraryPage() {
                             </select>
                           </label>
                           <div className="reference-excerpt-edit-btns">
-                            <button type="button" className="btn small primary" onClick={() => void saveExcerptEdit()}>
+                            <Button type="button" size="sm" onClick={() => void saveExcerptEdit()}>
                               保存
-                            </button>
-                            <button
+                            </Button>
+                            <Button
                               type="button"
-                              className="btn ghost small"
+                              variant="ghost"
+                              size="sm"
                               onClick={() => setEditingExcerptId(null)}
                             >
                               取消
-                            </button>
+                            </Button>
                           </div>
                         </div>
                       ) : null}
                     </div>
                   ) : null}
+
+                  {/* ── 提炼要点面板 ──────────────────────────────────── */}
+                  <div className="reference-extract-section">
+                    <button
+                      type="button"
+                      className="reference-extract-toggle"
+                      onClick={() => setExtractPanelOpen((v) => !v)}
+                    >
+                      <span style={{ marginRight: 6 }}>✦</span>
+                      提炼要点
+                      <span style={{ marginLeft: "auto", fontSize: 11 }}>
+                        {extractPanelOpen ? "▲" : "▼"}
+                      </span>
+                    </button>
+
+                    {extractPanelOpen && (
+                      <div className="reference-extract-body">
+                        {/* 提炼提示词入口 B */}
+                        <div style={{ marginBottom: 10 }}>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-7 gap-1.5 text-xs text-primary border-primary/40 hover:bg-primary/5"
+                            onClick={() => void openPromptExtractFromBook()}
+                            disabled={!activeRefId}
+                          >
+                            <Wand2 className="h-3.5 w-3.5" />
+                            提炼提示词（Beta）
+                          </Button>
+                        </div>
+                        {/* 类型选择 */}
+                        <div className="reference-extract-type-row">
+                          {EXTRACT_TYPES.map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              className={cn(
+                                "reference-extract-type-btn",
+                                extractType === t && "active",
+                              )}
+                              onClick={() => setExtractType(t)}
+                            >
+                              {getExtractTypeLabel(t)}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* 触发按钮 */}
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                          <Button
+                            type="button"
+                            size="sm"
+                            disabled={extractLoading}
+                            onClick={() => void handleStartExtract()}
+                          >
+                            {extractLoading ? "提炼中…" : `提炼「${getExtractTypeLabel(extractType)}」`}
+                          </Button>
+                          {extractLoading && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => {
+                                extractAbortRef.current?.abort();
+                              }}
+                            >
+                              停止
+                            </Button>
+                          )}
+                        </div>
+
+                        {/* 错误提示 */}
+                        {extractError && (
+                          <p className="muted small" style={{ color: "var(--destructive)", marginBottom: 8 }}>
+                            ⚠ {extractError}
+                          </p>
+                        )}
+
+                        {/* 流式输出预览 */}
+                        {extractStreaming && (
+                          <div className="reference-extract-preview">
+                            <div className="reference-extract-preview-label muted small">提炼中（实时预览）…</div>
+                            <pre className="reference-extract-preview-body">{extractStreaming}</pre>
+                          </div>
+                        )}
+
+                        {/* 已保存的提炼结果 */}
+                        {savedExtracts.length > 0 && (
+                          <div style={{ marginTop: 12 }}>
+                            <div className="muted small" style={{ marginBottom: 6 }}>已保存 {savedExtracts.length} 条提炼结果</div>
+
+                            {/* 导入作品选择器 */}
+                            <label className="reference-extract-import-row">
+                              <span className="small muted">导入到作品：</span>
+                              <select
+                                className="input"
+                                value={importWorkId}
+                                onChange={(e) => setImportWorkId(e.target.value)}
+                                style={{ flex: 1, fontSize: 12 }}
+                              >
+                                <option value="">选择作品…</option>
+                                {worksList.map((w) => (
+                                  <option key={w.id} value={w.id}>
+                                    {w.title}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+
+                            <ul className="reference-extract-list">
+                              {savedExtracts.map((ex) => (
+                                <li key={ex.id} className="reference-extract-item">
+                                  <div className="reference-extract-item-header">
+                                    <span
+                                      style={{
+                                        fontSize: 10,
+                                        padding: "1px 5px",
+                                        borderRadius: 4,
+                                        background: "var(--primary)",
+                                        color: "var(--primary-foreground)",
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      {getExtractTypeLabel(ex.type)}
+                                    </span>
+                                    <span className="muted small" style={{ flex: 1 }}>
+                                      {new Date(ex.createdAt).toLocaleDateString("zh-CN")}
+                                    </span>
+                                    {ex.importedBibleId && (
+                                      <span className="small" style={{ color: "var(--primary)" }}>
+                                        ✓ 已导入锦囊
+                                      </span>
+                                    )}
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      disabled={importBusy[ex.id] || !!ex.importedBibleId}
+                                      onClick={() => void handleImportExtract(ex)}
+                                    >
+                                      {importBusy[ex.id] ? "导入中…" : ex.importedBibleId ? "已导入" : "导入锦囊"}
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={async () => {
+                                        if (!window.confirm("删除此条提炼结果？")) return;
+                                        await deleteReferenceExtract(ex.id);
+                                        setSavedExtracts((prev) => prev.filter((e) => e.id !== ex.id));
+                                      }}
+                                    >
+                                      删除
+                                    </Button>
+                                  </div>
+                                  <pre className="reference-extract-item-body">{ex.body}</pre>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </>
               )}
             </div>
@@ -1367,6 +2791,88 @@ export function ReferenceLibraryPage() {
           </div>
         </div>
       ) : null}
+
+      {/* 扩展搜索弹窗（输入超过10字自动弹出） */}
+      <Dialog open={searchDialogOpen} onOpenChange={setSearchDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>扩展搜索</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <textarea
+              ref={searchDialogRef}
+              value={searchQ}
+              onChange={(e) => setSearchQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  setSearchDialogOpen(false);
+                  void runSearch();
+                }
+              }}
+              placeholder="输入更长的搜索关键词…"
+              rows={4}
+              className="w-full resize-none rounded-lg border border-border/60 bg-background/50 px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/30"
+              autoFocus
+            />
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">
+                {countNonPunctuation(searchQ)} 字 · Enter 搜索，Shift+Enter 换行
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setSearchQ(""); setSearchHits([]); setSearchDialogOpen(false); }}
+                >
+                  清空
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={searchLoading || !searchQ.trim()}
+                  onClick={() => { setSearchDialogOpen(false); void runSearch(); }}
+                >
+                  {searchLoading ? "搜索中…" : "搜索"}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* 提炼提示词弹窗 */}
+      {promptExtractDialogOpen && promptExtractSource && (
+        promptExtractSource.kind === "excerpt" ? (
+          <PromptExtractDialog
+            open={promptExtractDialogOpen}
+            onClose={() => { setPromptExtractDialogOpen(false); setPromptExtractSource(null); }}
+            bookTitle={promptExtractSource.bookTitle ?? activeTitle}
+            source="excerpt"
+            excerptText={promptExtractSource.excerptText}
+            excerptNote={promptExtractSource.excerptNote}
+            excerptId={promptExtractSource.excerptId}
+          />
+        ) : (
+          <PromptExtractDialog
+            open={promptExtractDialogOpen}
+            onClose={() => { setPromptExtractDialogOpen(false); setPromptExtractSource(null); }}
+            bookTitle={promptExtractSource.bookTitle ?? activeTitle}
+            source="book"
+            chunkTexts={promptExtractChunksRef.current}
+            chunkCount={promptExtractSource.chunkCount}
+          />
+        )
+      )}
+
+      <ReferenceAiChatDialog
+        open={aiChatDialogOpen}
+        onClose={() => setAiChatDialogOpen(false)}
+        bookTitle={activeTitle || undefined}
+        bookChunks={aiChatBookChunks}
+        refWorkId={activeRefId}
+      />
     </div>
   );
 }

@@ -183,7 +183,7 @@ export function LoginPage() {
       setUser(u);
       showToast("注册成功，已登录。");
       setRegisterModalOpen(false);
-      nav("/", { replace: true });
+      nav("/library", { replace: true });
     } catch (e) {
       showToast(errLabel(e instanceof Error ? e.message : "REGISTER_FAILED"));
     } finally {
@@ -199,7 +199,7 @@ export function LoginPage() {
       const { user: u } = await authMe();
       setUser(u);
       showToast("登录成功。");
-      nav("/", { replace: true });
+      nav("/library", { replace: true });
     } catch (e) {
       const label = errLabel(e instanceof Error ? e.message : "LOGIN_FAILED");
       showToast(label);

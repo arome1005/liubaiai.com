@@ -5,6 +5,8 @@
  */
 export type ProgressCursor = string | null;
 
+export type WorkStatus = "serializing" | "completed" | "archived" | "deleted";
+
 /** 作品 */
 export type Work = {
   id: string;
@@ -13,6 +15,16 @@ export type Work = {
   updatedAt: number;
   /** @see ProgressCursor */
   progressCursor: ProgressCursor;
+  /** 作品简介（留白页与推演选择器展示用；可为空） */
+  description?: string;
+  /** 作品状态：用于留白页筛选（连载/完结/归档） */
+  status?: WorkStatus;
+  /** 书架封面：data URL（建议小于约 400KB）；未设置时用占位 §11 步 29 */
+  coverImage?: string | null;
+  /** 留白标签（§3.5）：短词列表，供 AI 上下文侧写；与参考库摘录标签无关 */
+  tags?: string[];
+  /** 目标总字数（可选；作品库进度条用，未设置时进度按 0% 展示） */
+  targetWordCount?: number;
 };
 
 /** 全书级风格卡 / 调性锁（5.3），每部作品一份 */
@@ -40,6 +52,8 @@ export type Volume = {
   title: string;
   order: number;
   createdAt: number;
+  /** 卷级概要（规划 §11 步 19；可空） */
+  summary?: string;
 };
 
 /** 章节 */
@@ -52,10 +66,26 @@ export type Chapter = {
   content: string;
   /** 章节概要（供 AI 上下文与导航总览；可为空） */
   summary?: string;
+  /** 概要正文最后写入时间（毫秒）；步 19/22，与 `summary` 编辑/生成流水线对齐 */
+  summaryUpdatedAt?: number;
+  /**
+   * 概要覆盖范围（流水线元数据，步 22）。
+   * - 约定为章节序号（`Chapter.order`）的闭区间 [from, to]
+   * - 单章概要：from=to=当前章 order
+   * - 预留给“每 N 章合并摘要”等流水线
+   */
+  summaryScopeFromOrder?: number;
+  summaryScopeToOrder?: number;
   order: number;
   updatedAt: number;
   /** 与 `wordCount(正文)` 同步，大目录全书统计时可避免重复扫描正文 */
   wordCountCache?: number;
+  /** 推演细纲快照文本（从推演页推送后写入；推送后只读；null/undefined 表示未关联推演） */
+  outlineDraft?: string;
+  /** 推演树节点 id（关联来源；删除推演节点时不级联清空） */
+  outlineNodeId?: string;
+  /** 推送时间戳（毫秒）；非 null/undefined 表示已推送，推送后禁止再次推送（409） */
+  outlinePushedAt?: number;
 };
 
 /** 章节正文历史快照（2.10），每章最多保留 N 条，由存储层裁剪 */
@@ -126,14 +156,26 @@ export type BookSearchHit = {
   chapterId: string;
   chapterTitle: string;
   matchCount: number;
+  /** 第一条命中的前后文摘要（兼容旧代码） */
   preview: string;
+  /** 最多 3 条命中上下文片段（各含前后 60 字），undefined 时降级用 preview */
+  contexts?: string[];
+  /** 第一条命中在原文中的字符偏移量（供编辑器滚动定位） */
+  firstMatchOffset?: number;
 };
 
 /** 全书搜索范围：全书 / 仅进度游标之前的章节（不含游标章） */
 export type BookSearchScope = "full" | "beforeProgress";
 
 export const DB_NAME = "liubai-writing";
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 29;
+
+export type InspirationLink = {
+  id: string;
+  type: "character" | "plot";
+  name: string;
+  createdAt: number;
+};
 
 /** 第 4 组：人物卡（4.1） */
 export type BibleCharacter = {
@@ -191,6 +233,183 @@ export type BibleTimelineEvent = {
   updatedAt: number;
 };
 
+/**
+ * 推演地图：地点节点（步 34 后续）。
+ * - 独立于世界观条目；用于“地点-事件”表与地图视图。
+ * - x/y 为 0~100 的百分比坐标（便于 SVG 画布自适应）。
+ */
+export type LogicPlaceNode = {
+  id: string;
+  workId: string;
+  name: string;
+  note: string;
+  x: number;
+  y: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** 推演地图：地点-事件（可选关联章节） */
+export type LogicPlaceEvent = {
+  id: string;
+  workId: string;
+  placeId: string;
+  label: string;
+  note: string;
+  chapterId: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+// ─── 全局提示词库 ─────────────────────────────────────────────────────────────
+
+/** 提示词审核状态（Sprint 2）
+ * draft      → submitted（用户提交）
+ * submitted  → approved（管理员通过，全端可见）
+ * submitted  → rejected（管理员驳回，附 reviewNote）
+ * rejected   → submitted（用户重新提交）
+ * approved   → archived（管理员下架，可选）
+ */
+export const PROMPT_STATUSES = ["draft", "submitted", "approved", "rejected"] as const;
+export type PromptStatus = (typeof PROMPT_STATUSES)[number];
+export const PROMPT_STATUS_LABELS: Record<PromptStatus, string> = {
+  draft:     "草稿",
+  submitted: "审核中",
+  approved:  "已发布",
+  rejected:  "已驳回",
+};
+
+/** 8 种标准提示词类型（Sprint 1 第一版） */
+export const PROMPT_TYPES = [
+  "continue",       // 续写
+  "outline",        // 大纲
+  "volume",         // 卷纲
+  "scene",          // 细纲
+  "style",          // 写作风格
+  "opening",        // 黄金开篇
+  "character",      // 人设
+  "worldbuilding",  // 世界观
+] as const;
+
+export type PromptType = (typeof PROMPT_TYPES)[number];
+
+export const PROMPT_TYPE_LABELS: Record<PromptType, string> = {
+  continue:      "续写",
+  outline:       "大纲",
+  volume:        "卷纲",
+  scene:         "细纲",
+  style:         "写作风格",
+  opening:       "黄金开篇",
+  character:     "人设",
+  worldbuilding: "世界观",
+};
+
+/**
+ * 提示词适用槽位（§藏经-规格 §3.2 step 4）
+ * 槽位决定该模板在哪个功能入口可被选用。
+ */
+export const PROMPT_SLOTS = [
+  // 写作侧栏
+  "writer_continue",   // 续写
+  "writer_rewrite",    // 改写
+  "writer_opening",    // 黄金开篇
+  // 推演
+  "tuiyan_outline",    // 大纲生成
+  "tuiyan_volume",     // 卷纲扩展
+  "tuiyan_scene",      // 细纲拆场
+  // 落笔
+  "luobi_master_brief", // 构思母本
+  "luobi_to_outline",   // 构思→大纲
+] as const;
+
+export type PromptSlot = (typeof PROMPT_SLOTS)[number];
+
+export const PROMPT_SLOT_LABELS: Record<PromptSlot, string> = {
+  writer_continue:    "写作·续写",
+  writer_rewrite:     "写作·改写",
+  writer_opening:     "写作·黄金开篇",
+  tuiyan_outline:     "推演·大纲生成",
+  tuiyan_volume:      "推演·卷纲扩展",
+  tuiyan_scene:       "推演·细纲拆场",
+  luobi_master_brief: "落笔·构思母本",
+  luobi_to_outline:   "落笔·构思→大纲",
+};
+
+/** 按适用范围分组的槽位（供 UI 联动过滤） */
+export const PROMPT_SCOPE_SLOTS: Record<string, PromptSlot[]> = {
+  writer: ["writer_continue", "writer_rewrite", "writer_opening"],
+  tuiyan: ["tuiyan_outline", "tuiyan_volume", "tuiyan_scene"],
+  luobi:  ["luobi_master_brief", "luobi_to_outline"],
+};
+
+export const PROMPT_SCOPE_LABELS: Record<string, string> = {
+  writer: "写作",
+  tuiyan: "推演",
+  luobi:  "落笔",
+};
+
+/**
+ * 全局（跨作品）提示词模板——存 IndexedDB `globalPromptTemplates` 或
+ * Supabase `prompt_template`（与 per-work `WritingPromptTemplate` 并存）。
+ * Sprint 2 状态机：draft → submitted → approved/rejected。
+ */
+export type GlobalPromptTemplate = {
+  id: string;
+  title: string;
+  type: PromptType;
+  /** 用户自定义标签（可多个） */
+  tags: string[];
+  body: string;
+  status: PromptStatus;
+  /** 管理员驳回时写入的原因；approved/draft 为空 */
+  reviewNote?: string;
+  /**
+   * 模板所属用户 ID（Supabase user_id）。
+   * IndexedDB 本地行不填此字段（undefined）。
+   * 用于 UI 区分「我的」vs「他人已发布」。
+   */
+  userId?: string;
+  /** 适用槽位（§藏经-规格 §3.2 step 4）；未指定则不限 */
+  slots?: PromptSlot[];
+  /** 来源类型（§藏经-规格 §5.1/§6）：手动创建 / 摘录提炼 / 整书提炼 / 藏经聊天提炼 */
+  source_kind?: "manual" | "reference_excerpt" | "reference_book" | "reference_chat";
+  /** 来源参考书 id（藏经 referenceLibrary.id） */
+  source_ref_work_id?: string | null;
+  /** 来源摘录 id 列表（V1 多摘录时启用） */
+  source_excerpt_ids?: string[] | null;
+  /** 来源备注（如提炼类型/参数） */
+  source_note?: string | null;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** 写作侧栏「额外要求」可复用片段（§11 步 42） */
+export type WritingPromptTemplate = {
+  id: string;
+  workId: string;
+  /** 自由分类，如：扩写、润色、对话 */
+  category: string;
+  title: string;
+  body: string;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** 笔感样本：粘贴/摘抄的参考段落，注入写作侧栏 user 上下文（§11 步 43） */
+export type WritingStyleSample = {
+  id: string;
+  workId: string;
+  title: string;
+  body: string;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
 /** 章头/章尾模板（4.5） */
 export type BibleChapterTemplate = {
   id: string;
@@ -213,6 +432,8 @@ export type ChapterBible = {
   povText: string;
   /** 站位 / 持物 / 出口等，自由文本 */
   sceneStance: string;
+  /** §11 步 21：本章末主要人物状态备忘（注入装配器 user 上下文） */
+  characterStateText: string;
   updatedAt: number;
 };
 
@@ -225,6 +446,101 @@ export type BibleGlossaryTerm = {
   note: string;
   createdAt: number;
   updatedAt: number;
+};
+
+/** §G-07：流光集合（文件夹）；用户级，与作品无强制绑定 */
+export type InspirationCollection = {
+  id: string;
+  name: string;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** 流光碎片（§11 步 35）：正文 + 标签 + 时间；可选归属某部作品 */
+export type InspirationFragment = {
+  id: string;
+  /** 未归属全书时为 null */
+  workId: string | null;
+  /** §G-07：所属集合；未入集合时为 null */
+  collectionId: string | null;
+  /** 可选标题（UI 列表/详情展示；不再通过 body 前缀 hack） */
+  title?: string;
+  /** 来源：自由文本（如“微信读书”“随手记”） */
+  sourceName?: string;
+  /** 来源 URL：书签/引用等 */
+  sourceUrl?: string;
+  /** URL 预览元信息（抓取后落库并云同步） */
+  urlTitle?: string;
+  urlSite?: string;
+  urlDescription?: string;
+  urlFetchedAt?: number;
+  /** 人物/情节等关联（终态：可扩展为联动推演/锦囊的实体 id） */
+  links?: InspirationLink[];
+  body: string;
+  tags: string[];
+  /** 云同步字段：收藏（替代本地 favoriteIds） */
+  isFavorite?: boolean;
+  /** 云同步字段：私密（RLS 足够，不做加密） */
+  isPrivate?: boolean;
+  /** 云同步字段：归档（默认隐藏） */
+  archived?: boolean;
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** 推演：与作品绑定的推演工作台状态（对话/文策/定稿标记等），用于刷新不丢与云同步 */
+export type TuiyanState = {
+  /** 主键（= workId） */
+  id: string;
+  workId: string;
+  updatedAt: number;
+  /** 对话历史（页面层结构序列化后存储；timestamp 用毫秒数） */
+  chatHistory: Array<{
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+    timestamp: number;
+    relatedOutlineId?: string;
+  }>;
+  /** 文策条目（timestamp 用毫秒数） */
+  wenCe: Array<{
+    id: string;
+    timestamp: number;
+    type: "decision" | "revision" | "ai_suggestion" | "user_note" | "milestone";
+    title: string;
+    content: string;
+    relatedOutlineId?: string;
+    isPinned?: boolean;
+    tags?: string[];
+  }>;
+  /** 显式定稿标记：nodeId 列表（章/卷/节点） */
+  finalizedNodeIds: string[];
+  /** 节点状态覆盖：nodeId -> status（用于卷/章/scene 等不落在 core 表字段的状态） */
+  statusByNodeId?: Record<string, "draft" | "refining" | "locked">;
+  /** 关联的藏经书目（ReferenceLibraryEntry.id） */
+  linkedRefWorkIds?: string[];
+  /** 可编辑导图（reactflow）：节点/连线/视口 */
+  mindmap?: {
+    nodes: unknown[];
+    edges: unknown[];
+    viewport?: { x: number; y: number; zoom: number };
+  };
+  /** 场景实体（独立于卷/章树） */
+  scenes?: Array<{
+    id: string;
+    title: string;
+    summary?: string;
+    /** 归属/引用：该场景关联到哪些章节（弱关系；章节被删时不会自动删除场景） */
+    linkedChapterIds: string[];
+    createdAt: number;
+    updatedAt: number;
+  }>;
+  /**
+   * Sprint 3：推演页当前选中的全局提示词模板 id（GlobalPromptTemplate.id）。
+   * 生成时自动前置到 userHint；未选则行为与之前完全一致。
+   */
+  selectedPromptTemplateId?: string | null;
 };
 
 /** 参考库倒排索引：按 token 命中块，offsetsJson 为 UTF-16 偏移 JSON 数组 */
@@ -254,6 +570,26 @@ export type ReferenceSearchHit = {
   snippetAfter: string;
   highlightStart: number;
   highlightEnd: number;
+};
+
+/** 提炼要点类型 */
+export type ReferenceExtractType = "characters" | "worldbuilding" | "plot_beats" | "craft";
+
+/**
+ * 提炼要点条目 —— AI 对参考书目的结构化摘取（P1-03）。
+ * 本地专用，存 IndexedDB，不上云。
+ */
+export type ReferenceExtract = {
+  id: string;
+  /** 来源书目 id（ReferenceLibraryEntry.id） */
+  refWorkId: string;
+  /** 提炼类型 */
+  type: ReferenceExtractType;
+  /** 提炼内容（Markdown 格式） */
+  body: string;
+  createdAt: number;
+  /** 导入锦囊后记录目标 id（可选） */
+  importedBibleId?: string | null;
 };
 
 /** 参考摘录标签（3.5）：全局可复用名称 */

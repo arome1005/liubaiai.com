@@ -16,7 +16,7 @@ export function buildBibleMarkdownExport(opts: {
   templates: BibleChapterTemplate[];
   glossary: BibleGlossaryTerm[];
 }): string {
-  const lines: string[] = [`# ${opts.workTitle} · 创作圣经`, "", `导出时间：${new Date().toISOString()}`, ""];
+  const lines: string[] = [`# ${opts.workTitle} · 本书锦囊`, "", `导出时间：${new Date().toISOString()}`, ""];
 
   lines.push("## 人物卡", "");
   if (opts.characters.length === 0) lines.push("（暂无）", "");

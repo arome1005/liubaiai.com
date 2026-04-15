@@ -1,24 +1,34 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { Chapter, ReferenceExcerpt, Work } from "../db/types";
-import { exportBibleMarkdown, updateChapter } from "../db/repo";
+import { isFirstAiGateCancelledError } from "../ai/client";
+import { generateChapterSummaryWithRetry } from "../ai/chapter-summary-generate";
+import { loadAiSettings } from "../ai/storage";
+import { exportBibleMarkdown, isChapterSaveConflictError, updateChapter } from "../db/repo";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
+import { formatSummaryScope, formatSummaryUpdatedAt } from "../util/summary-meta";
+import type { AutoSummaryStatus } from "../ai/chapter-summary-auto";
 
 export function SummaryRightPanel(props: {
   workId: string;
   work: Work;
   chapter: Chapter | null;
+  /** 当前章在编辑器中的正文（与列表缓存同步，供 AI 概要生成） */
+  chapterEditorContent?: string;
   chapters: Chapter[];
+  autoSummaryStatus?: AutoSummaryStatus;
   onJumpToChapter: (chapterId: string) => void;
+  /** 概要保存成功后合并进父级 `chapters`，以同步 `updatedAt`（步 25 乐观锁） */
+  onChapterPatch?: (chapterId: string, patch: Partial<Chapter>) => void;
 }) {
   const [saving, setSaving] = useState(false);
+  const [summaryAiBusy, setSummaryAiBusy] = useState(false);
   const [draft, setDraft] = useState("");
 
   const curId = props.chapter?.id ?? "";
-  useMemo(() => {
+  useEffect(() => {
     setDraft(props.chapter?.summary ?? "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [curId]);
+  }, [curId, props.chapter?.summary]);
 
   const recent = useMemo(() => {
     if (!props.chapter) return [];
@@ -28,6 +38,19 @@ export function SummaryRightPanel(props: {
       .sort((a, b) => b.order - a.order)
       .slice(0, 8);
   }, [props.chapter, props.chapters]);
+
+  const autoHint = useMemo(() => {
+    const s = props.autoSummaryStatus;
+    const id = props.chapter?.id;
+    if (!s || !id) return null;
+    if ("chapterId" in s && s.chapterId !== id) return null;
+    if (s.kind === "queued") return "自动概要：排队中…";
+    if (s.kind === "running") return "自动概要：生成中…";
+    if (s.kind === "skipped") return `自动概要：已跳过（${s.reason}）`;
+    if (s.kind === "error") return `自动概要：失败（${s.message}）`;
+    if (s.kind === "ok") return `自动概要：已更新（${formatSummaryUpdatedAt(s.at) || "刚刚"}）`;
+    return null;
+  }, [props.autoSummaryStatus, props.chapter?.id]);
 
   return (
     <div className="rr-panel">
@@ -53,12 +76,106 @@ export function SummaryRightPanel(props: {
               onBlur={() => {
                 if (!props.chapter) return;
                 const next = draft;
+                const exp = props.chapter.updatedAt;
                 setSaving(true);
-                void updateChapter(props.chapter.id, { summary: next }).finally(() => setSaving(false));
+                void (async () => {
+                  try {
+                    const t = Date.now();
+                    await updateChapter(
+                      props.chapter!.id,
+                      {
+                        summary: next,
+                        summaryUpdatedAt: t,
+                        summaryScopeFromOrder: props.chapter!.summaryScopeFromOrder ?? props.chapter!.order,
+                        summaryScopeToOrder: props.chapter!.summaryScopeToOrder ?? props.chapter!.order,
+                      },
+                      { expectedUpdatedAt: exp },
+                    );
+                    props.onChapterPatch?.(props.chapter!.id, {
+                      summary: next,
+                      updatedAt: t,
+                      summaryUpdatedAt: t,
+                      summaryScopeFromOrder: props.chapter!.summaryScopeFromOrder ?? props.chapter!.order,
+                      summaryScopeToOrder: props.chapter!.summaryScopeToOrder ?? props.chapter!.order,
+                    });
+                  } catch (e) {
+                    if (isChapterSaveConflictError(e)) {
+                      window.alert("概要保存冲突：本章已在其它窗口更新。请打开章节概要总览或切换章节后重试。");
+                    }
+                  } finally {
+                    setSaving(false);
+                  }
+                })();
               }}
             />
+            <div className="rr-panel-row" style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
+              <button
+                type="button"
+                className="btn small"
+                disabled={summaryAiBusy || saving}
+                onClick={() => {
+                  if (!props.chapter) return;
+                  const body = (props.chapterEditorContent ?? props.chapter.content ?? "").trim();
+                  if (!body) {
+                    window.alert("本章暂无正文，请先撰写后再生成概要。");
+                    return;
+                  }
+                  void (async () => {
+                    setSummaryAiBusy(true);
+                    try {
+                      const text = await generateChapterSummaryWithRetry({
+                        workTitle: props.work.title,
+                        chapterTitle: props.chapter!.title,
+                        chapterContent: body,
+                        settings: loadAiSettings(),
+                      });
+                      const t = Date.now();
+                      const exp = props.chapter!.updatedAt;
+                      await updateChapter(
+                        props.chapter!.id,
+                        {
+                          summary: text,
+                          summaryUpdatedAt: t,
+                          summaryScopeFromOrder: props.chapter!.order,
+                          summaryScopeToOrder: props.chapter!.order,
+                        },
+                        { expectedUpdatedAt: exp },
+                      );
+                      setDraft(text);
+                      props.onChapterPatch?.(props.chapter!.id, {
+                        summary: text,
+                        updatedAt: t,
+                        summaryUpdatedAt: t,
+                        summaryScopeFromOrder: props.chapter!.order,
+                        summaryScopeToOrder: props.chapter!.order,
+                      });
+                    } catch (e) {
+                      if (isFirstAiGateCancelledError(e)) return;
+                      window.alert(e instanceof Error ? e.message : "生成失败");
+                    } finally {
+                      setSummaryAiBusy(false);
+                    }
+                  })();
+                }}
+              >
+                {summaryAiBusy ? "生成中…" : "AI 生成概要"}
+              </button>
+            </div>
             <div className="muted small" style={{ marginTop: 6 }}>
               {saving ? "保存中…" : "失焦自动保存"}
+              {autoHint ? (
+                <span style={{ display: "block", marginTop: 4 }}>{autoHint}</span>
+              ) : null}
+              {formatSummaryScope(props.chapter.summaryScopeFromOrder, props.chapter.summaryScopeToOrder) ? (
+                <span style={{ display: "block", marginTop: 4 }}>
+                  {formatSummaryScope(props.chapter.summaryScopeFromOrder, props.chapter.summaryScopeToOrder)}
+                </span>
+              ) : null}
+              {formatSummaryUpdatedAt(props.chapter.summaryUpdatedAt) ? (
+                <span style={{ display: "block", marginTop: 4 }}>
+                  概要更新：{formatSummaryUpdatedAt(props.chapter.summaryUpdatedAt)}
+                </span>
+              ) : null}
             </div>
           </>
         ) : (
@@ -106,7 +223,7 @@ export function BibleRightPanel(props: { workId: string }) {
     <div className="rr-panel">
       <div className="rr-panel-actions">
         <Link className="btn small" to={`/work/${props.workId}/bible`}>
-          打开圣经页
+          打开锦囊页
         </Link>
         <button type="button" className="btn small" onClick={() => void load()} disabled={busy}>
           {busy ? "加载中…" : md ? "刷新" : "加载"}
@@ -118,7 +235,7 @@ export function BibleRightPanel(props: { workId: string }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="rr-input"
-          placeholder="搜索圣经内容（本面板仅预览文本）"
+          placeholder="搜索锦囊内容（本面板仅预览文本）"
         />
       ) : null}
       {md ? (
@@ -136,7 +253,7 @@ export function BibleRightPanel(props: { workId: string }) {
           style={{ width: "100%", resize: "vertical" }}
         />
       ) : (
-        <p className="muted small">点击“加载”把圣经导出为 Markdown 预览（会根据上下文上限截断）。</p>
+        <p className="muted small">点击“加载”把本书锦囊导出为 Markdown 预览（会根据上下文上限截断）。</p>
       )}
     </div>
   );

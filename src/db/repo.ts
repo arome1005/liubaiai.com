@@ -3,10 +3,15 @@
  * 便于 Web IndexedDB / 桌面 SQLite 切换时无需改页面逻辑。
  */
 import { getWritingStore } from "../storage/instance";
+import { getDB } from "./database";
+import type { UpdateChapterOptions } from "../storage/writing-store";
 import type {
   BibleCharacter,
   BibleChapterTemplate,
   BibleForeshadow,
+  GlobalPromptTemplate,
+  ReferenceExtract,
+  ReferenceExtractType,
   BibleGlossaryTerm,
   BibleTimelineEvent,
   BibleWorldEntry,
@@ -15,6 +20,8 @@ import type {
   Chapter,
   ChapterBible,
   ChapterSnapshot,
+  InspirationCollection,
+  InspirationFragment,
   ReferenceChapterHead,
   ReferenceChunk,
   ReferenceExcerpt,
@@ -26,6 +33,11 @@ import type {
   Volume,
   Work,
   WorkStyleCard,
+  WritingPromptTemplate,
+  WritingStyleSample,
+  LogicPlaceEvent,
+  LogicPlaceNode,
+  TuiyanState,
 } from "./types";
 import { buildBibleMarkdownExport } from "../storage/bible-markdown";
 
@@ -37,13 +49,16 @@ export async function getWork(id: string): Promise<Work | undefined> {
   return getWritingStore().getWork(id);
 }
 
-export async function createWork(title: string): Promise<Work> {
-  return getWritingStore().createWork(title);
+export async function createWork(
+  title: string,
+  opts?: { tags?: string[]; description?: string; status?: Work["status"] },
+): Promise<Work> {
+  return getWritingStore().createWork(title, opts);
 }
 
 export async function updateWork(
   id: string,
-  patch: Partial<Pick<Work, "title" | "progressCursor">>,
+  patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status">>,
 ): Promise<void> {
   return getWritingStore().updateWork(id, patch);
 }
@@ -62,7 +77,7 @@ export async function createVolume(workId: string, title?: string): Promise<Volu
 
 export async function updateVolume(
   id: string,
-  patch: Partial<Pick<Volume, "title" | "order">>,
+  patch: Partial<Pick<Volume, "title" | "order" | "summary">>,
 ): Promise<void> {
   return getWritingStore().updateVolume(id, patch);
 }
@@ -81,9 +96,15 @@ export async function createChapter(workId: string, title?: string, volumeId?: s
 
 export async function updateChapter(
   id: string,
-  patch: Partial<Pick<Chapter, "title" | "content" | "volumeId" | "summary">>,
+  patch: Partial<
+    Pick<
+      Chapter,
+      "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder"
+    >
+  >,
+  options?: UpdateChapterOptions,
 ): Promise<void> {
-  return getWritingStore().updateChapter(id, patch);
+  return getWritingStore().updateChapter(id, patch, options);
 }
 
 export async function deleteChapter(id: string): Promise<void> {
@@ -98,8 +119,9 @@ export async function searchWork(
   workId: string,
   query: string,
   scope?: BookSearchScope,
+  isRegex?: boolean,
 ): Promise<BookSearchHit[]> {
-  return getWritingStore().searchWork(workId, query, scope);
+  return getWritingStore().searchWork(workId, query, scope, isRegex);
 }
 
 export async function listChapterSnapshots(chapterId: string): Promise<ChapterSnapshot[]> {
@@ -196,7 +218,7 @@ export async function deleteReferenceTag(id: string): Promise<void> {
 
 export async function searchReferenceLibrary(
   query: string,
-  opts?: { refWorkId?: string; limit?: number },
+  opts?: { refWorkId?: string; limit?: number; mode?: "strict" | "hybrid" },
 ): Promise<ReferenceSearchHit[]> {
   return getWritingStore().searchReferenceLibrary(query, opts);
 }
@@ -338,6 +360,55 @@ export async function reorderBibleTimelineEvents(workId: string, orderedIds: str
   return getWritingStore().reorderBibleTimelineEvents(workId, orderedIds);
 }
 
+export async function listLogicPlaceNodes(workId: string) {
+  return getWritingStore().listLogicPlaceNodes(workId);
+}
+export async function addLogicPlaceNode(
+  workId: string,
+  input: Parameters<ReturnType<typeof getWritingStore>["addLogicPlaceNode"]>[1],
+) {
+  return getWritingStore().addLogicPlaceNode(workId, input);
+}
+export async function updateLogicPlaceNode(
+  id: string,
+  patch: Partial<Omit<LogicPlaceNode, "id" | "workId">>,
+) {
+  return getWritingStore().updateLogicPlaceNode(id, patch);
+}
+export async function deleteLogicPlaceNode(id: string) {
+  return getWritingStore().deleteLogicPlaceNode(id);
+}
+
+export async function listLogicPlaceEvents(workId: string) {
+  return getWritingStore().listLogicPlaceEvents(workId);
+}
+export async function addLogicPlaceEvent(
+  workId: string,
+  input: Parameters<ReturnType<typeof getWritingStore>["addLogicPlaceEvent"]>[1],
+) {
+  return getWritingStore().addLogicPlaceEvent(workId, input);
+}
+export async function updateLogicPlaceEvent(
+  id: string,
+  patch: Partial<Omit<LogicPlaceEvent, "id" | "workId">>,
+) {
+  return getWritingStore().updateLogicPlaceEvent(id, patch);
+}
+export async function deleteLogicPlaceEvent(id: string) {
+  return getWritingStore().deleteLogicPlaceEvent(id);
+}
+
+export async function getTuiyanState(workId: string): Promise<TuiyanState | undefined> {
+  return getWritingStore().getTuiyanState(workId);
+}
+
+export async function upsertTuiyanState(
+  workId: string,
+  patch: Parameters<ReturnType<typeof getWritingStore>["upsertTuiyanState"]>[1],
+): Promise<TuiyanState> {
+  return getWritingStore().upsertTuiyanState(workId, patch);
+}
+
 export async function listBibleChapterTemplates(workId: string) {
   return getWritingStore().listBibleChapterTemplates(workId);
 }
@@ -385,6 +456,58 @@ export async function deleteBibleGlossaryTerm(id: string) {
   return getWritingStore().deleteBibleGlossaryTerm(id);
 }
 
+export async function listWritingPromptTemplates(workId: string): Promise<WritingPromptTemplate[]> {
+  return getWritingStore().listWritingPromptTemplates(workId);
+}
+
+export async function addWritingPromptTemplate(
+  workId: string,
+  input: Partial<Omit<WritingPromptTemplate, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
+): Promise<WritingPromptTemplate> {
+  return getWritingStore().addWritingPromptTemplate(workId, input);
+}
+
+export async function updateWritingPromptTemplate(
+  id: string,
+  patch: Partial<Omit<WritingPromptTemplate, "id" | "workId">>,
+): Promise<void> {
+  return getWritingStore().updateWritingPromptTemplate(id, patch);
+}
+
+export async function deleteWritingPromptTemplate(id: string): Promise<void> {
+  return getWritingStore().deleteWritingPromptTemplate(id);
+}
+
+export async function reorderWritingPromptTemplates(workId: string, orderedIds: string[]): Promise<void> {
+  return getWritingStore().reorderWritingPromptTemplates(workId, orderedIds);
+}
+
+export async function listWritingStyleSamples(workId: string): Promise<WritingStyleSample[]> {
+  return getWritingStore().listWritingStyleSamples(workId);
+}
+
+export async function addWritingStyleSample(
+  workId: string,
+  input: Partial<Omit<WritingStyleSample, "id" | "workId" | "sortOrder" | "createdAt" | "updatedAt">>,
+): Promise<WritingStyleSample> {
+  return getWritingStore().addWritingStyleSample(workId, input);
+}
+
+export async function updateWritingStyleSample(
+  id: string,
+  patch: Partial<Omit<WritingStyleSample, "id" | "workId">>,
+): Promise<void> {
+  return getWritingStore().updateWritingStyleSample(id, patch);
+}
+
+export async function deleteWritingStyleSample(id: string): Promise<void> {
+  return getWritingStore().deleteWritingStyleSample(id);
+}
+
+export async function reorderWritingStyleSamples(workId: string, orderedIds: string[]): Promise<void> {
+  return getWritingStore().reorderWritingStyleSamples(workId, orderedIds);
+}
+
 export async function exportBibleMarkdown(workId: string): Promise<string> {
   const store = getWritingStore();
   const w = await store.getWork(workId);
@@ -419,6 +542,48 @@ export async function upsertWorkStyleCard(
   return getWritingStore().upsertWorkStyleCard(workId, patch);
 }
 
+export async function listInspirationFragments(): Promise<InspirationFragment[]> {
+  return getWritingStore().listInspirationFragments();
+}
+
+export async function addInspirationFragment(
+  input: Partial<Omit<InspirationFragment, "id" | "createdAt" | "updatedAt">> & { body: string },
+): Promise<InspirationFragment> {
+  return getWritingStore().addInspirationFragment(input);
+}
+
+export async function updateInspirationFragment(
+  id: string,
+  patch: Partial<Pick<InspirationFragment, "body" | "tags" | "workId" | "collectionId">>,
+): Promise<void> {
+  return getWritingStore().updateInspirationFragment(id, patch);
+}
+
+export async function listInspirationCollections(): Promise<InspirationCollection[]> {
+  return getWritingStore().listInspirationCollections();
+}
+
+export async function addInspirationCollection(
+  input: Partial<Omit<InspirationCollection, "id" | "createdAt" | "updatedAt">> & { name: string },
+): Promise<InspirationCollection> {
+  return getWritingStore().addInspirationCollection(input);
+}
+
+export async function updateInspirationCollection(
+  id: string,
+  patch: Partial<Pick<InspirationCollection, "name" | "sortOrder">>,
+): Promise<void> {
+  return getWritingStore().updateInspirationCollection(id, patch);
+}
+
+export async function deleteInspirationCollection(id: string): Promise<void> {
+  return getWritingStore().deleteInspirationCollection(id);
+}
+
+export async function deleteInspirationFragment(id: string): Promise<void> {
+  return getWritingStore().deleteInspirationFragment(id);
+}
+
 export async function exportAllData(): Promise<{
   works: Work[];
   volumes: Volume[];
@@ -439,6 +604,12 @@ export async function exportAllData(): Promise<{
   chapterBible: ChapterBible[];
   bibleGlossaryTerms: BibleGlossaryTerm[];
   workStyleCards: WorkStyleCard[];
+  inspirationCollections: InspirationCollection[];
+  inspirationFragments: InspirationFragment[];
+  writingPromptTemplates: WritingPromptTemplate[];
+  writingStyleSamples: WritingStyleSample[];
+  logicPlaceNodes: LogicPlaceNode[];
+  logicPlaceEvents: LogicPlaceEvent[];
 }> {
   return getWritingStore().exportAllData();
 }
@@ -463,6 +634,12 @@ export async function importAllData(data: {
   chapterBible?: ChapterBible[];
   bibleGlossaryTerms?: BibleGlossaryTerm[];
   workStyleCards?: WorkStyleCard[];
+  inspirationCollections?: InspirationCollection[];
+  inspirationFragments?: InspirationFragment[];
+  writingPromptTemplates?: WritingPromptTemplate[];
+  writingStyleSamples?: WritingStyleSample[];
+  logicPlaceNodes?: LogicPlaceNode[];
+  logicPlaceEvents?: LogicPlaceEvent[];
 }): Promise<void> {
   return getWritingStore().importAllData(data);
 }
@@ -486,6 +663,104 @@ export async function importAllDataMerge(data: {
   chapterBible?: ChapterBible[];
   bibleGlossaryTerms?: BibleGlossaryTerm[];
   workStyleCards?: WorkStyleCard[];
+  inspirationCollections?: InspirationCollection[];
+  inspirationFragments?: InspirationFragment[];
+  writingPromptTemplates?: WritingPromptTemplate[];
+  writingStyleSamples?: WritingStyleSample[];
+  logicPlaceNodes?: LogicPlaceNode[];
+  logicPlaceEvents?: LogicPlaceEvent[];
 }): Promise<void> {
   return getWritingStore().importAllDataMerge(data);
 }
+
+// ── 提炼要点（P1-03）—— 本地专用，直接访问 IndexedDB ────────────────────
+
+export async function listReferenceExtracts(
+  refWorkId: string,
+  type?: ReferenceExtractType,
+): Promise<ReferenceExtract[]> {
+  const db = getDB();
+  if (type) {
+    return db.referenceExtracts
+      .where("[refWorkId+type]")
+      .equals([refWorkId, type])
+      .reverse()
+      .sortBy("createdAt")
+      .then((rows) => rows.reverse());
+  }
+  return db.referenceExtracts
+    .where("refWorkId")
+    .equals(refWorkId)
+    .reverse()
+    .sortBy("createdAt")
+    .then((rows) => rows.reverse());
+}
+
+export async function addReferenceExtract(
+  input: Omit<ReferenceExtract, "id" | "createdAt">,
+): Promise<ReferenceExtract> {
+  const entity: ReferenceExtract = {
+    ...input,
+    id: crypto.randomUUID(),
+    createdAt: Date.now(),
+  };
+  await getDB().referenceExtracts.add(entity);
+  return entity;
+}
+
+export async function updateReferenceExtract(
+  id: string,
+  patch: Partial<Pick<ReferenceExtract, "body" | "importedBibleId">>,
+): Promise<void> {
+  await getDB().referenceExtracts.update(id, patch);
+}
+
+export async function deleteReferenceExtract(id: string): Promise<void> {
+  await getDB().referenceExtracts.delete(id);
+}
+
+export async function deleteAllReferenceExtractsForBook(refWorkId: string): Promise<void> {
+  await getDB().referenceExtracts.where("refWorkId").equals(refWorkId).delete();
+}
+
+// ── 全局提示词库（Sprint 1 + Sprint 2）────────────────────────────────────────
+
+export async function listGlobalPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+  return getWritingStore().listGlobalPromptTemplates();
+}
+
+/** Sprint 2：返回所有 status=approved 的模板（含他人已发布） */
+export async function listApprovedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+  return getWritingStore().listApprovedPromptTemplates();
+}
+
+/** 管理员审核：返回所有 status=submitted 的模板（需配套 Supabase RLS 策略） */
+export async function listSubmittedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
+  return getWritingStore().listSubmittedPromptTemplates();
+}
+
+export async function addGlobalPromptTemplate(
+  input: Omit<GlobalPromptTemplate, "id" | "sortOrder" | "createdAt" | "updatedAt">,
+): Promise<GlobalPromptTemplate> {
+  return getWritingStore().addGlobalPromptTemplate(input);
+}
+
+export async function updateGlobalPromptTemplate(
+  id: string,
+  patch: Partial<Omit<GlobalPromptTemplate, "id" | "createdAt">>,
+): Promise<void> {
+  return getWritingStore().updateGlobalPromptTemplate(id, patch);
+}
+
+export async function deleteGlobalPromptTemplate(id: string): Promise<void> {
+  return getWritingStore().deleteGlobalPromptTemplate(id);
+}
+
+export async function reorderGlobalPromptTemplates(orderedIds: string[]): Promise<void> {
+  return getWritingStore().reorderGlobalPromptTemplates(orderedIds);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export { isChapterSaveConflictError } from "../storage/chapter-save-conflict";
+export type { UpdateChapterOptions } from "../storage/writing-store";

@@ -25,6 +25,13 @@ export async function buildBackupZip(): Promise<Blob> {
     bibleChapterTemplates,
     chapterBible,
     bibleGlossaryTerms,
+    workStyleCards,
+    inspirationCollections,
+    inspirationFragments,
+    writingPromptTemplates,
+    writingStyleSamples,
+    logicPlaceNodes,
+    logicPlaceEvents,
   } = await exportAllData();
   const zip = new JSZip();
   zip.file(
@@ -61,6 +68,13 @@ export async function buildBackupZip(): Promise<Blob> {
         bibleChapterTemplates,
         chapterBible,
         bibleGlossaryTerms,
+        workStyleCards,
+        inspirationCollections,
+        inspirationFragments,
+        writingPromptTemplates,
+        writingStyleSamples,
+        logicPlaceNodes,
+        logicPlaceEvents,
       },
       null,
       2,
@@ -93,6 +107,13 @@ export async function parseBackupZip(file: File, mode: "replace" | "merge" = "re
     bibleChapterTemplates?: unknown[];
     chapterBible?: unknown[];
     bibleGlossaryTerms?: unknown[];
+    workStyleCards?: unknown[];
+    inspirationCollections?: unknown[];
+    inspirationFragments?: unknown[];
+    writingPromptTemplates?: unknown[];
+    writingStyleSamples?: unknown[];
+    logicPlaceNodes?: unknown[];
+    logicPlaceEvents?: unknown[];
   };
   if (!Array.isArray(parsed.works) || !Array.isArray(parsed.chapters)) {
     throw new Error("data.json 格式无效");
@@ -145,6 +166,27 @@ export async function parseBackupZip(file: File, mode: "replace" | "merge" = "re
       : [],
     bibleGlossaryTerms: Array.isArray(parsed.bibleGlossaryTerms)
       ? (parsed.bibleGlossaryTerms as import("../db/types").BibleGlossaryTerm[])
+      : [],
+    workStyleCards: Array.isArray(parsed.workStyleCards)
+      ? (parsed.workStyleCards as import("../db/types").WorkStyleCard[])
+      : [],
+    inspirationCollections: Array.isArray(parsed.inspirationCollections)
+      ? (parsed.inspirationCollections as import("../db/types").InspirationCollection[])
+      : [],
+    inspirationFragments: Array.isArray(parsed.inspirationFragments)
+      ? (parsed.inspirationFragments as import("../db/types").InspirationFragment[])
+      : [],
+    writingPromptTemplates: Array.isArray(parsed.writingPromptTemplates)
+      ? (parsed.writingPromptTemplates as import("../db/types").WritingPromptTemplate[])
+      : [],
+    writingStyleSamples: Array.isArray(parsed.writingStyleSamples)
+      ? (parsed.writingStyleSamples as import("../db/types").WritingStyleSample[])
+      : [],
+    logicPlaceNodes: Array.isArray(parsed.logicPlaceNodes)
+      ? (parsed.logicPlaceNodes as import("../db/types").LogicPlaceNode[])
+      : [],
+    logicPlaceEvents: Array.isArray(parsed.logicPlaceEvents)
+      ? (parsed.logicPlaceEvents as import("../db/types").LogicPlaceEvent[])
       : [],
   };
   if (mode === "merge") {

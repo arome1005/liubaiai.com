@@ -1,30 +1,32 @@
 import { apiUrl } from "./base";
-import { getSessionStorageSupabase, getSupabase } from "../lib/supabase";
+import { getSupabase, setAuthPersistenceMode } from "../lib/supabase";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
-export type AuthUser = { id: string; email: string };
+export type AuthUser = { id: string; email: string; avatarUrl?: string | null };
 
 function normEmail(email: string) {
   return String(email ?? "").trim().toLowerCase();
 }
 
-function mapUser(u: { id: string; email?: string | null }): AuthUser {
-  return { id: u.id, email: u.email ?? "" };
+function mapUser(u: {
+  id: string;
+  email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+}): AuthUser {
+  const raw = u.user_metadata?.avatar_url;
+  const avatarUrl = typeof raw === "string" && raw.length > 0 ? raw : null;
+  return { id: u.id, email: u.email ?? "", avatarUrl: avatarUrl ?? undefined };
 }
 
 export async function authMe(): Promise<{ user: AuthUser | null }> {
   if (!import.meta.env.VITE_SUPABASE_URL?.trim() || !import.meta.env.VITE_SUPABASE_ANON_KEY?.trim()) {
     return { user: null };
   }
-  const persist = getSupabase();
-  const sessionOnly = getSessionStorageSupabase();
-  for (const sb of [sessionOnly, persist]) {
-    const { data, error } = await sb.auth.getSession();
-    if (error) throw new Error("ME_FAILED");
-    const u = data.session?.user;
-    if (u) return { user: mapUser(u) };
-  }
+  const { data, error } = await getSupabase().auth.getSession();
+  if (error) throw new Error("ME_FAILED");
+  const u = data.session?.user;
+  if (u) return { user: mapUser(u) };
   return { user: null };
 }
 
@@ -56,27 +58,23 @@ export async function authRegisterComplete(
   if (!r.ok) throw new Error(data.error ?? "REGISTER_FAILED");
   if (!data.user) throw new Error("REGISTER_FAILED");
 
-  const persist = getSupabase();
-  const sessionOnly = getSessionStorageSupabase();
-  await persist.auth.signOut();
-  await sessionOnly.auth.signOut();
-
-  const client = rememberLogin ? persist : sessionOnly;
+  const client = getSupabase();
+  await client.auth.signOut();
+  setAuthPersistenceMode(rememberLogin ? "local" : "session");
   const { error } = await client.auth.signInWithPassword({
     email: normEmail(email),
     password,
   });
   if (error) throw new Error("LOGIN_FAILED");
-  return { user: data.user };
+  const { data: fresh, error: gErr } = await client.auth.getUser();
+  if (gErr || !fresh.user) throw new Error("LOGIN_FAILED");
+  return { user: mapUser(fresh.user) };
 }
 
 export async function authLogin(email: string, password: string, rememberLogin = true): Promise<{ user: AuthUser }> {
-  const persist = getSupabase();
-  const sessionOnly = getSessionStorageSupabase();
-  await persist.auth.signOut();
-  await sessionOnly.auth.signOut();
-
-  const client = rememberLogin ? persist : sessionOnly;
+  const client = getSupabase();
+  await client.auth.signOut();
+  setAuthPersistenceMode(rememberLogin ? "local" : "session");
   const { data, error } = await client.auth.signInWithPassword({
     email: normEmail(email),
     password,
@@ -87,12 +85,14 @@ export async function authLogin(email: string, password: string, rememberLogin =
     throw new Error("LOGIN_FAILED");
   }
   if (!data.user) throw new Error("INVALID_CREDENTIALS");
-  return { user: { id: data.user.id, email: data.user.email ?? "" } };
+  const { data: fresh, error: gErr } = await client.auth.getUser();
+  if (gErr || !fresh.user) throw new Error("INVALID_CREDENTIALS");
+  return { user: mapUser(fresh.user) };
 }
 
 export async function authLogout(): Promise<void> {
   await getSupabase().auth.signOut();
-  await getSessionStorageSupabase().auth.signOut();
+  setAuthPersistenceMode(null);
 }
 
 /** 由 Supabase 发送重置邮件（需在控制台配置 SMTP / 发信模板与 Redirect URLs） */

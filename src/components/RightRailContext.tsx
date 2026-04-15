@@ -29,7 +29,7 @@ export function useRightRail(): RightRailApi {
       tabs: [
         { id: "ai", label: "AI", icon: "✨", content: null, enabled: true },
         { id: "summary", label: "概要", icon: "🗂", content: null, enabled: true },
-        { id: "bible", label: "圣经", icon: "📖", content: null, enabled: true },
+        { id: "bible", label: "锦囊", icon: "📖", content: null, enabled: true },
         { id: "ref", label: "参考", icon: "📎", content: null, enabled: true },
       ],
       activeTab: "ai",

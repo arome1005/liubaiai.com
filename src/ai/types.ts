@@ -3,6 +3,8 @@ export type AiProviderId =
   | "anthropic"
   | "gemini"
   | "ollama"
+  /** Apple MLX 本地服务（OpenAI 兼容 /chat/completions，Base URL 以实际部署为准） */
+  | "mlx"
   | "doubao"
   /** 智谱 GLM（OpenAI 兼容） */
   | "zhipu"
@@ -19,6 +21,8 @@ export type AiProviderConfig = {
   baseUrl?: string;
   /** model 名称（如 gpt-4.1-mini / claude-3-5-sonnet-latest / gemini-2.0-flash / llama3.1:8b） */
   model: string;
+  /** embedding model（用于“调性提示”等向量距离；留空表示不启用 embedding 方案） */
+  embeddingModel?: string;
   /** API key（本机 localStorage；桌面版可换更安全存储） */
   apiKey?: string;
 };
@@ -29,6 +33,7 @@ export type AiSettings = {
   anthropic: AiProviderConfig;
   gemini: AiProviderConfig;
   ollama: AiProviderConfig;
+  mlx: AiProviderConfig;
   doubao: AiProviderConfig;
   zhipu: AiProviderConfig;
   kimi: AiProviderConfig;
@@ -55,19 +60,48 @@ export type AiSettings = {
     allowSelection: boolean;
     /** 允许上传：最近章节概要 */
     allowRecentSummaries: boolean;
-    /** 允许上传：创作圣经（导出 Markdown） */
+    /** 允许上传：本书锦囊（导出 Markdown） */
     allowBible: boolean;
     /** 允许上传：本章关联摘录（参考库） */
     allowLinkedExcerpts: boolean;
     /** 允许上传：参考库检索片段（RAG） */
     allowRagSnippets: boolean;
   };
-  /** 将圣经导出注入提示词（可能很长） */
+  /** 将本书锦囊导出注入提示词（可能很长） */
   includeBible: boolean;
-  /** 最多注入多少字符（用于圣经/摘录合并截断） */
+  /** 最多注入多少字符（用于锦囊导出/摘录合并截断） */
   maxContextChars: number;
   /** 云端写作温度 0.1–2.0（各云端 API 的 temperature；观云弹窗内称「神思」） */
   geminiTemperature: number;
+  /**
+   * 侧栏预计注入粗估 token 超过该值时可要求确认（0=不按阈值触发「超量」确认）。
+   * 与 `injectConfirmOnOversizeTokens` 联用；见 `resolveInjectionConfirmPrompt`。
+   */
+  injectApproxTokenThreshold: number;
+  /** 粗估 tokens 超过阈值时，调用前是否 `window.confirm` */
+  injectConfirmOnOversizeTokens: boolean;
+  /** 向云端发送本书锦囊（全文导出）前是否始终确认（高危） */
+  injectConfirmCloudBible: boolean;
+  /** §11 步 47：侧栏草稿与风格卡比对后展示轻量提示（禁用套话命中、句长对比） */
+  toneDriftHintEnabled: boolean;
+  /** §11 步 48：高危操作（整卷/多章/批量）始终确认清单 */
+  highRiskAlwaysConfirm: boolean;
+  /**
+   * §11 步 48：本会话（当前标签页）侧栏累计粗估 tokens 上限；0=不限制。
+   * 计入单次请求的 messages 与当次模型输出（粗估，非计费凭证）。
+   */
+  aiSessionApproxTokenBudget: number;
+  /**
+   * P1-04：日预算 tokens 上限；0=不限制。
+   * 超过后发送前弹出确认弹窗（可强行继续，非硬性拦截）。
+   */
+  dailyTokenBudget: number;
+  /**
+   * P1-04：单次调用预警阈值（tokens）；0=不预警。
+   * 与 `injectConfirmOnOversizeTokens` + `injectApproxTokenThreshold` 相比，
+   * 这里使用新弹窗而不是 window.prompt。
+   */
+  singleCallWarnTokens: number;
 };
 
 export type AiChatMessage = {

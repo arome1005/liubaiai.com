@@ -3,12 +3,31 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import "./index.css";
 import App from "./App.tsx";
+import { DEV_LOCAL_ORIGIN } from "./dev/dev-local-origin";
+import { DEV_LIBRARY_URL } from "./dev/dev-local-origin";
 import { getWritingStore } from "./storage/instance";
 
 const root = document.getElementById("root");
 
 async function boot() {
   if (!root) return;
+
+  if (import.meta.env.DEV) {
+    try {
+      if (window.location.origin !== DEV_LOCAL_ORIGIN) {
+        root.innerHTML = `<div style="padding:2rem;max-width:36rem;font-family:system-ui,sans-serif;line-height:1.6">
+          <p style="font-weight:600;margin:0 0 0.75rem">本地开发地址已限制</p>
+          <p style="margin:0 0 0.5rem;color:#666">请仅使用：<strong>${DEV_LIBRARY_URL}</strong></p>
+          <p style="margin:0;color:#666">当前：<code style="word-break:break-all">${window.location.href}</code></p>
+          <p style="margin:0.75rem 0 0;color:#666">关闭其它端口的 dev/preview，在项目根执行 <code>npm run dev</code>（固定 5173）。</p>
+        </div>`;
+        return;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   const reactRoot = createRoot(root);
   reactRoot.render(
     <div className="page">
@@ -35,6 +54,11 @@ async function boot() {
   try {
     await getWritingStore().init();
     window.clearTimeout(warnTimer);
+    if (import.meta.env.DEV) {
+      console.info(
+        "[留白写作 dev] 已加载最新壳层：顶栏无「更多」；新建作品弹窗应含作品简介/状态/chip（DOM: [data-shell=liubai-v2] / [data-work-form=v2]）",
+      );
+    }
     reactRoot.render(
       <StrictMode>
         <BrowserRouter>

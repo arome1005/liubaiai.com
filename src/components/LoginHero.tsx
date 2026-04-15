@@ -366,6 +366,8 @@ function BlobCharacter(props: {
   let offL: Vec2 = { x: 0, y: 0 };
   let offR: Vec2 = { x: 0, y: 0 };
 
+  /* 眼位随鼠标：读包裹层 DOM 矩形；ResizeObserver + setMounted 保证布局变化后会重算 */
+  /* eslint-disable react-hooks/refs -- 与鼠标同步算瞳孔偏移；非 ref 作数据源，仅量 DOM */
   if (trackMouse && wrapRef.current) {
     const r = wrapRef.current.getBoundingClientRect();
     const sx = (px: number) => r.left + (px / cfg.width) * r.width;
@@ -384,6 +386,7 @@ function BlobCharacter(props: {
       offR = pupilOffsetScreen(eyeRSx, eyeRSy, mouseScreen.x, mouseScreen.y, cfg.pupilMax);
     }
   }
+  /* eslint-enable react-hooks/refs */
 
   const blueLift = cfg.id === "blue" && isEmailFocus && !isPasswordVisible;
   const rotY = isPasswordVisible ? 180 : 0;
