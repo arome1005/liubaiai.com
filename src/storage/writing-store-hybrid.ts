@@ -159,6 +159,7 @@ export class WritingStoreHybrid implements WritingStore {
     },
     options?: {
       onProgress?: (p: { phase: "chunks" | "index"; percent: number; label?: string }) => void;
+      signal?: AbortSignal;
     },
   ): Promise<ReferenceLibraryEntry> {
     return this.local.createReferenceFromPlainText(input, options);

@@ -2,7 +2,7 @@
  * 浏览器端解码 .txt：
  * - 默认 UTF-8
  * - 若替换字符 U+FFFD 比例过高，尝试使用 gb18030 作为回退（Chrome 等现代浏览器支持）
- * - 返回 `suspiciousEncoding` 供 UI 提示用户“可能仍存在乱码风险”
+ * - 返回 `suspiciousEncoding` 供 UI 提示用户"可能仍存在乱码风险"
  */
 export async function readUtf8TextFileWithCheck(file: File): Promise<{
   text: string;
@@ -37,7 +37,7 @@ export async function readUtf8TextFileWithCheck(file: File): Promise<{
     try {
       const gb = decode("gb18030");
       const gr = replacementRatio(gb);
-      // 若 gb18030 明显更“干净”，则采用它
+      // 若 gb18030 明显更"干净"，则采用它
       if (gr.replacement + 2 < r.replacement || gr.ratio < r.ratio * 0.5) {
         text = gb;
         encoding = "gb18030";

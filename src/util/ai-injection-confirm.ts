@@ -19,7 +19,7 @@ export type InjectionConfirmPrompt = {
 export type InjectionConfirmInteraction = {
   /** 需要输入的数字（字符串形式），用于数字确认 */
   requiredCode: string;
-  /** 最短停留时间（ms），用于“等效长按”防误触 */
+  /** 最短停留时间（ms），用于"等效长按"防误触 */
   minHoldMs: number;
   /** 冷却时间（ms），避免刚确认完又误触连发 */
   cooldownMs: number;
@@ -88,7 +88,7 @@ function writeLastOkAt(t: number): void {
 }
 
 /**
- * §5.3.2：数字确认 / “等效长按” / 冷却。
+ * §5.3.2：数字确认 / "等效长按" / 冷却。
  * - 仅在 `prompt.shouldPrompt` 时调用。
  * - 使用 `window.prompt` 避免引入新 UI 结构；用户需输入粗估 token 数作为确认码。
  */
@@ -110,7 +110,7 @@ export function confirmInjectionPrompt(prompt: {
     ...(prompt.extraLines?.length ? ["", ...prompt.extraLines] : []),
     "",
     `确认方式：输入数字 ${prompt.interaction.requiredCode} 后确定（用于防误触）。`,
-    `提示：需停留至少 ${Math.ceil(prompt.interaction.minHoldMs / 100) / 10}s（等效“长按”）。`,
+    `提示：需停留至少 ${Math.ceil(prompt.interaction.minHoldMs / 100) / 10}s（等效"长按"）。`,
   ].join("\n");
   const typed = window.prompt(msg, "")?.trim() ?? "";
   if (!typed) return false;

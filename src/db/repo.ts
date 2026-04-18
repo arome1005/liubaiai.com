@@ -165,6 +165,7 @@ export async function createReferenceFromPlainText(
   },
   options?: {
     onProgress?: (p: { phase: "chunks" | "index"; percent: number; label?: string }) => void;
+    signal?: AbortSignal;
   },
 ): Promise<ReferenceLibraryEntry> {
   return getWritingStore().createReferenceFromPlainText(input, options);

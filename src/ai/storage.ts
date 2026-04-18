@@ -144,7 +144,7 @@ export function saveAiSettings(next: AiSettings) {
 export type BackendModelConfig = Record<AiProviderId, Pick<AiProviderConfig, "baseUrl" | "apiKey">>;
 
 /**
- * 供其它页面/组件读取“后端模型配置”（Base URL / API Key）。
+ * 供其它页面/组件读取"后端模型配置"（Base URL / API Key）。
  * 注意：本项目目前为纯前端直连，密钥存放在 localStorage。
  */
 export function getBackendConfig(): BackendModelConfig {

@@ -538,6 +538,8 @@ body {
 /* 写作全屏壳：主区 + 右侧栏（AI 等仅在此出现） */
 .app-shell--editor {
   grid-template-columns: minmax(0, 1fr) var(--shell-right-w);
+  /* 写作顶栏实际高度（.app-topbar--editor 还会额外 +0.15rem） */
+  --editor-topbar-h: calc(var(--shell-topbar-h, 3rem) + 0.15rem);
 }
 
 .app-shell--editor.app-shell--right-closed {
@@ -566,6 +568,8 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  /* 纵向滚动只交给编辑区 `.editor-scroll`，避免壳层主区整体滚动时把写作顶栏（药丸）一起卷走 */
+  overflow: hidden;
 }
 
 /* 写作页禁止使用全局 `.page { max-width: 1200px }` 把正文区裁成中间一条（星月式：中间栏应铺满壳层剩余宽度） */
@@ -599,11 +603,57 @@ body {
   flex-shrink: 0;
 }
 
+/* 写作顶栏最右侧：返回作品库（线型图标，避免 ghost 按钮主色底块） */
+.app-editor-topicon-link,
+.app-editor-library-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex-shrink: 0;
+  border-radius: 0.5rem;
+  color: var(--foreground);
+  text-decoration: none;
+  border: 1px solid transparent;
+  box-sizing: border-box;
+}
+.app-editor-topicon-link:hover,
+.app-editor-library-link:hover {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  border-color: color-mix(in srgb, var(--border) 55%, transparent);
+}
+.app-editor-topicon-link:focus-visible,
+.app-editor-library-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 70%, transparent);
+  outline-offset: 2px;
+}
+
+button.app-editor-topicon-link {
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  background: transparent;
+}
+
+.app-editor-topicon-link.is-on {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 38%, transparent);
+  color: var(--primary);
+}
+
 .app-editor-command-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
   flex-shrink: 0;
+}
+
+.app-editor-command-btn--icon {
+  padding-inline: 0.35rem;
+  min-height: 2.25rem;
 }
 .app-editor-command-kbd {
   display: none;
@@ -1393,7 +1443,25 @@ header[data-shell="liubai-v2"] nav[aria-label="核心功能"] a[aria-current="pa
   max-width: min(100%, 46rem);
 }
 
+/* 写作星月壳：左右对称 1fr，中间 auto，药丸区始终在顶栏水平居中；右侧操作区收缩贴右，避免第三列内大块留白 */
+.app-shell--editor-xy .app-topbar.app-topbar--editor {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+.app-shell--editor-xy .app-topbar-actions--editor.app-topbar-actions--editor-xy {
+  width: fit-content;
+  max-width: none;
+  justify-self: end;
+  padding-inline-end: 0.75rem;
+}
+
 @media (max-width: 900px) {
+  .app-shell--editor-xy .app-topbar.app-topbar--editor {
+    grid-template-columns: 1fr auto;
+    grid-template-rows: auto auto;
+  }
+  .app-shell--editor-xy .app-topbar-actions--editor.app-topbar-actions--editor-xy {
+    padding-inline-end: 0;
+  }
   .app-topbar.app-topbar--editor {
     grid-template-columns: 1fr auto;
     grid-template-rows: auto auto;
@@ -1492,15 +1560,31 @@ header[data-shell="liubai-v2"] nav[aria-label="核心功能"] a[aria-current="pa
 
 .app-right {
   position: sticky;
-  top: 0;
-  height: 100dvh;
-  overflow: auto;
+  /* 右侧栏整体下移：让顶栏黑线贯穿 */
+  top: var(--editor-topbar-h, calc(var(--shell-topbar-h, 3rem) + 0.15rem));
+  height: calc(100dvh - var(--editor-topbar-h, calc(var(--shell-topbar-h, 3rem) + 0.15rem)));
+  /* 右侧栏：头部与 Tabs 固定，内容区独立滚动（避免滚动遮住顶部栏） */
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   border-left: 1px solid color-mix(in srgb, var(--border) 90%, transparent);
   background: color-mix(in srgb, var(--surface) 90%, var(--surface-2));
   padding: 0.75rem;
   min-width: var(--shell-right-w);
   overscroll-behavior: contain;
-  position: sticky;
+}
+
+/* 写作页：让右上角也渲染“顶栏背景 + 底部黑线”，实现横向贯穿 */
+.app-shell--editor .app-right::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(-1 * var(--editor-topbar-h, calc(var(--shell-topbar-h, 3rem) + 0.15rem)));
+  height: var(--editor-topbar-h, calc(var(--shell-topbar-h, 3rem) + 0.15rem));
+  background: var(--masthead-blur-bg);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  pointer-events: none;
 }
 
 .app-right-resize {
@@ -1534,6 +1618,62 @@ header[data-shell="liubai-v2"] nav[aria-label="核心功能"] a[aria-current="pa
   border-radius: 10px;
   background: var(--surface-2);
   margin: 0.25rem 0 0.6rem;
+}
+
+/**
+ * 宽屏（≥1100px）：右栏打开时，将返回/沉浸/设置图标浮在右栏假顶栏右侧。
+ * 小屏（抽屉模式）：隐藏此区域，图标保持在主顶栏。
+ */
+.app-right-topbar-icons {
+  position: absolute;
+  /* 上移至 ::before 假顶栏区域内，垂直居中 */
+  top: calc(-1 * var(--editor-topbar-h, calc(var(--shell-topbar-h, 3rem) + 0.15rem)));
+  right: 0.5rem;
+  height: var(--editor-topbar-h, calc(var(--shell-topbar-h, 3rem) + 0.15rem));
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  /* 确保在 ::before 伪元素之上可点击 */
+  z-index: 1;
+}
+
+/* 小屏抽屉：隐藏右栏内的图标（主顶栏的图标不会被隐藏） */
+@media (max-width: 1100px) {
+  .app-right-topbar-icons {
+    display: none;
+  }
+}
+
+/* 宽屏右栏打开时：主顶栏内的图标副本隐藏（display:none 而非 visibility，避免占空间） */
+.app-topbar-rail-icons--hidden {
+  display: none;
+}
+
+/* 小屏：右栏始终是抽屉，图标始终在主顶栏，取消隐藏 */
+@media (max-width: 1100px) {
+  .app-topbar-rail-icons--hidden {
+    display: contents;
+  }
+}
+
+/* 写作壳右侧栏：关闭按钮（不占一整行） */
+.app-shell--editor .app-right-close-fab {
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1;
+}
+.app-shell--editor .app-right-close-fab:hover {
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
 .app-right-tab {
@@ -1697,9 +1837,9 @@ header[data-shell="liubai-v2"] nav[aria-label="核心功能"] a[aria-current="pa
 
   .app-right {
     position: fixed;
-    top: 0;
+    top: var(--editor-topbar-h, calc(var(--shell-topbar-h, 3rem) + 0.15rem));
     right: 0;
-    height: 100dvh;
+    height: calc(100dvh - var(--editor-topbar-h, calc(var(--shell-topbar-h, 3rem) + 0.15rem)));
     width: min(88vw, 24rem);
     min-width: 0;
     transform: translateX(102%);
@@ -6427,6 +6567,41 @@ select {
   color: var(--text-muted);
 }
 
+.editor-xy-bg-save-issue {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 0.35rem;
+  max-width: 100%;
+  font-size: 0.68rem;
+  color: #b45309;
+}
+
+.editor-xy-bg-save-issue__btn {
+  height: 1.65rem !important;
+  padding: 0 0.45rem !important;
+  font-size: 0.65rem !important;
+}
+
+.editor-xy-bg-save-issue__dismiss {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-decoration: underline;
+  padding: 0 0.15rem;
+}
+
+.editor-xy-bg-save-issue__dismiss:hover {
+  color: var(--foreground);
+}
+
+:root[data-theme="dark"] .editor-xy-bg-save-issue {
+  color: #fbbf24;
+}
+
 .editor-xy-stats-nums {
   font-variant-numeric: tabular-nums;
 }
@@ -6455,6 +6630,83 @@ select {
   height: 2rem !important;
   padding: 0 0.35rem !important;
   font-size: 0.78rem !important;
+}
+
+.editor-page--xy-frame .editor-xy-paper-stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--typora-paper);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.03);
+  border-radius: 10px;
+  /* 勿用 clip/hidden：会截断子元素 position:sticky，导致正文顶栏图标条随滚动消失 */
+  overflow: visible;
+}
+
+.editor-page--xy-frame .editor-xy-paper-stack .editor-paper.card {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  box-shadow: none;
+}
+
+/* 正文栏顶部：星月式「图标工具条」（位于章标题之上） */
+.editor-xy-inline-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem clamp(1.25rem, 4vw, 2.5rem) 0.25rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--typora-border) 40%, transparent);
+  background: var(--typora-paper);
+  position: sticky;
+  top: 0;
+  z-index: 8;
+}
+
+.editor-xy-inline-toolbar__left {
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 1px;
+}
+
+.editor-xy-inline-toolbar__left::-webkit-scrollbar {
+  height: 4px;
+}
+.editor-xy-inline-toolbar__left::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--typora-border) 70%, transparent);
+  border-radius: 99px;
+}
+
+.editor-xy-inline-toolbar__right {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.editor-xy-inline-icon {
+  min-width: 30px !important;
+  height: 30px !important;
+  padding: 0 4px !important;
+  font-size: 0.95rem !important;
+  color: color-mix(in srgb, var(--typora-text) 72%, var(--text-muted)) !important;
+}
+
+.editor-page--xy-frame .editor-xy-inline-icon:hover {
+  color: var(--typora-text) !important;
+  background: color-mix(in srgb, var(--typora-paper) 22%, transparent) !important;
+}
+
+:root[data-theme="dark"] .editor-page--xy-frame .editor-xy-inline-icon:hover {
+  background: color-mix(in srgb, #fff 6%, transparent) !important;
 }
 
 .sidebar-project-xy {

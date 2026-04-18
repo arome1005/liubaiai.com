@@ -501,7 +501,7 @@ export function BackendModelConfigModal(props: {
                     })}
                   </div>
                   <p className="muted small" style={{ marginTop: 10 }}>
-                    说明：这些开关只控制“是否把对应内容拼进 prompt”。即使关闭，也不影响你在本地查看/编辑这些内容。
+                    说明：这些开关只控制"是否把对应内容拼进 prompt"。即使关闭，也不影响你在本地查看/编辑这些内容。
                   </p>
                 </details>
               </section>

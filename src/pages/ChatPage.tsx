@@ -1,6 +1,10 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { toast } from "sonner";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { clearWenceHandoff, readWenceHandoff } from "../util/wence-handoff";
+import { clearWenceRefsImport, readWenceRefsImport } from "../util/wence-refs-import";
+import { writeAiPanelDraft } from "../util/ai-panel-draft";
+import { writeEditorHitHandoff } from "../util/editor-hit-handoff";
 import {
   listWenceSessionIndex,
   loadWenceSession,
@@ -20,7 +24,11 @@ import {
 } from "../util/wence-chat-cloud";
 import { loadAiSettings, saveAiSettings, getProviderConfig } from "../ai/storage";
 import { generateWithProviderStream, isFirstAiGateCancelledError } from "../ai/client";
-import { buildWenceChatSystemContent, buildWenceChatApiMessages } from "../ai/assemble-context";
+import {
+  buildWenceChatSystemContent,
+  buildWenceChatApiMessages,
+  type WenceChatWorkAttach,
+} from "../ai/assemble-context";
 import { readLastWorkId } from "../util/lastWorkId";
 import type { AiChatMessage } from "../ai/types";
 import {
@@ -29,9 +37,16 @@ import {
   addBibleGlossaryTerm,
   addBibleTimelineEvent,
   addBibleWorldEntry,
+  getWork,
+  getWorkStyleCard,
+  listBibleCharacters,
+  listBibleGlossaryTerms,
+  listBibleWorldEntries,
+  listChapters,
   listWorks,
 } from "../db/repo";
 import type { Work } from "../db/types";
+import { workTagsToProfileText } from "../util/work-tags";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Badge } from "../components/ui/badge";
@@ -112,6 +127,74 @@ interface Conversation {
   type: StrategyType;
   lastMessage: string;
   timestamp: number;
+}
+
+// ── 引用材料（P1-1） ──────────────────────────────────────────────────────
+
+type WenceRefSourceModule = "tuiyan" | "liuguang" | "reference" | "writing" | "manual" | "handoff";
+
+type WenceRefMaterial = {
+  id: string;
+  title: string;
+  content: string;
+  createdAt: number;
+  source: {
+    module: WenceRefSourceModule;
+    workId?: string | null;
+    chapterId?: string | null;
+    refWorkId?: string | null;
+    hint?: string;
+  };
+};
+
+function wenceRefsStorageKey(sessionId: string): string {
+  return `liubai:wenceRefs:v1:${sessionId}`;
+}
+
+function loadWenceRefs(sessionId: string): WenceRefMaterial[] {
+  try {
+    const raw = localStorage.getItem(wenceRefsStorageKey(sessionId));
+    if (!raw) return [];
+    const j = JSON.parse(raw) as unknown;
+    if (!Array.isArray(j)) return [];
+    const out: WenceRefMaterial[] = [];
+    for (const row of j) {
+      if (!row || typeof row !== "object") continue;
+      const r = row as Partial<WenceRefMaterial>;
+      if (typeof r.id !== "string" || !r.id) continue;
+      if (typeof r.title !== "string") continue;
+      if (typeof r.content !== "string") continue;
+      if (typeof r.createdAt !== "number" || !Number.isFinite(r.createdAt)) continue;
+      const src = (r as any).source;
+      if (!src || typeof src !== "object") continue;
+      const module = (src as any).module;
+      if (typeof module !== "string") continue;
+      out.push({
+        id: r.id,
+        title: r.title,
+        content: r.content,
+        createdAt: r.createdAt,
+        source: {
+          module: module as WenceRefSourceModule,
+          workId: (src as any).workId ?? undefined,
+          chapterId: (src as any).chapterId ?? undefined,
+          refWorkId: (src as any).refWorkId ?? undefined,
+          hint: (src as any).hint ?? undefined,
+        },
+      });
+    }
+    return out.sort((a, b) => b.createdAt - a.createdAt);
+  } catch {
+    return [];
+  }
+}
+
+function saveWenceRefs(sessionId: string, refs: WenceRefMaterial[]) {
+  try {
+    localStorage.setItem(wenceRefsStorageKey(sessionId), JSON.stringify(refs.slice(0, 50)));
+  } catch {
+    /* ignore */
+  }
 }
 
 // 策略类型定义（对齐 v0）
@@ -213,6 +296,7 @@ const quickQuestions = [
 
 export function ChatPage() {
   const location = useLocation();
+  const navigate = useNavigate();
 
   // ── 真实 session 状态，来自 localStorage ──────────────────────────────
   const [conversations, setConversations] = useState<Conversation[]>(() => {
@@ -246,7 +330,7 @@ export function ChatPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [activeStrategyFilter, setActiveStrategyFilter] = useState<StrategyType | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
-  const [rightPaneTab, setRightPaneTab] = useState<"dialog" | "strategy" | "tech">("strategy");
+  const [rightPaneTab, setRightPaneTab] = useState<"dialog" | "strategy" | "tech" | "refs">("strategy");
   const [quickQuestionsOpen, setQuickQuestionsOpen] = useState(false);
   const [showModelSelector, setShowModelSelector] = useState(false);
   const [selectedModelId, setSelectedModelId] = useState(() =>
@@ -285,13 +369,83 @@ export function ChatPage() {
   const [bibleDialogNote, setBibleDialogNote] = useState("");
   const [bibleDialogSubmitting, setBibleDialogSubmitting] = useState(false);
 
+  // ── 问策上下文装配（关联作品 + 设定索引） ────────────────────────────────
+  const [worksList, setWorksList] = useState<Work[]>([]);
+  const [attachedWorkId, setAttachedWorkId] = useState<string | null>(null);
+  const [attachedWork, setAttachedWork] = useState<Work | null>(null);
+  const [includeSettingIndex, setIncludeSettingIndex] = useState(false);
+  const [settingIndexText, setSettingIndexText] = useState("");
+  const [settingIndexLoading, setSettingIndexLoading] = useState(false);
+
+  // ── 引用材料（可见/可移除/可追溯） ───────────────────────────────────────
+  const [refs, setRefs] = useState<WenceRefMaterial[]>([]);
+  const [refDraftTitle, setRefDraftTitle] = useState("手动引用");
+  const [refDraftContent, setRefDraftContent] = useState("");
+
   // ── 切换会话时重新加载消息 ────────────────────────────────────────────
   useEffect(() => {
     setActiveWenceSessionId(currentConversation);
     const stored = loadWenceSession(currentConversation);
     setCurrentMessages(stored ? toDisplayMessages(stored.messages) : []);
     setStreamingContent(null);
+    setAttachedWorkId(stored?.workId ?? null);
+    setIncludeSettingIndex(stored?.includeSettingIndex ?? false);
+    setRefs(loadWenceRefs(currentConversation));
   }, [currentConversation]);
+
+  // 关联作品信息（标题/标签侧写/风格卡）
+  useEffect(() => {
+    if (!attachedWorkId) {
+      setAttachedWork(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const w = await getWork(attachedWorkId);
+      if (cancelled) return;
+      setAttachedWork(w ?? null);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [attachedWorkId]);
+
+  // 设定索引文本（人物/世界观/术语名录）
+  useEffect(() => {
+    if (!includeSettingIndex || !attachedWorkId) {
+      setSettingIndexText("");
+      return;
+    }
+    let cancelled = false;
+    setSettingIndexLoading(true);
+    void (async () => {
+      const [chars, worlds, gloss] = await Promise.all([
+        listBibleCharacters(attachedWorkId),
+        listBibleWorldEntries(attachedWorkId),
+        listBibleGlossaryTerms(attachedWorkId),
+      ]);
+      const parts: string[] = [];
+      if (chars.length) parts.push(`【人物】${chars.map((c) => c.name).join("、")}`);
+      if (worlds.length) parts.push(`【世界观】${worlds.map((w) => w.title).join("、")}`);
+      if (gloss.length) parts.push(`【术语】${gloss.map((g) => g.term).join("、")}`);
+      const text = parts.join("\n");
+      if (cancelled) return;
+      setSettingIndexText(text);
+    })()
+      .catch(() => {
+        if (!cancelled) setSettingIndexText("");
+      })
+      .finally(() => {
+        if (!cancelled) setSettingIndexLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [attachedWorkId, includeSettingIndex]);
+
+  useEffect(() => {
+    saveWenceRefs(currentConversation, refs);
+  }, [currentConversation, refs]);
 
   // ── mount 时拉取云端会话 ──────────────────────────────────────────────
   useEffect(() => {
@@ -319,6 +473,11 @@ export function ChatPage() {
     }).catch(() => { /* 云同步失败静默 */ });
   }, []);
 
+  // works list（关联作品选择用）
+  useEffect(() => {
+    void listWorks().then(setWorksList).catch(() => setWorksList([]));
+  }, []);
+
   useEffect(() => {
     const onFocus = () =>
       setSelectedModelId(aiProviderToModelId(loadAiSettings().provider));
@@ -334,15 +493,60 @@ export function ChatPage() {
     clearWenceHandoff();
     if (!payload) return;
     if (payload.refs && payload.refs.trim()) {
-      const sysMsg: Message = {
-        id: `sys-${Date.now()}`,
-        role: "assistant",
-        content: `【引用材料】\n${payload.refs.trim()}`,
-        timestamp: Date.now(),
+      const ref: WenceRefMaterial = {
+        id: `ref-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        title: payload.title?.trim() ? `交接：${payload.title.trim()}` : "交接引用",
+        content: payload.refs.trim(),
+        createdAt: Date.now(),
+        source: { module: "handoff", workId: payload.workId, hint: "来自跨模块交接" },
       };
-      setCurrentMessages((prev) => [...prev, sysMsg]);
+      setRefs((prev) => [ref, ...prev]);
+      setRightPaneTab("dialog");
     }
     setInputMessage(payload.prompt);
+    if (payload.workId) {
+      setAttachedWorkId(payload.workId);
+      const stored = loadWenceSession(currentConversation);
+      if (stored && stored.workId !== payload.workId) {
+        const updated: WenceSessionStored = { ...stored, workId: payload.workId, updatedAt: Date.now() };
+        saveWenceSession(updated);
+        setConversations((prev) =>
+          prev.map((c) => (c.id === currentConversation ? { ...c, timestamp: updated.updatedAt } : c)),
+        );
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.search]);
+
+  useEffect(() => {
+    // 藏经等模块：仅导入引用材料，不覆盖输入框（一次性消费）
+    const sp = new URLSearchParams(location.search);
+    if (sp.get("refsImport") !== "1") return;
+    const payload = readWenceRefsImport();
+    clearWenceRefsImport();
+    if (!payload) return;
+    if (!payload.content.trim()) return;
+    const ref: WenceRefMaterial = {
+      id: `ref-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      title: payload.title?.trim() ? payload.title.trim() : "藏经引用",
+      content: payload.content.trim(),
+      createdAt: Date.now(),
+      source: {
+        module: "reference",
+        workId: payload.workId,
+        refWorkId: payload.refWorkId,
+        hint: payload.hint,
+      },
+    };
+    setRefs((prev) => [ref, ...prev]);
+    setRightPaneTab("refs");
+    try {
+      const u = new URL(window.location.href);
+      u.searchParams.delete("refsImport");
+      window.history.replaceState({}, "", u.toString());
+    } catch {
+      /* ignore */
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.search]);
 
@@ -396,7 +600,33 @@ export function ChatPage() {
     try {
       const settings = loadAiSettings();
       const config = getProviderConfig(settings, settings.provider);
-      const systemContent = buildWenceChatSystemContent(null);
+      let attached: WenceChatWorkAttach | null = null;
+      if (attachedWorkId && attachedWork) {
+        const card = await getWorkStyleCard(attachedWorkId).catch(() => undefined);
+        attached = {
+          workTitle: attachedWork.title ?? "未命名作品",
+          workStyle: {
+            pov: card?.pov ?? "",
+            tone: card?.tone ?? "",
+            bannedPhrases: card?.bannedPhrases ?? "",
+            styleAnchor: card?.styleAnchor ?? "",
+            extraRules: card?.extraRules ?? "",
+          },
+          tagProfileText: workTagsToProfileText(attachedWork.tags),
+          settingIndexText: includeSettingIndex ? settingIndexText : undefined,
+        };
+      }
+      let systemContent = buildWenceChatSystemContent(attached);
+      if (refs.length > 0) {
+        const block = refs
+          .slice(0, 12)
+          .map((r, idx) => {
+            const head = `${idx + 1}. ${r.title}（来源：${r.source.module}${r.source.hint ? `·${r.source.hint}` : ""}）`;
+            return `${head}\n${r.content.trim()}`;
+          })
+          .join("\n\n---\n\n");
+        systemContent += `\n\n引用材料（用户提供/跨模块带入，可移除；不要把引用当作既定事实，请在回答中标注"基于引用材料"）：\n${block}`;
+      }
       const apiMessages = buildWenceChatApiMessages(systemContent, newHistory);
 
       abortRef.current = new AbortController();
@@ -431,7 +661,18 @@ export function ChatPage() {
       setIsLoading(false);
       abortRef.current = null;
     }
-  }, [inputMessage, isLoading, currentMessages, currentConversation, persistSession]);
+  }, [
+    inputMessage,
+    isLoading,
+    currentMessages,
+    currentConversation,
+    persistSession,
+    attachedWorkId,
+    attachedWork,
+    includeSettingIndex,
+    settingIndexText,
+    refs,
+  ]);
 
   const formatTime = (timestamp: number) => {
     const date = new Date(timestamp);
@@ -468,24 +709,72 @@ export function ChatPage() {
   const activeConvMessageCount = currentMessages.length;
 
   async function writeToBible(msgId: string, content: string, type: "character" | "world" | "glossary" | "timeline") {
-    const workId = readLastWorkId();
+    const workId = attachedWorkId ?? readLastWorkId();
     if (!workId) { alert("请先在写作页打开一部作品，再写入锦囊。"); return; }
     const label = type === "character" ? "人物" : type === "world" ? "世界观" : type === "glossary" ? "术语" : "时间线";
     try {
+      let entryId: string | null = null;
       if (type === "character") {
-        await addBibleCharacter(workId, { name: content.slice(0, 60), motivation: content });
+        const e = await addBibleCharacter(workId, { name: content.slice(0, 60), motivation: content });
+        entryId = e.id;
       } else if (type === "world") {
-        await addBibleWorldEntry(workId, { entryKind: "other", title: content.slice(0, 60), body: content });
+        const e = await addBibleWorldEntry(workId, { entryKind: "other", title: content.slice(0, 60), body: content });
+        entryId = e.id;
       } else if (type === "glossary") {
-        await addBibleGlossaryTerm(workId, { term: content.slice(0, 40), category: "term", note: content });
+        const e = await addBibleGlossaryTerm(workId, { term: content.slice(0, 40), category: "term", note: content });
+        entryId = e.id;
       } else {
-        await addBibleTimelineEvent(workId, { label: content.slice(0, 60), note: content, chapterId: null });
+        const e = await addBibleTimelineEvent(workId, { label: content.slice(0, 60), note: content, chapterId: null });
+        entryId = e.id;
       }
       setBibleWriteStatus({ msgId, ok: true, label });
       setTimeout(() => setBibleWriteStatus(null), 3000);
+
+      // P0-3：写回后定位到新增条目
+      if (entryId) {
+        const tab =
+          type === "character" ? "characters" : type === "world" ? "world" : type === "glossary" ? "glossary" : "timeline";
+        navigate(`/work/${workId}/bible?tab=${tab}&entry=${encodeURIComponent(entryId)}`);
+      }
     } catch (e) {
       setBibleWriteStatus({ msgId, ok: false, label: e instanceof Error ? e.message : "写入失败" });
       setTimeout(() => setBibleWriteStatus(null), 4000);
+    }
+  }
+
+  async function writeToAiDraftFromAssistant(content: string) {
+    const workId = attachedWorkId ?? readLastWorkId();
+    if (!workId) {
+      toast.info("请先在写作页打开/选择一部作品。");
+      return;
+    }
+    const chapters = await listChapters(workId);
+    if (chapters.length === 0) {
+      toast.info("该作品还没有章节，请先在写作页创建章节。");
+      return;
+    }
+    const sorted = [...chapters].sort((a, b) => a.order - b.order);
+    const chapterId = sorted[0]!.id;
+    const text = content.trim();
+    if (!text) return;
+    const r = writeAiPanelDraft(workId, chapterId, text + "\n");
+    if (!r.ok) {
+      toast.error(r.error);
+      return;
+    }
+    const needle = text.slice(0, 80);
+    if (needle) {
+      writeEditorHitHandoff({
+        workId,
+        chapterId,
+        query: needle,
+        isRegex: false,
+        offset: 0,
+        source: { module: "wence", title: "问策写回草稿", hint: "来自问策 AI 输出" },
+      });
+      navigate(`/work/${workId}?hit=1&chapter=${encodeURIComponent(chapterId)}`);
+    } else {
+      navigate(`/work/${workId}?chapter=${encodeURIComponent(chapterId)}`);
     }
   }
 
@@ -560,6 +849,20 @@ export function ChatPage() {
     const snippet = `【技法参考：${card.title}】\n${card.summary}`;
     setInputMessage((prev) => (prev.trim() ? `${prev.trim()}\n\n${snippet}` : snippet));
   };
+
+  // 会话级：更新关联作品与设定索引开关（写入 session store）
+  const persistSessionMeta = useCallback(
+    (patch: Partial<Pick<WenceSessionStored, "workId" | "includeSettingIndex">>) => {
+      const stored = loadWenceSession(currentConversation);
+      if (!stored) return;
+      const updated: WenceSessionStored = { ...stored, ...patch, updatedAt: Date.now() };
+      saveWenceSession(updated);
+      setConversations((prev) =>
+        prev.map((c) => (c.id === currentConversation ? { ...c, timestamp: updated.updatedAt } : c)),
+      );
+    },
+    [currentConversation],
+  );
 
   const addTechniqueCard = () => {
     const defaultBook = MOCK_REFERENCE_BOOKS[0];
@@ -816,6 +1119,13 @@ export function ChatPage() {
                           >
                             保存为技法卡
                           </button>
+                          <button
+                            type="button"
+                            className="text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                            onClick={() => void writeToAiDraftFromAssistant(message.content)}
+                          >
+                            写入草稿
+                          </button>
                         </>
                       )}
                     </div>
@@ -998,7 +1308,7 @@ export function ChatPage() {
             <div className="border-b border-border/40 p-3">
               <div className="flex items-center gap-1.5">
                 <div
-                  className="grid min-h-8 min-w-0 flex-1 grid-cols-3 gap-0.5 rounded-lg bg-muted/40 p-0.5"
+                  className="grid min-h-8 min-w-0 flex-1 grid-cols-4 gap-0.5 rounded-lg bg-muted/40 p-0.5"
                   role="tablist"
                   aria-label="右侧面板"
                 >
@@ -1044,14 +1354,85 @@ export function ChatPage() {
                   >
                     技法卡
                   </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={rightPaneTab === "refs"}
+                    onClick={() => setRightPaneTab("refs")}
+                    className={cn(
+                      "rounded-md px-1 py-1.5 text-center text-xs transition-colors",
+                      rightPaneTab === "refs"
+                        ? "bg-background/90 text-foreground shadow-sm"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    引用
+                  </button>
                 </div>
-                <Button variant="ghost" size="sm" className="h-8 w-8 shrink-0 p-0" aria-label="面板设置">
-                  <Settings className="h-4 w-4" />
-                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm" className="h-8 w-8 shrink-0 p-0" aria-label="面板设置">
+                      <Settings className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-64">
+                    <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground">会话装配</div>
+                    <div className="px-2 py-2">
+                      <div className="text-xs text-muted-foreground mb-1">关联作品</div>
+                      <select
+                        className="input wence-select w-full text-xs"
+                        value={attachedWorkId ?? ""}
+                        onChange={(e) => {
+                          const v = e.target.value || null;
+                          setAttachedWorkId(v);
+                          persistSessionMeta({ workId: v });
+                        }}
+                      >
+                        <option value="">不关联（通用咨询）</option>
+                        {worksList.map((w) => (
+                          <option key={w.id} value={w.id}>
+                            {w.title.trim() || "未命名作品"}
+                          </option>
+                        ))}
+                      </select>
+                      <div className="mt-1 text-[10px] text-muted-foreground/70">
+                        提示：关联作品后可注入风格卡/标签侧写/（可选）设定索引。
+                      </div>
+                    </div>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem
+                      onClick={() => {
+                        const next = !includeSettingIndex;
+                        setIncludeSettingIndex(next);
+                        persistSessionMeta({ includeSettingIndex: next });
+                      }}
+                    >
+                      <div className="flex items-center justify-between w-full">
+                        <span>设定索引（人物/世界观/术语）</span>
+                        <span className="text-xs text-muted-foreground">{includeSettingIndex ? "开" : "关"}</span>
+                      </div>
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem onClick={() => setRightPaneTab("refs")}>
+                      打开引用材料
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
             </div>
 
             <div className="flex-1 overflow-auto p-3 space-y-3">
+              {includeSettingIndex ? (
+                <div className="rounded-xl border border-primary/30 bg-primary/5 p-3">
+                  <div className="text-xs font-medium text-foreground">已开启设定索引</div>
+                  <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                    会向 AI 注入人物/世界观/术语名录（非正文）。{settingIndexLoading ? "正在加载索引…" : null}
+                  </div>
+                  {attachedWork ? (
+                    <div className="mt-1 text-[11px] text-muted-foreground">关联作品：{attachedWork.title}</div>
+                  ) : null}
+                </div>
+              ) : null}
               {rightPaneTab === "dialog" && (
                 <div className="rounded-xl border border-border/40 bg-card/50 p-3">
                   <div className="flex items-center justify-between gap-2 mb-2">
@@ -1227,6 +1608,99 @@ export function ChatPage() {
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {rightPaneTab === "refs" && (
+                <div className="space-y-3">
+                  <div className="rounded-xl border border-border/40 bg-card/50 p-3">
+                    <div className="text-sm font-medium">引用材料</div>
+                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                      这些材料会作为"引用"注入系统提示词，可逐条移除。请仅用于辅助分析，不要洗稿或大段照搬。
+                    </p>
+                    <div className="mt-2 space-y-2">
+                      <Label className="text-xs">标题</Label>
+                      <Input value={refDraftTitle} onChange={(e) => setRefDraftTitle(e.target.value)} />
+                      <Label className="text-xs">内容</Label>
+                      <Textarea
+                        value={refDraftContent}
+                        onChange={(e) => setRefDraftContent(e.target.value)}
+                        placeholder="粘贴要引用的材料…"
+                        className="min-h-[90px] resize-y"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-7 gap-1 text-xs"
+                        disabled={!refDraftContent.trim()}
+                        onClick={() => {
+                          const r: WenceRefMaterial = {
+                            id: `ref-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                            title: (refDraftTitle || "手动引用").trim().slice(0, 60),
+                            content: refDraftContent.trim(),
+                            createdAt: Date.now(),
+                            source: { module: "manual", workId: attachedWorkId, hint: "手动粘贴" },
+                          };
+                          setRefs((prev) => [r, ...prev]);
+                          setRefDraftContent("");
+                        }}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        添加引用
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-border/40 bg-card/50 p-3">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm font-medium">已引用（{refs.length}）</div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive"
+                        disabled={refs.length === 0}
+                        onClick={() => setRefs([])}
+                      >
+                        清空
+                      </Button>
+                    </div>
+                    {refs.length === 0 ? (
+                      <div className="mt-2 text-xs text-muted-foreground">暂无引用材料。</div>
+                    ) : (
+                      <div className="mt-2 space-y-2">
+                        {refs.slice(0, 20).map((r) => (
+                          <div key={r.id} className="rounded-lg border border-border/40 bg-background/40 p-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="truncate text-xs font-medium text-foreground">{r.title}</div>
+                                <div className="text-[10px] text-muted-foreground">
+                                  来源：{r.source.module}
+                                  {r.source.hint ? ` · ${r.source.hint}` : ""}
+                                </div>
+                              </div>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                                aria-label="移除引用"
+                                onClick={() => setRefs((prev) => prev.filter((x) => x.id !== r.id))}
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </Button>
+                            </div>
+                            <div className="mt-1 line-clamp-3 whitespace-pre-wrap text-[11px] text-muted-foreground">
+                              {r.content}
+                            </div>
+                          </div>
+                        ))}
+                        {refs.length > 20 ? (
+                          <div className="text-[10px] text-muted-foreground">仅展示前 20 条引用。</div>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

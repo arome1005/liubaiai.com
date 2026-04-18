@@ -61,8 +61,19 @@ create table if not exists work_style_card (
   banned_phrases text not null default '',
   style_anchor text not null default '',
   extra_rules text not null default '',
+  sentence_rhythm text null,
+  punctuation_style text null,
+  dialogue_density text null,
+  emotion_style text null,
+  narrative_distance text null,
   updated_at bigint not null
 );
+-- migration: add style fingerprint columns to existing tables
+alter table work_style_card add column if not exists sentence_rhythm text null;
+alter table work_style_card add column if not exists punctuation_style text null;
+alter table work_style_card add column if not exists dialogue_density text null;
+alter table work_style_card add column if not exists emotion_style text null;
+alter table work_style_card add column if not exists narrative_distance text null;
 
 -- ========= bible =========
 create table if not exists bible_character (
@@ -450,6 +461,14 @@ create index if not exists idx_prompt_tpl_approved     on prompt_template(status
 -- 7a. 新增 review_note 列（管理员驳回原因，可为 null）
 alter table prompt_template
   add column if not exists review_note text null;
+
+-- 7c. 新增藏经元数据列（slots / source_kind / source_ref_work_id / source_excerpt_ids / source_note）
+alter table prompt_template
+  add column if not exists slots            text[]  null,
+  add column if not exists source_kind      text    null,
+  add column if not exists source_ref_work_id text  null,
+  add column if not exists source_excerpt_ids text[] null,
+  add column if not exists source_note      text    null;
 
 -- 7b. RLS 策略（本地 Postgres 开发时 RLS 未启用不影响功能；Supabase 生产须运行此段）
 --   draft/submitted/rejected：仅 owner 可读写

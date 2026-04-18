@@ -33,7 +33,7 @@ function stripInvisible(s: string): string {
 }
 
 function stripMarkdownLinePrefix(s: string): string {
-  // Docx->Markdown 常见前缀：ATX 标题、引用、列表符号等；切章时先忽略这些“版式符号”
+  // Docx->Markdown 常见前缀：ATX 标题、引用、列表符号等；切章时先忽略这些"版式符号"
   // e.g. "## 第1章 xxx" / "> 第1章" / "- 第1章"
   return s
     .replace(/^\s{0,4}(?:#{1,6}\s+)?/, "")

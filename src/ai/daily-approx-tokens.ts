@@ -14,6 +14,13 @@ function todayKey(): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+function keyForDate(d: Date): string {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function parseNonNegInt(raw: string | null): number {
   if (!raw) return 0;
   const n = parseInt(raw, 10);
@@ -46,5 +53,30 @@ export function resetTodayApproxTokens(): void {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * 最近 N 天（含今天）的日累计粗估 tokens。
+ * - 日期格式：YYYY-MM-DD
+ * - 若某天无记录则 tokens=0
+ */
+export function listRecentDailyApproxTokens(days: number): Array<{ date: string; tokens: number }> {
+  const n = Math.max(1, Math.min(90, Math.floor(days || 0)));
+  const out: Array<{ date: string; tokens: number }> = [];
+  const base = new Date();
+  // 本地时区：从今天回溯
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(base);
+    d.setDate(base.getDate() - i);
+    const date = keyForDate(d);
+    let tokens = 0;
+    try {
+      tokens = parseNonNegInt(localStorage.getItem(KEY_PREFIX + date));
+    } catch {
+      tokens = 0;
+    }
+    out.push({ date, tokens });
+  }
+  return out;
 }
 

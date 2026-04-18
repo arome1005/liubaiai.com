@@ -146,6 +146,11 @@ export function parseStyleCardRow(r: Json): WorkStyleCard {
     bannedPhrases: (r.banned_phrases as string) ?? "",
     styleAnchor: (r.style_anchor as string) ?? "",
     extraRules: (r.extra_rules as string) ?? "",
+    sentenceRhythm: (r.sentence_rhythm as string) || undefined,
+    punctuationStyle: (r.punctuation_style as string) || undefined,
+    dialogueDensity: (r.dialogue_density as WorkStyleCard["dialogueDensity"]) || undefined,
+    emotionStyle: (r.emotion_style as WorkStyleCard["emotionStyle"]) || undefined,
+    narrativeDistance: (r.narrative_distance as WorkStyleCard["narrativeDistance"]) || undefined,
     updatedAt: Number(r.updated_at),
   };
 }
@@ -337,6 +342,11 @@ export function parseGlobalPromptTemplateRow(r: Json): GlobalPromptTemplate {
     sortOrder: Number(r.sort_order),
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
+    slots: Array.isArray(r.slots) ? (r.slots as GlobalPromptTemplate["slots"]) : undefined,
+    source_kind: (r.source_kind as GlobalPromptTemplate["source_kind"]) ?? undefined,
+    source_ref_work_id: (r.source_ref_work_id as string | null) ?? null,
+    source_excerpt_ids: Array.isArray(r.source_excerpt_ids) ? (r.source_excerpt_ids as string[]) : null,
+    source_note: (r.source_note as string) ?? undefined,
   };
 }
 
@@ -417,6 +427,11 @@ export function toStyleCardUpsert(card: WorkStyleCard): Json {
     banned_phrases: card.bannedPhrases,
     style_anchor: card.styleAnchor,
     extra_rules: card.extraRules,
+    sentence_rhythm: card.sentenceRhythm ?? null,
+    punctuation_style: card.punctuationStyle ?? null,
+    dialogue_density: card.dialogueDensity ?? null,
+    emotion_style: card.emotionStyle ?? null,
+    narrative_distance: card.narrativeDistance ?? null,
     updated_at: card.updatedAt,
   };
 }

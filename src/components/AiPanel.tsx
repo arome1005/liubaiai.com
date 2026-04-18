@@ -129,6 +129,8 @@ function AiProviderLogo(props: { provider: AiProviderId }) {
 
 export function AiPanel(props: {
   onClose: () => void;
+  /** 在右侧栏壳层内使用时隐藏标题行（避免重复两行标题） */
+  hideHeader?: boolean;
   /**
    * 递增时触发一次：打开侧栏后由父组件递增；本面板切到「续写」并立即 `run`（结果仅进侧栏草稿，不写入正文）。
    * 总体规划 §11 步 17。
@@ -159,8 +161,8 @@ export function AiPanel(props: {
   glossaryTerms: BibleGlossaryTerm[];
   /** §11 步 43：锦囊「笔感」页维护的参考段落 */
   styleSampleSlices: WritingStyleSampleSlice[];
-  workStyle: { pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string };
-  onUpdateWorkStyle: (patch: Partial<{ pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string }>) => void;
+  workStyle: { pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string; sentenceRhythm?: string; punctuationStyle?: string; dialogueDensity?: "low" | "medium" | "high"; emotionStyle?: "cold" | "neutral" | "warm"; narrativeDistance?: "omniscient" | "limited" | "deep_pov" };
+  onUpdateWorkStyle: (patch: Partial<{ pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string; sentenceRhythm?: string; punctuationStyle?: string; dialogueDensity?: "low" | "medium" | "high"; emotionStyle?: "cold" | "neutral" | "warm"; narrativeDistance?: "omniscient" | "limited" | "deep_pov" }>) => void;
   linkedExcerptsForChapter: Array<ReferenceExcerpt & { refTitle: string; tagIds: string[] }>;
   getSelectedText: () => string;
   insertAtCursor: (text: string) => void;
@@ -252,7 +254,7 @@ export function AiPanel(props: {
       label: "听雨",
       subtitle: "辞藻丰盈 · 情感细腻",
       tip: "听雨（Claude）",
-      quote: "“如檐下听雨，文字绵密入骨，最懂人心。”",
+      quote: '"如檐下听雨，文字绵密入骨，最懂人心。"',
       core:
         "辞藻丰盈，情感细腻。像一位共情力极强的老友，成文质感极佳，自带一种天然的去\"AI味\"滤镜，是描写人物内心与凄美画面的首选。",
       meters: { prose: 5, follow: 4, cost: 3 },
@@ -262,7 +264,7 @@ export function AiPanel(props: {
       label: "观云",
       subtitle: "创意如云 · 变幻万千",
       tip: "观云（Gemini）",
-      quote: "“坐看云起，奇思妙想如漫天流云，不可捉摸。”",
+      quote: '"坐看云起，奇思妙想如漫天流云，不可捉摸。"',
       core:
         "创意如云，变幻万千。拥有惊人的上下文联想能力，最擅长在陷入瓶颈时为你提供打破常规的\"神来之笔\"，让剧情走向峰回路转。",
       meters: { prose: 4, follow: 3, cost: 2 },
@@ -272,7 +274,7 @@ export function AiPanel(props: {
       label: "潜龙",
       subtitle: "本地 · Ollama",
       tip: "潜龙（Ollama）",
-      quote: "“藏龙于渊，不假外求，深藏不露的底气。”",
+      quote: '"藏龙于渊，不假外求，深藏不露的底气。"',
       core:
         "根植本地，稳如泰山。不依赖云端，私密且纯粹。虽然平时深潜不出，但在处理基础创作任务时，有着龙跃于渊般的稳健爆发力。",
       meters: { prose: 3, follow: 3, cost: 1, costText: "极低消耗" },
@@ -282,7 +284,7 @@ export function AiPanel(props: {
       label: "潜龙",
       subtitle: "本地 · MLX",
       tip: "潜龙（Apple MLX）",
-      quote: "“藏龙于渊，不假外求，深藏不露的底气。”",
+      quote: '"藏龙于渊，不假外求，深藏不露的底气。"',
       core:
         "根植本地，稳如泰山。通过 Apple MLX 在本机推理，私密且纯粹；请确保已启动兼容 OpenAI 接口的本地服务并正确填写 Base URL。",
       meters: { prose: 3, follow: 3, cost: 1, costText: "极低消耗" },
@@ -292,7 +294,7 @@ export function AiPanel(props: {
       label: "燎原",
       subtitle: "墨落星火 · 势成燎原",
       tip: "燎原（豆包）",
-      quote: "“墨落星火，势成燎原。”",
+      quote: '"墨落星火，势成燎原。"',
       core:
         "它是扎根于东方文脉的智慧火种，不只是精准解析你的一字一句，更深谙汉语背后的山河底蕴与人文温度。于方寸屏幕间，赋你一支生花妙笔；借燎原之势，让你的文思，跨越山海，写尽天下。",
       meters: { prose: 3, follow: 5, cost: 2, costText: "极低" },
@@ -302,7 +304,7 @@ export function AiPanel(props: {
       label: "智谱",
       subtitle: "墨竹清劲 · 文理兼备",
       tip: "智谱 GLM",
-      quote: "“竹影扫阶尘不动，月穿潭底水无痕。”",
+      quote: '"竹影扫阶尘不动，月穿潭底水无痕。"',
       core:
         "GLM-5 / GLM-4.7 系列在中文理解与指令遵循上扎实，适合长文写作中的结构梳理、设定补全与多轮改写；模型 ID 请以开放平台文档（如 glm-5、glm-4.7、glm-4.7-flash）为准。",
       meters: { prose: 4, follow: 4, cost: 2 },
@@ -312,7 +314,7 @@ export function AiPanel(props: {
       label: "Kimi",
       subtitle: "长卷如月 · 徐徐展开",
       tip: "Kimi（Moonshot）",
-      quote: "“月色入户，清辉满纸。”",
+      quote: '"月色入户，清辉满纸。"',
       core:
         "Kimi 擅长在长上下文里保持线索不断裂，适合需要\"带着前文记忆\"续写与扩写的场景；流式输出与本 App 的生成体验契合。",
       meters: { prose: 4, follow: 4, cost: 3 },
@@ -322,7 +324,7 @@ export function AiPanel(props: {
       label: "小米",
       subtitle: "锋刃内敛 · 务实为文",
       tip: "小米 MiMo",
-      quote: "“工欲善其事，必先利其器。”",
+      quote: '"工欲善其事，必先利其器。"',
       core:
         "小米 MiMo 提供 OpenAI 兼容接口；写作常用 mimo-v2-pro（偏强）与 mimo-v2-flash（偏快），在高级后端配置中可一键选择。",
       meters: { prose: 3, follow: 4, cost: 2 },
@@ -1129,12 +1131,14 @@ export function AiPanel(props: {
 
   return (
     <aside className="ai-panel" aria-label="AI 面板">
-      <div className="ai-panel-head">
-        <strong>AI</strong>
-        <button type="button" className="icon-btn" title="关闭" onClick={props.onClose}>
-          ×
-        </button>
-      </div>
+      {props.hideHeader ? null : (
+        <div className="ai-panel-head">
+          <strong>AI</strong>
+          <button type="button" className="icon-btn" title="关闭" onClick={props.onClose}>
+            ×
+          </button>
+        </div>
+      )}
 
       <div className="ai-panel-body-stack">
         <section className="ai-panel-section card" aria-labelledby="ai-panel-model-h">
@@ -1584,6 +1588,68 @@ export function AiPanel(props: {
             placeholder="例如：避免上帝视角；不要出现现代网络词；对话不加引号…"
           />
         </label>
+
+        <details style={{ marginTop: "0.5rem" }}>
+          <summary className="small muted" style={{ cursor: "pointer", userSelect: "none" }}>高级风格指纹（展开设置）</summary>
+          <div style={{ paddingTop: "0.5rem" }}>
+            <label className="ai-panel-field">
+              <span className="small muted">句节奏（可空）</span>
+              <textarea
+                name="styleSentenceRhythm"
+                value={props.workStyle.sentenceRhythm ?? ""}
+                onChange={(e) => props.onUpdateWorkStyle({ sentenceRhythm: e.target.value || undefined })}
+                rows={2}
+                placeholder="例如：多用短句，节奏急促；长句收尾营造余韵…"
+              />
+            </label>
+            <label className="ai-panel-field">
+              <span className="small muted">标点偏好（可空）</span>
+              <textarea
+                name="stylePunctuationStyle"
+                value={props.workStyle.punctuationStyle ?? ""}
+                onChange={(e) => props.onUpdateWorkStyle({ punctuationStyle: e.target.value || undefined })}
+                rows={2}
+                placeholder="例如：善用破折号表停顿，少用感叹号…"
+              />
+            </label>
+            <label className="ai-panel-field">
+              <span className="small muted">对话密度</span>
+              <select
+                value={props.workStyle.dialogueDensity ?? ""}
+                onChange={(e) => props.onUpdateWorkStyle({ dialogueDensity: (e.target.value as "low" | "medium" | "high") || undefined })}
+              >
+                <option value="">不指定</option>
+                <option value="low">低（叙述/动作为主）</option>
+                <option value="medium">中等</option>
+                <option value="high">高（对话推动情节）</option>
+              </select>
+            </label>
+            <label className="ai-panel-field">
+              <span className="small muted">情绪温度</span>
+              <select
+                value={props.workStyle.emotionStyle ?? ""}
+                onChange={(e) => props.onUpdateWorkStyle({ emotionStyle: (e.target.value as "cold" | "neutral" | "warm") || undefined })}
+              >
+                <option value="">不指定</option>
+                <option value="cold">冷峻克制（情绪内化）</option>
+                <option value="neutral">适中</option>
+                <option value="warm">热烈（意象丰富）</option>
+              </select>
+            </label>
+            <label className="ai-panel-field">
+              <span className="small muted">叙述距离</span>
+              <select
+                value={props.workStyle.narrativeDistance ?? ""}
+                onChange={(e) => props.onUpdateWorkStyle({ narrativeDistance: (e.target.value as "omniscient" | "limited" | "deep_pov") || undefined })}
+              >
+                <option value="">不指定</option>
+                <option value="omniscient">全知叙述</option>
+                <option value="limited">第三人称有限视角</option>
+                <option value="deep_pov">深度视角（贴近意识流）</option>
+              </select>
+            </label>
+          </div>
+        </details>
       </details>
 
       <details className="ai-panel-box">

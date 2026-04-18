@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { toast } from "sonner";
 import { lineDiffRows, type TextLineDiffRow } from "../util/text-line-diff";
 
 export type AiDraftMergePayload =
@@ -35,7 +36,7 @@ export function AiDraftMergeDialog(props: {
     if (p.kind === "replace") {
       const now = getSelectedText().trim();
       if (now !== p.before.trim()) {
-        window.alert("选区已变化，请重新在正文中选中要替换的原文后再试。");
+        toast.error("选区已变化，请重新在正文中选中要替换的原文后再试。");
         onCancel();
         return;
       }

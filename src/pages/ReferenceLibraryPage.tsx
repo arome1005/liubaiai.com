@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Spinner } from "../components/ui/spinner";
@@ -22,6 +23,7 @@ import {
 import { cn } from "../lib/utils";
 import {
   addBibleCharacter,
+  addBibleGlossaryTerm,
   addBibleWorldEntry,
   addBibleTimelineEvent,
   addWritingStyleSample,
@@ -91,7 +93,6 @@ import {
 } from "../components/ui/dropdown-menu";
 import {
   Book,
-  HardDrive,
   FileText,
   Star,
   Grid3X3,
@@ -118,6 +119,11 @@ import {
 } from "lucide-react";
 import { PromptExtractDialog } from "../components/PromptExtractDialog";
 import { ReferenceAiChatDialog } from "../components/ReferenceAiChatDialog";
+import { parseReferenceKeyCardsFromExtractBody, type ReferenceKeyCard } from "../util/reference-key-cards";
+import { writeAiPanelDraft } from "../util/ai-panel-draft";
+import { writeWenceRefsImport } from "../util/wence-refs-import";
+import { writeEditorHitHandoff } from "../util/editor-hit-handoff";
+import { writeEditorRefsImport } from "../util/editor-refs-import";
 
 const CONTEXT_TAIL = 280;
 const CONTEXT_HEAD = 280;
@@ -196,6 +202,7 @@ function highlightChunkText(text: string, start: number, end: number) {
 
 export function ReferenceLibraryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const [items, setItems] = useState<ReferenceLibraryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -297,6 +304,16 @@ export function ReferenceLibraryPage() {
   const [extractLoading, setExtractLoading] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
   const [savedExtracts, setSavedExtracts] = useState<ReferenceExtract[]>([]);
+  const importAbortRef = useRef<AbortController | null>(null);
+
+  // ── 书籍详情工作台（P2-1） ───────────────────────────────────────────────
+  const [workbenchOpen, setWorkbenchOpen] = useState(false);
+  const [workbenchRefId, setWorkbenchRefId] = useState<string | null>(null);
+  const [workbenchEntry, setWorkbenchEntry] = useState<ReferenceLibraryEntry | null>(null);
+  const [workbenchHeads, setWorkbenchHeads] = useState<ReferenceChapterHead[]>([]);
+  const [workbenchExcerpts, setWorkbenchExcerpts] = useState<Array<ReferenceExcerpt & { tagIds: string[] }>>([]);
+  const [workbenchExtracts, setWorkbenchExtracts] = useState<ReferenceExtract[]>([]);
+  const [workbenchTab, setWorkbenchTab] = useState<"overview" | "excerpts" | "extracts">("overview");
 
   type ConfirmKind =
     | "delete-book"
@@ -673,7 +690,7 @@ export function ReferenceLibraryPage() {
     try {
       await downloadReferenceLibraryZip(items, [...exportSelection]);
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err));
+      toast.error(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -709,7 +726,7 @@ export function ReferenceLibraryPage() {
     const entry = items.find((x) => x.id === refId);
     if (!entry) {
       deepLinkKeyRef.current = key;
-      window.alert("地址栏中的参考书目不存在或已删除。");
+      toast.error("地址栏中的参考书目不存在或已删除。");
       setSearchParams({}, { replace: true });
       return;
     }
@@ -732,6 +749,28 @@ export function ReferenceLibraryPage() {
     if (!activeRefId || !extractPanelOpen) return;
     void listReferenceExtracts(activeRefId).then(setSavedExtracts);
   }, [activeRefId, extractPanelOpen]);
+
+  // ── 工作台数据加载（按 workbenchRefId）────────────────────────────────────
+  useEffect(() => {
+    if (!workbenchOpen || !workbenchRefId) return;
+    let cancelled = false;
+    void (async () => {
+      const entry = items.find((x) => x.id === workbenchRefId) ?? null;
+      const [heads, excerpts, extracts] = await Promise.all([
+        listReferenceChapterHeads(workbenchRefId),
+        listReferenceExcerptsWithTagIds(workbenchRefId),
+        listReferenceExtracts(workbenchRefId),
+      ]);
+      if (cancelled) return;
+      setWorkbenchEntry(entry);
+      setWorkbenchHeads(heads);
+      setWorkbenchExcerpts(excerpts);
+      setWorkbenchExtracts(extracts);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [items, workbenchOpen, workbenchRefId]);
 
   // 切换书目时重置提炼面板
   useEffect(() => {
@@ -790,7 +829,7 @@ export function ReferenceLibraryPage() {
   const handleImportExtract = useCallback(async (extract: ReferenceExtract) => {
     const wid = importWorkId;
     if (!wid) {
-      window.alert("请先在上方选择要导入的作品。");
+      toast.error("请先在上方选择要导入的作品。");
       return;
     }
     setImportBusy((prev) => ({ ...prev, [extract.id]: true }));
@@ -821,13 +860,17 @@ export function ReferenceLibraryPage() {
           chapterId: null,
         });
         bibleId = entity.id;
-      } else {
+      } else if (extract.type === "craft") {
         // craft → 笔感样本
         const entity = await addWritingStyleSample(wid, {
           title: titlePrefix + "技法摘要",
           body,
         });
         bibleId = entity.id;
+      } else {
+        // key_cards：不做"一键导入"，交给卡片级「应用」按钮（避免一口气生成大量锦囊）
+        toast.info("结构化要点卡片：请在下方卡片列表中逐张应用到作品模块。");
+        return;
       }
       if (bibleId) {
         await updateReferenceExtract(extract.id, { importedBibleId: bibleId });
@@ -835,13 +878,202 @@ export function ReferenceLibraryPage() {
           prev.map((e) => (e.id === extract.id ? { ...e, importedBibleId: bibleId } : e)),
         );
       }
-      window.alert("已导入锦囊，请前往「锦囊」页查看。");
+      toast.success("已导入锦囊", {
+        description: "可前往「锦囊」页查看。",
+        action: importWorkId ? { label: "去锦囊", onClick: () => navigate(`/work/${importWorkId}/bible`) } : undefined,
+      });
     } catch (err) {
-      window.alert("导入失败：" + (err instanceof Error ? err.message : String(err)));
+      toast.error("导入失败：" + (err instanceof Error ? err.message : String(err)));
     } finally {
       setImportBusy((prev) => ({ ...prev, [extract.id]: false }));
     }
-  }, [activeTitle, importWorkId]);
+  }, [activeTitle, importWorkId, navigate]);
+
+  const applyKeyCardToWork = useCallback(
+    async (card: ReferenceKeyCard) => {
+      const wid = importWorkId;
+      if (!wid) {
+        toast.error("请先在上方选择要导入的作品。");
+        return;
+      }
+      const titlePrefix = `【藏经卡片·${activeTitle}】`;
+      const title = `${titlePrefix}${card.title}`.slice(0, 120);
+      const body = [card.body, card.sourceHint ? `\n\n> 线索：${card.sourceHint}` : ""].join("").trim();
+
+      // 先按 kind 做一个合理默认映射；后续可做「选择目标模块」增强
+      if (card.kind === "character") {
+        await addBibleCharacter(wid, {
+          name: title,
+          motivation: body,
+          relationships: "",
+          voiceNotes: "",
+          taboos: "",
+        });
+      } else if (card.kind === "plot") {
+        await addBibleTimelineEvent(wid, {
+          label: title,
+          note: body,
+          chapterId: null,
+        });
+      } else if (card.kind === "craft" || card.kind === "quote") {
+        await addWritingStyleSample(wid, { title, body });
+      } else if (card.kind === "glossary") {
+        // 术语：把 title 当 term，正文进 definition（repo 类型里叫 body）
+        await addBibleGlossaryTerm(wid, {
+          term: card.title,
+          category: "藏经卡片",
+          definition: body,
+        });
+      } else {
+        await addBibleWorldEntry(wid, {
+          entryKind: "藏经卡片",
+          title,
+          body,
+        });
+      }
+      const tab = card.kind === "character" ? "characters"
+        : card.kind === "plot" ? "timeline"
+        : card.kind === "craft" || card.kind === "quote" ? "penfeel"
+        : card.kind === "glossary" ? "glossary"
+        : "world";
+      toast.success("已应用到作品锦囊", {
+        action: { label: "去查看", onClick: () => navigate(`/work/${wid}/bible?tab=${tab}`) },
+      });
+    },
+    [activeTitle, importWorkId, navigate],
+  );
+
+  const formatKeyCardText = useCallback(
+    (card: ReferenceKeyCard) => {
+      const parts: string[] = [];
+      parts.push(`【藏经要点卡片】${activeTitle}`.trim());
+      parts.push(`类型：${card.kind}`);
+      parts.push(`标题：${card.title}`);
+      if (card.sourceHint) parts.push(`线索：${card.sourceHint}`);
+      if (card.tags?.length) parts.push(`标签：${card.tags.join(" / ")}`);
+      parts.push("");
+      if (card.body) parts.push(card.body.trim());
+      return parts.join("\n").trim() + "\n";
+    },
+    [activeTitle],
+  );
+
+  const applyKeyCardToWenceRefs = useCallback(
+    (card: ReferenceKeyCard) => {
+      if (!importWorkId) {
+        toast.error("请先在上方选择一个作品（用于问策关联作品上下文）。");
+        return;
+      }
+      const content = formatKeyCardText(card);
+      writeWenceRefsImport({
+        workId: importWorkId,
+        title: `藏经卡片：${card.title}`.slice(0, 80),
+        content,
+        refWorkId: activeRefId ?? undefined,
+        hint: `来自藏经·${activeTitle} · ${card.kind}`,
+      });
+      navigate("/chat?refsImport=1");
+    },
+    [activeRefId, activeTitle, formatKeyCardText, importWorkId, navigate],
+  );
+
+  const applyKeyCardToAiDraft = useCallback(
+    async (card: ReferenceKeyCard) => {
+      const wid = importWorkId;
+      if (!wid) {
+        toast.error("请先在上方选择要写入草稿的作品。");
+        return;
+      }
+      const chapters = await listChapters(wid);
+      if (chapters.length === 0) {
+        toast.error("该作品还没有章节，请先在写作页创建章节。");
+        return;
+      }
+      const sorted = [...chapters].sort((a, b) => a.order - b.order);
+      const chapterId =
+        (progressCursor && sorted.some((c) => c.id === progressCursor) ? progressCursor : null) ?? sorted[0]!.id;
+      const text = formatKeyCardText(card);
+      const r = writeAiPanelDraft(wid, chapterId, text);
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      navigate(`/work/${wid}?chapter=${encodeURIComponent(chapterId)}`);
+    },
+    [formatKeyCardText, importWorkId, navigate, progressCursor],
+  );
+
+  const jumpKeyCardToWritingHit = useCallback(
+    async (card: ReferenceKeyCard) => {
+      const wid = importWorkId;
+      if (!wid) {
+        toast.error("请先在上方选择要跳转的作品。");
+        return;
+      }
+      const chapters = await listChapters(wid);
+      if (chapters.length === 0) {
+        toast.error("该作品还没有章节，请先在写作页创建章节。");
+        return;
+      }
+      const sorted = [...chapters].sort((a, b) => a.order - b.order);
+      const chapterId =
+        (progressCursor && sorted.some((c) => c.id === progressCursor) ? progressCursor : null) ?? sorted[0]!.id;
+      const needle = (card.title || card.body || "").trim().slice(0, 80);
+      if (!needle) {
+        toast.error("该卡片没有可用于定位的标题/正文。");
+        return;
+      }
+      writeEditorHitHandoff({
+        workId: wid,
+        chapterId,
+        query: needle,
+        isRegex: false,
+        offset: 0,
+        source: {
+          module: "reference",
+          title: `藏经卡片：${card.title}`.slice(0, 80),
+          hint: `来自《${activeTitle}》`,
+        },
+      });
+      navigate(`/work/${wid}?hit=1&chapter=${encodeURIComponent(chapterId)}`);
+    },
+    [activeTitle, importWorkId, navigate, progressCursor],
+  );
+
+  const sendExcerptToWritingAsRef = useCallback(
+    async (ex: ReferenceExcerpt) => {
+      const wid = ex.linkedWorkId ?? importWorkId;
+      if (!wid) {
+        toast.error("请先在上方选择要跳转的作品（或先在摘录里绑定作品/章节）。");
+        return;
+      }
+      const chapters = await listChapters(wid);
+      if (chapters.length === 0) {
+        toast.error("该作品还没有章节，请先在写作页创建章节。");
+        return;
+      }
+      const sorted = [...chapters].sort((a, b) => a.order - b.order);
+      const chapterId =
+        ex.linkedChapterId ??
+        ((progressCursor && sorted.some((c) => c.id === progressCursor) ? progressCursor : null) ?? sorted[0]!.id);
+
+      writeEditorRefsImport({
+        workId: wid,
+        chapterId,
+        items: [
+          {
+            id: ex.id,
+            title: `藏经摘录：${activeTitle}`.slice(0, 80),
+            content: [ex.text, ex.note ? `\n\n备注：${ex.note}` : ""].join("").trim(),
+            createdAt: Date.now(),
+            source: { module: "reference", hint: "来自藏经摘录" },
+          },
+        ],
+      });
+      navigate(`/work/${wid}?refsImport=1&chapter=${encodeURIComponent(chapterId)}`);
+    },
+    [activeTitle, importWorkId, navigate, progressCursor],
+  );
 
   // ── 打开「提炼提示词」Dialog ───────────────────────────────────────────────
 
@@ -886,7 +1118,7 @@ export function ReferenceLibraryPage() {
     async (ex: ReferenceExcerpt) => {
       const entry = items.find((x) => x.id === ex.refWorkId);
       if (!entry) {
-        window.alert("该参考书目已不存在，无法跳转。");
+        toast.error("该参考书目已不存在，无法跳转。");
         return;
       }
       await openReader(entry, ex.ordinal, { start: ex.startOffset, end: ex.endOffset });
@@ -987,6 +1219,15 @@ export function ReferenceLibraryPage() {
     e.target.value = "";
     if (picked.length === 0) return;
 
+    const isAbortError = (err: unknown) =>
+      (err instanceof DOMException && err.name === "AbortError") ||
+      (typeof err === "object" && err !== null && "name" in err && (err as { name?: unknown }).name === "AbortError");
+
+    // 初始化本次导入的取消控制器（用于批量/单本导入 + 索引阶段）
+    const abort = new AbortController();
+    importAbortRef.current?.abort();
+    importAbortRef.current = abort;
+
     const txtFiles = picked.filter((f) => f.name.toLowerCase().endsWith(".txt"));
     const pdfFiles = picked.filter((f) => f.name.toLowerCase().endsWith(".pdf"));
     const docxFiles = picked.filter((f) => f.name.toLowerCase().endsWith(".docx"));
@@ -994,33 +1235,25 @@ export function ReferenceLibraryPage() {
     const formatCount =
       (txtFiles.length > 0 ? 1 : 0) + (pdfFiles.length > 0 ? 1 : 0) + (docxFiles.length > 0 ? 1 : 0);
     if (formatCount > 1) {
-      window.alert("请勿在同一批选择中混合 .txt、.pdf 与 .docx，请按格式分开导入。");
+      toast.error("请勿在同一批选择中混合 .txt、.pdf 与 .docx，请按格式分开导入。");
       return;
     }
 
     if (formatCount === 0) {
-      window.alert(
-        "支持 UTF-8 的 .txt、带文本层的 .pdf、以及 Word 的 .docx（均在浏览器内本地解析，不上传）。旧版 .doc 请先用 Word 另存为 .docx。可多选同类型文件。",
-      );
+      toast.info("支持 UTF-8 的 .txt、带文本层的 .pdf、以及 Word 的 .docx（均在浏览器内本地解析，不上传）。旧版 .doc 请先用 Word 另存为 .docx。可多选同类型文件。");
       return;
     }
 
     if (txtFiles.length > 0) {
       if (txtFiles.length < picked.length) {
-        window.alert(
-          `已忽略 ${picked.length - txtFiles.length} 个非 .txt 文件，将导入 ${txtFiles.length} 个 .txt。`,
-        );
+        toast.info(`已忽略 ${picked.length - txtFiles.length} 个非 .txt 文件，将导入 ${txtFiles.length} 个 .txt。`);
       }
     } else if (pdfFiles.length > 0) {
       if (pdfFiles.length < picked.length) {
-        window.alert(
-          `已忽略 ${picked.length - pdfFiles.length} 个非 .pdf 文件，将导入 ${pdfFiles.length} 个 .pdf。`,
-        );
+        toast.info(`已忽略 ${picked.length - pdfFiles.length} 个非 .pdf 文件，将导入 ${pdfFiles.length} 个 .pdf。`);
       }
     } else if (docxFiles.length < picked.length) {
-      window.alert(
-        `已忽略 ${picked.length - docxFiles.length} 个非 .docx 文件，将导入 ${docxFiles.length} 个 .docx。`,
-      );
+      toast.info(`已忽略 ${picked.length - docxFiles.length} 个非 .docx 文件，将导入 ${docxFiles.length} 个 .docx。`);
     }
 
     if (txtFiles.length > 0) {
@@ -1028,6 +1261,7 @@ export function ReferenceLibraryPage() {
       const file = txtFiles[0]!;
       setBusy(true);
       try {
+        if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
         const { text, suspiciousEncoding } = await readUtf8TextFileWithCheck(file);
         if (suspiciousEncoding) {
           const go = await confirmOnce({
@@ -1063,17 +1297,21 @@ export function ReferenceLibraryPage() {
                     label: p.label,
                     fileName: file.name,
                   }),
+                signal: abort.signal,
               }
-            : undefined,
+            : { signal: abort.signal },
         );
         setHeavyJob(null);
         await refresh();
         await openReader(entry, 0, null);
       } catch (err) {
         setHeavyJob(null);
-        window.alert(err instanceof Error ? err.message : "导入失败");
+        if (!isAbortError(err)) {
+          toast.error(err instanceof Error ? err.message : "导入失败");
+        }
       } finally {
         setBusy(false);
+        if (importAbortRef.current === abort) importAbortRef.current = null;
       }
       return;
     }
@@ -1087,6 +1325,7 @@ export function ReferenceLibraryPage() {
       let ok = 0;
       try {
         for (let i = 0; i < txtFiles.length; i++) {
+          if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
           const file = txtFiles[i]!;
           setImportProgress({ current: i + 1, total: txtFiles.length, fileName: file.name });
           try {
@@ -1125,28 +1364,34 @@ export function ReferenceLibraryPage() {
                         label: `${p.label ?? ""}（${i + 1}/${txtFiles.length}）`,
                         fileName: file.name,
                       }),
+                    signal: abort.signal,
                   }
-                : undefined,
+                : { signal: abort.signal },
             );
             setHeavyJob(null);
             ok++;
             await refresh();
           } catch (err) {
             setHeavyJob(null);
+            if (isAbortError(err)) throw err;
             errors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
           }
           await new Promise<void>((r) => requestAnimationFrame(() => r()));
         }
+      } catch (err) {
+        if (!isAbortError(err)) throw err;
       } finally {
         setImportProgress(null);
         setHeavyJob(null);
         setBusy(false);
+        if (importAbortRef.current === abort) importAbortRef.current = null;
       }
 
+      if (abort.signal.aborted) return;
       if (errors.length > 0) {
         const head = errors.slice(0, 8);
         const more = errors.length > 8 ? `\n… 共 ${errors.length} 条失败` : "";
-        window.alert(`批量导入完成：成功 ${ok}，失败 ${errors.length}。\n\n${head.join("\n")}${more}`);
+        toast.info(`批量导入完成：成功 ${ok}，失败 ${errors.length}。`);
       }
       return;
     }
@@ -1157,6 +1402,7 @@ export function ReferenceLibraryPage() {
       setBusy(true);
       try {
         setHeavyJob({ phase: "chunks", percent: 0, label: "正在读取 PDF…", fileName: file.name });
+        if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
         const buf = await file.arrayBuffer();
         const { text } = await extractPlainTextFromPdf(buf, {
           onProgress: ({ page, totalPages }) => {
@@ -1167,6 +1413,7 @@ export function ReferenceLibraryPage() {
               fileName: file.name,
             });
           },
+          signal: abort.signal,
         });
         setHeavyJob(null);
         const title =
@@ -1194,17 +1441,21 @@ export function ReferenceLibraryPage() {
                     label: p.label,
                     fileName: file.name,
                   }),
+                signal: abort.signal,
               }
-            : undefined,
+            : { signal: abort.signal },
         );
         setHeavyJob(null);
         await refresh();
         await openReader(entry, 0, null);
       } catch (err) {
         setHeavyJob(null);
-        window.alert(err instanceof Error ? err.message : "导入失败");
+        if (!isAbortError(err)) {
+          toast.error(err instanceof Error ? err.message : "导入失败");
+        }
       } finally {
         setBusy(false);
+        if (importAbortRef.current === abort) importAbortRef.current = null;
       }
       return;
     }
@@ -1218,6 +1469,7 @@ export function ReferenceLibraryPage() {
     let pdfOk = 0;
     try {
       for (let i = 0; i < pdfFiles.length; i++) {
+        if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
         const file = pdfFiles[i]!;
         setImportProgress({ current: i + 1, total: pdfFiles.length, fileName: file.name });
         try {
@@ -1232,6 +1484,7 @@ export function ReferenceLibraryPage() {
                 fileName: file.name,
               });
             },
+            signal: abort.signal,
           });
           setHeavyJob(null);
           const stem = file.name.replace(/\.pdf$/i, "").trim() || "未命名";
@@ -1260,28 +1513,34 @@ export function ReferenceLibraryPage() {
                       label: `${p.label ?? ""}（${i + 1}/${pdfFiles.length}）`,
                       fileName: file.name,
                     }),
+                  signal: abort.signal,
                 }
-              : undefined,
+              : { signal: abort.signal },
           );
           setHeavyJob(null);
           pdfOk++;
           await refresh();
         } catch (err) {
           setHeavyJob(null);
+          if (isAbortError(err)) throw err;
           pdfErrors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
         }
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
+    } catch (err) {
+      if (!isAbortError(err)) throw err;
     } finally {
       setImportProgress(null);
       setHeavyJob(null);
       setBusy(false);
+      if (importAbortRef.current === abort) importAbortRef.current = null;
     }
 
+    if (abort.signal.aborted) return;
     if (pdfErrors.length > 0) {
       const head = pdfErrors.slice(0, 8);
       const more = pdfErrors.length > 8 ? `\n… 共 ${pdfErrors.length} 条失败` : "";
-      window.alert(`批量导入完成：成功 ${pdfOk}，失败 ${pdfErrors.length}。\n\n${head.join("\n")}${more}`);
+      toast.info(`批量导入完成：成功 ${pdfOk}，失败 ${pdfErrors.length}。`);
     }
     return;
     }
@@ -1291,6 +1550,7 @@ export function ReferenceLibraryPage() {
       setBusy(true);
       try {
         setHeavyJob({ phase: "chunks", percent: 0, label: "正在解析 Word 文档…", fileName: file.name });
+        if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
         const buf = await file.arrayBuffer();
         const text = await extractPlainTextFromDocx(buf);
         setHeavyJob(null);
@@ -1319,17 +1579,21 @@ export function ReferenceLibraryPage() {
                     label: p.label,
                     fileName: file.name,
                   }),
+                signal: abort.signal,
               }
-            : undefined,
+            : { signal: abort.signal },
         );
         setHeavyJob(null);
         await refresh();
         await openReader(entry, 0, null);
       } catch (err) {
         setHeavyJob(null);
-        window.alert(err instanceof Error ? err.message : "导入失败");
+        if (!isAbortError(err)) {
+          toast.error(err instanceof Error ? err.message : "导入失败");
+        }
       } finally {
         setBusy(false);
+        if (importAbortRef.current === abort) importAbortRef.current = null;
       }
       return;
     }
@@ -1343,10 +1607,12 @@ export function ReferenceLibraryPage() {
     let docxOk = 0;
     try {
       for (let i = 0; i < docxFiles.length; i++) {
+        if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
         const file = docxFiles[i]!;
         setImportProgress({ current: i + 1, total: docxFiles.length, fileName: file.name });
         try {
           setHeavyJob({ phase: "chunks", percent: 0, label: "正在解析 Word 文档…", fileName: file.name });
+          if (abort.signal.aborted) throw new DOMException("Aborted", "AbortError");
           const buf = await file.arrayBuffer();
           const text = await extractPlainTextFromDocx(buf);
           setHeavyJob(null);
@@ -1376,28 +1642,34 @@ export function ReferenceLibraryPage() {
                       label: `${p.label ?? ""}（${i + 1}/${docxFiles.length}）`,
                       fileName: file.name,
                     }),
+                  signal: abort.signal,
                 }
-              : undefined,
+              : { signal: abort.signal },
           );
           setHeavyJob(null);
           docxOk++;
           await refresh();
         } catch (err) {
           setHeavyJob(null);
+          if (isAbortError(err)) throw err;
           docxErrors.push(`${file.name}：${err instanceof Error ? err.message : "导入失败"}`);
         }
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
+    } catch (err) {
+      if (!isAbortError(err)) throw err;
     } finally {
       setImportProgress(null);
       setHeavyJob(null);
       setBusy(false);
+      if (importAbortRef.current === abort) importAbortRef.current = null;
     }
 
+    if (abort.signal.aborted) return;
     if (docxErrors.length > 0) {
       const head = docxErrors.slice(0, 8);
       const more = docxErrors.length > 8 ? `\n… 共 ${docxErrors.length} 条失败` : "";
-      window.alert(`批量导入完成：成功 ${docxOk}，失败 ${docxErrors.length}。\n\n${head.join("\n")}${more}`);
+      toast.info(`批量导入完成：成功 ${docxOk}，失败 ${docxErrors.length}。`);
     }
   }
 
@@ -1428,12 +1700,12 @@ export function ReferenceLibraryPage() {
     const sel = window.getSelection();
     const t = sel?.toString() ?? "";
     if (!t.trim()) {
-      window.alert("请先在阅读器中划选要保存的文字。");
+      toast.error("请先在阅读器中划选要保存的文字。");
       return;
     }
     const start = ch.content.indexOf(t);
     if (start < 0) {
-      window.alert("无法定位选区，请缩短选区或避免跨段选择。");
+      toast.error("无法定位选区，请缩短选区或避免跨段选择。");
       return;
     }
     const end = start + t.length;
@@ -1940,6 +2212,20 @@ export function ReferenceLibraryPage() {
                           size="sm"
                           variant="secondary"
                           className="gap-1.5 text-xs"
+                          onClick={() => {
+                            setWorkbenchRefId(r.id);
+                            setWorkbenchTab("overview");
+                            setWorkbenchOpen(true);
+                          }}
+                        >
+                          <Reply className="h-3.5 w-3.5" />
+                          工作台
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          className="gap-1.5 text-xs"
                           onClick={async () => { await openReader(r, 0, null); setExtractPanelOpen(true); }}
                         >
                           <Edit3 className="h-3.5 w-3.5" />
@@ -2291,7 +2577,7 @@ export function ReferenceLibraryPage() {
                             setNewTagName("");
                             await refresh();
                           } catch (err) {
-                            window.alert(err instanceof Error ? err.message : "创建失败");
+                            toast.error(err instanceof Error ? err.message : "创建失败");
                           }
                         })();
                       }}
@@ -2598,6 +2884,14 @@ export function ReferenceLibraryPage() {
                                 type="button"
                                 variant="ghost"
                                 size="sm"
+                                onClick={() => void sendExcerptToWritingAsRef(ex)}
+                              >
+                                去写作引用
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
                                 onClick={() => beginEditExcerpt(ex)}
                               >
                                 编辑
@@ -2869,7 +3163,79 @@ export function ReferenceLibraryPage() {
                                       删除
                                     </Button>
                                   </div>
-                                  <pre className="reference-extract-item-body">{ex.body}</pre>
+                                  {ex.type === "key_cards" ? (
+                                    <div className="reference-extract-item-body" style={{ whiteSpace: "normal" }}>
+                                      {(() => {
+                                        const cards = parseReferenceKeyCardsFromExtractBody(ex.body);
+                                        if (cards.length === 0) {
+                                          return (
+                                            <>
+                                              <div className="muted small" style={{ marginBottom: 6 }}>
+                                                未解析到卡片 JSON（你可以删除后重新提炼一次「结构化要点卡片」）。
+                                              </div>
+                                              <pre className="reference-extract-item-body">{ex.body}</pre>
+                                            </>
+                                          );
+                                        }
+                                        return (
+                                          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                                            {cards.slice(0, 24).map((c, idx) => (
+                                              <div
+                                                key={`${c.kind}:${c.title}:${idx}`}
+                                                className="rounded-lg border border-border/50 bg-card/30 p-3"
+                                              >
+                                                <div className="flex items-center gap-2">
+                                                  <span className="text-xs rounded-md border border-border/60 bg-background/60 px-2 py-0.5">
+                                                    {c.kind}
+                                                  </span>
+                                                  <div className="text-sm font-medium text-foreground">{c.title}</div>
+                                                  <div style={{ marginLeft: "auto" }}>
+                                                    <div className="flex flex-wrap items-center justify-end gap-2">
+                                                      <Button type="button" size="sm" variant="outline" onClick={() => applyKeyCardToWenceRefs(c)}>
+                                                        去问策引用
+                                                      </Button>
+                                                      <Button type="button" size="sm" variant="outline" onClick={() => void jumpKeyCardToWritingHit(c)}>
+                                                        去写作定位
+                                                      </Button>
+                                                      <Button type="button" size="sm" variant="outline" onClick={() => void applyKeyCardToAiDraft(c)}>
+                                                        写入草稿
+                                                      </Button>
+                                                      <Button type="button" size="sm" onClick={() => void applyKeyCardToWork(c)}>
+                                                        应用到作品
+                                                      </Button>
+                                                    </div>
+                                                  </div>
+                                                </div>
+                                                {c.sourceHint ? (
+                                                  <div className="muted small" style={{ marginTop: 4 }}>
+                                                    线索：{c.sourceHint}
+                                                  </div>
+                                                ) : null}
+                                                {c.tags?.length ? (
+                                                  <div className="muted small" style={{ marginTop: 4 }}>
+                                                    标签：{c.tags.join(" / ")}
+                                                  </div>
+                                                ) : null}
+                                                {c.body ? (
+                                                  <pre
+                                                    className="reference-extract-item-body"
+                                                    style={{ marginTop: 8, whiteSpace: "pre-wrap" }}
+                                                  >
+                                                    {c.body}
+                                                  </pre>
+                                                ) : null}
+                                              </div>
+                                            ))}
+                                            {cards.length > 24 ? (
+                                              <div className="muted small">仅展示前 24 张卡片（防止页面过长）。</div>
+                                            ) : null}
+                                          </div>
+                                        );
+                                      })()}
+                                    </div>
+                                  ) : (
+                                    <pre className="reference-extract-item-body">{ex.body}</pre>
+                                  )}
                                 </li>
                               ))}
                             </ul>
@@ -2903,6 +3269,257 @@ export function ReferenceLibraryPage() {
           </div>
         </div>
       ) : null}
+
+      {/* 书籍详情工作台（P2-1） */}
+      <Dialog
+        open={workbenchOpen}
+        onOpenChange={(v) => {
+          setWorkbenchOpen(v);
+          if (!v) {
+            setWorkbenchRefId(null);
+            setWorkbenchEntry(null);
+            setWorkbenchHeads([]);
+            setWorkbenchExcerpts([]);
+            setWorkbenchExtracts([]);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>书籍工作台{workbenchEntry ? `：${workbenchEntry.title}` : ""}</DialogTitle>
+          </DialogHeader>
+
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant={workbenchTab === "overview" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setWorkbenchTab("overview")}
+              >
+                概览
+              </Button>
+              <Button
+                type="button"
+                variant={workbenchTab === "excerpts" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setWorkbenchTab("excerpts")}
+              >
+                摘录（{workbenchExcerpts.length}）
+              </Button>
+              <Button
+                type="button"
+                variant={workbenchTab === "extracts" ? "default" : "outline"}
+                size="sm"
+                onClick={() => setWorkbenchTab("extracts")}
+              >
+                提炼（{workbenchExtracts.length}）
+              </Button>
+
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={!workbenchEntry}
+                  onClick={() => {
+                    if (!workbenchEntry) return;
+                    void openReader(workbenchEntry, 0, null);
+                    setWorkbenchOpen(false);
+                  }}
+                >
+                  打开阅读器
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={!workbenchEntry}
+                  onClick={() => {
+                    if (!workbenchEntry) return;
+                    void openPromptExtractFromEntry(workbenchEntry);
+                  }}
+                >
+                  提炼提示词
+                </Button>
+              </div>
+            </div>
+
+            {workbenchTab === "overview" ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-xl border border-border/50 bg-card/30 p-4">
+                  <div className="text-sm font-medium">书目信息</div>
+                  <div className="mt-2 text-sm text-muted-foreground">
+                    <div>分段：{workbenchEntry?.chunkCount ?? "—"}</div>
+                    <div>章节头：{workbenchEntry?.chapterHeadCount ?? "—"}</div>
+                    <div>字数（估算）：{workbenchEntry?.totalChars ? `${Math.round(workbenchEntry.totalChars / 10000)} 万` : "—"}</div>
+                    <div>分类：{(workbenchEntry?.category ?? "").trim() || "—"}</div>
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-border/50 bg-card/30 p-4">
+                  <div className="text-sm font-medium">跨模块入口</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Link to={importWorkId ? `/work/${importWorkId}/bible` : "#"} onClick={(e) => !importWorkId && e.preventDefault()}>
+                      <Button type="button" size="sm" variant="outline" disabled={!importWorkId}>
+                        进入锦囊（需选作品）
+                      </Button>
+                    </Link>
+                    <Link to="/logic">
+                      <Button type="button" size="sm" variant="outline">
+                        去推演
+                      </Button>
+                    </Link>
+                    <Link to="/luobi">
+                      <Button type="button" size="sm" variant="outline">
+                        去落笔
+                      </Button>
+                    </Link>
+                    <Link to="/inspiration">
+                      <Button type="button" size="sm" variant="outline">
+                        去流光
+                      </Button>
+                    </Link>
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    提示：先在「提炼」里生成结构化卡片，再逐张"应用到作品"，可形成引用闭环。
+                  </div>
+                </div>
+
+                <div className="sm:col-span-2 rounded-xl border border-border/50 bg-card/30 p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm font-medium">章节导航</div>
+                    <div className="text-xs text-muted-foreground">{workbenchHeads.length} 条</div>
+                  </div>
+                  {workbenchHeads.length === 0 ? (
+                    <div className="mt-2 text-sm text-muted-foreground">未检测到章节标题行（仍可按段阅读）。</div>
+                  ) : (
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {workbenchHeads.slice(0, 16).map((h) => (
+                        <Button
+                          key={h.id}
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="justify-start"
+                          onClick={() => {
+                            if (!workbenchEntry) return;
+                            void openReader(workbenchEntry, h.ordinal, null);
+                            setWorkbenchOpen(false);
+                          }}
+                        >
+                          {h.title}
+                        </Button>
+                      ))}
+                      {workbenchHeads.length > 16 ? (
+                        <div className="text-xs text-muted-foreground">仅展示前 16 个章节标题（可在阅读器侧栏查看完整列表）。</div>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            {workbenchTab === "excerpts" ? (
+              <div className="max-h-[60vh] overflow-auto rounded-xl border border-border/50 bg-card/20 p-3">
+                {workbenchExcerpts.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">暂无摘录。</div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {workbenchExcerpts.slice(0, 60).map((ex) => (
+                      <div key={ex.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs text-muted-foreground">
+                            {new Date(ex.createdAt).toLocaleString("zh-CN")}
+                          </div>
+                          <div className="ml-auto flex items-center gap-2">
+                            <Button type="button" size="sm" variant="outline" onClick={() => void jumpExcerptToReader(ex)}>
+                              定位
+                            </Button>
+                            <Button type="button" size="sm" variant="outline" onClick={() => openPromptExtractFromExcerpt(ex)}>
+                              提炼提示词
+                            </Button>
+                          </div>
+                        </div>
+                        <pre className="reference-extract-item-body" style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>
+                          {ex.text}
+                        </pre>
+                        {ex.note ? (
+                          <div className="mt-2 text-xs text-muted-foreground">备注：{ex.note}</div>
+                        ) : null}
+                      </div>
+                    ))}
+                    {workbenchExcerpts.length > 60 ? (
+                      <div className="text-xs text-muted-foreground">仅展示前 60 条摘录。</div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {workbenchTab === "extracts" ? (
+              <div className="max-h-[60vh] overflow-auto rounded-xl border border-border/50 bg-card/20 p-3">
+                {workbenchExtracts.length === 0 ? (
+                  <div className="text-sm text-muted-foreground">暂无提炼结果。</div>
+                ) : (
+                  <div className="flex flex-col gap-3">
+                    {workbenchExtracts.slice(0, 30).map((ex) => (
+                      <div key={ex.id} className="rounded-lg border border-border/50 bg-background/40 p-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs rounded-md border border-border/60 bg-background/60 px-2 py-0.5">
+                            {getExtractTypeLabel(ex.type)}
+                          </span>
+                          <div className="text-xs text-muted-foreground">
+                            {new Date(ex.createdAt).toLocaleString("zh-CN")}
+                          </div>
+                        </div>
+                        {ex.type === "key_cards" ? (
+                          <div className="mt-2 flex flex-col gap-2">
+                            {parseReferenceKeyCardsFromExtractBody(ex.body).slice(0, 12).map((c, idx) => (
+                              <div key={`${c.kind}:${c.title}:${idx}`} className="rounded-md border border-border/50 bg-card/20 p-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] rounded-md border border-border/60 bg-background/60 px-1.5 py-0.5">
+                                    {c.kind}
+                                  </span>
+                                  <div className="text-sm font-medium">{c.title}</div>
+                                  <div className="ml-auto">
+                                    <div className="flex flex-wrap items-center justify-end gap-2">
+                                      <Button type="button" size="sm" variant="outline" onClick={() => applyKeyCardToWenceRefs(c)}>
+                                        去问策引用
+                                      </Button>
+                                      <Button type="button" size="sm" variant="outline" onClick={() => void jumpKeyCardToWritingHit(c)}>
+                                        去写作定位
+                                      </Button>
+                                      <Button type="button" size="sm" variant="outline" onClick={() => void applyKeyCardToAiDraft(c)}>
+                                        写入草稿
+                                      </Button>
+                                      <Button type="button" size="sm" onClick={() => void applyKeyCardToWork(c)}>
+                                        应用到作品
+                                      </Button>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                            <div className="text-xs text-muted-foreground">仅预览前 12 张卡片。</div>
+                          </div>
+                        ) : (
+                          <pre className="reference-extract-item-body" style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>
+                            {ex.body}
+                          </pre>
+                        )}
+                      </div>
+                    ))}
+                    {workbenchExtracts.length > 30 ? (
+                      <div className="text-xs text-muted-foreground">仅展示前 30 条提炼结果。</div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* 扩展搜索弹窗（输入超过10字自动弹出） */}
       <Dialog open={searchDialogOpen} onOpenChange={setSearchDialogOpen}>
@@ -3067,6 +3684,18 @@ export function ReferenceLibraryPage() {
             <div className="mt-5 rounded-xl border border-border/40 bg-card/40 px-4 py-3 text-sm text-muted-foreground">
               <div className="font-medium text-foreground">经书存于心，不留于云。</div>
               <div className="mt-1">（您的书籍仅在本地解析，不上传服务器）</div>
+            </div>
+
+            <div className="mt-4 flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  importAbortRef.current?.abort();
+                }}
+              >
+                取消导入
+              </Button>
             </div>
           </div>
         </div>

@@ -21,7 +21,7 @@ export type AiProviderConfig = {
   baseUrl?: string;
   /** model 名称（如 gpt-4.1-mini / claude-3-5-sonnet-latest / gemini-2.0-flash / llama3.1:8b） */
   model: string;
-  /** embedding model（用于“调性提示”等向量距离；留空表示不启用 embedding 方案） */
+  /** embedding model（用于"调性提示"等向量距离；留空表示不启用 embedding 方案） */
   embeddingModel?: string;
   /** API key（本机 localStorage；桌面版可换更安全存储） */
   apiKey?: string;
@@ -39,7 +39,7 @@ export type AiSettings = {
   kimi: AiProviderConfig;
   xiaomi: AiProviderConfig;
   /**
-   * AI 隐私与上传范围（仅对“非本机模型”生效）。
+   * AI 隐私与上传范围（仅对"非本机模型"生效）。
    * 注意：本项目为纯前端直连；只要发起请求，就会把本次 prompt 发往对应提供方。
    */
   privacy: {
@@ -48,7 +48,7 @@ export type AiSettings = {
     /** 同意时间（ms），仅用于展示 */
     consentAcceptedAt?: number;
     /**
-     * 是否允许对“非本机模型”发起请求。
+     * 是否允许对"非本机模型"发起请求。
      * 关掉时：OpenAI/Claude/Gemini 一律禁止调用；Ollama 不受影响。
      */
     allowCloudProviders: boolean;

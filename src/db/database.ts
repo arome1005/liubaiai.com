@@ -515,7 +515,7 @@ export class LiubaiDB extends Dexie {
       .upgrade(async (trans) => {
         const chTable = trans.table("chapters");
         await chTable.toCollection().modify((row: Record<string, unknown>) => {
-          // 步 22：对已有“有概要”的章节补齐覆盖范围元数据（默认单章）
+          // 步 22：对已有"有概要"的章节补齐覆盖范围元数据（默认单章）
           const s = row.summary as string | undefined;
           const has = s != null && String(s).trim().length > 0;
           if (!has) return;

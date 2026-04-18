@@ -43,7 +43,7 @@ export type HighRiskConfirmArgs = {
 };
 
 /**
- * 步 48：批量/多章/整卷等高危操作的“始终确认”清单。
+ * 步 48：批量/多章/整卷等高危操作的"始终确认"清单。
  * - 不依赖 token 超限逻辑；可按 actionId 独立启用。
  * - 仅用 window.prompt，避免引入新的 UI 结构。
  */
@@ -65,7 +65,7 @@ export function confirmHighRiskChecklist(args: HighRiskConfirmArgs): boolean {
     ...args.checklist.filter(Boolean).map((c, i) => `  ${i + 1}. ${c}`),
     "",
     `确认方式：输入数字 ${args.requiredCode} 后确定（用于防误触）。`,
-    `提示：需停留至少 ${Math.ceil(minHoldMs / 100) / 10}s（等效“长按”）。`,
+    `提示：需停留至少 ${Math.ceil(minHoldMs / 100) / 10}s（等效"长按"）。`,
   ].join("\n");
 
   const typed = window.prompt(msg, "")?.trim() ?? "";

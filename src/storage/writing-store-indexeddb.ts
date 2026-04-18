@@ -144,6 +144,7 @@ export class WritingStoreIndexedDB implements WritingStore {
   private async bulkAddReferencePostings(
     rows: ReferenceChunk[],
     onProgress?: (done: number, total: number) => void,
+    signal?: AbortSignal,
   ): Promise<void> {
     const db = getDB();
     const fullText = rows.map((r) => r.content).join("");
@@ -154,6 +155,7 @@ export class WritingStoreIndexedDB implements WritingStore {
     const total = rows.length;
     let done = 0;
     for (let i = 0; i < rows.length; i++) {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
       const row = rows[i]!;
       const offsets = perChunk[i]?.chapterOffsetsInChunk ?? [];
       batch.push(
@@ -166,6 +168,7 @@ export class WritingStoreIndexedDB implements WritingStore {
         ),
       );
       if (batch.length >= ACC) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
         await db.referenceTokenPostings.bulkAdd(batch);
         batch = [];
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
@@ -173,6 +176,7 @@ export class WritingStoreIndexedDB implements WritingStore {
       done++;
       onProgress?.(done, total);
     }
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (batch.length) await db.referenceTokenPostings.bulkAdd(batch);
   }
 
@@ -595,11 +599,13 @@ export class WritingStoreIndexedDB implements WritingStore {
     },
     options?: {
       onProgress?: (p: { phase: "chunks" | "index"; percent: number; label?: string }) => void;
+      signal?: AbortSignal;
     },
   ): Promise<ReferenceLibraryEntry> {
     const db = getDB();
     const id = crypto.randomUUID();
     const t = now();
+    const signal = options?.signal;
     const parts = splitTextIntoReferenceChunks(input.fullText);
     const { perChunk, chapterHeadCount, headsForDb } = annotateReferenceParts(input.fullText, parts);
     const cat = (input.category ?? "").trim();
@@ -635,29 +641,56 @@ export class WritingStoreIndexedDB implements WritingStore {
       title: h.title,
     }));
     const partsLen = parts.length;
-    await db.transaction("rw", [db.referenceLibrary, db.referenceChunks, db.referenceChapterHeads], async () => {
-      await db.referenceLibrary.add(entry);
-      const BATCH = 150;
-      for (let i = 0; i < allRows.length; i += BATCH) {
-        const slice = allRows.slice(i, i + BATCH);
-        await db.referenceChunks.bulkAdd(slice);
-        const end = Math.min(i + BATCH, partsLen);
-        options?.onProgress?.({
-          phase: "chunks",
-          percent: partsLen ? Math.round((end / partsLen) * 38) : 38,
-          label: "写入正文分块…",
-        });
-      }
-      if (headRows.length) await db.referenceChapterHeads.bulkAdd(headRows);
-    });
-    await this.bulkAddReferencePostings(allRows, (done, total) => {
-      options?.onProgress?.({
-        phase: "index",
-        percent: 38 + Math.round((done / Math.max(1, total)) * 62),
-        label: "建立检索索引…",
+    let committed = false;
+    try {
+      if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+      await db.transaction("rw", [db.referenceLibrary, db.referenceChunks, db.referenceChapterHeads], async () => {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        await db.referenceLibrary.add(entry);
+        const BATCH = 150;
+        for (let i = 0; i < allRows.length; i += BATCH) {
+          if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+          const slice = allRows.slice(i, i + BATCH);
+          await db.referenceChunks.bulkAdd(slice);
+          const end = Math.min(i + BATCH, partsLen);
+          options?.onProgress?.({
+            phase: "chunks",
+            percent: partsLen ? Math.round((end / partsLen) * 38) : 38,
+            label: "写入正文分块…",
+          });
+        }
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        if (headRows.length) await db.referenceChapterHeads.bulkAdd(headRows);
       });
-    });
-    return entry;
+
+      await this.bulkAddReferencePostings(
+        allRows,
+        (done, total) => {
+          options?.onProgress?.({
+            phase: "index",
+            percent: 38 + Math.round((done / Math.max(1, total)) * 62),
+            label: "建立检索索引…",
+          });
+        },
+        signal,
+      );
+
+      committed = true;
+      return entry;
+    } catch (e) {
+      // 取消或失败：清理半成品，避免残留分块/索引
+      try {
+        await this.deleteReferenceLibraryEntry(id);
+      } catch {
+        /* ignore */
+      }
+      throw e;
+    } finally {
+      // 若 future refactor 改为多阶段提交，这里用于兜底
+      if (!committed && signal?.aborted) {
+        /* already cleaned */
+      }
+    }
   }
 
   async updateReferenceLibraryEntry(
@@ -1464,7 +1497,7 @@ export class WritingStoreIndexedDB implements WritingStore {
       type: input.type,
       tags: input.tags ?? [],
       body: input.body ?? "",
-      status: "draft",
+      status: input.status ?? "draft",
       sortOrder: maxOrder + 1,
       createdAt: t,
       updatedAt: t,
@@ -1592,6 +1625,11 @@ export class WritingStoreIndexedDB implements WritingStore {
       bannedPhrases: patch.bannedPhrases ?? existing?.bannedPhrases ?? "",
       styleAnchor: patch.styleAnchor ?? existing?.styleAnchor ?? "",
       extraRules: patch.extraRules ?? existing?.extraRules ?? "",
+      sentenceRhythm: patch.sentenceRhythm ?? existing?.sentenceRhythm,
+      punctuationStyle: patch.punctuationStyle ?? existing?.punctuationStyle,
+      dialogueDensity: patch.dialogueDensity ?? existing?.dialogueDensity,
+      emotionStyle: patch.emotionStyle ?? existing?.emotionStyle,
+      narrativeDistance: patch.narrativeDistance ?? existing?.narrativeDistance,
       updatedAt: t,
     };
     await db.workStyleCards.put(next);

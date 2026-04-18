@@ -61,6 +61,19 @@ const TYPE_CONFIGS: Record<
 - 输出纯 Markdown，无需开场白，直接给内容
 - 聚焦"技巧本身"，供仿写参考`,
   },
+  key_cards: {
+    label: "结构化要点卡片",
+    instruction: `请从以下原著片段中提炼「结构化要点卡片」，要求：
+- 输出 **一个 JSON 数组**，并且必须放在一个 Markdown 代码块里：\`\`\`json ... \`\`\`
+- 每张卡片为一个对象，字段固定为：
+  - title: string（卡片标题，尽量短）
+  - kind: "character" | "world" | "plot" | "rule" | "object" | "place" | "theme" | "craft" | "glossary" | "quote"（卡片类型）
+  - body: string（卡片正文，允许 Markdown）
+  - tags: string[]（可选标签；没有就输出空数组）
+  - sourceHint: string（来自原著的线索/定位提示，尽量短，不要大段引用）
+- 卡片数量优先「少而精」，每批 8-18 张左右
+- 不要输出任何开场白、解释或额外字段；除了 JSON 代码块之外，不要输出其它文字`,
+  },
 };
 
 // ── 隐私校验 ─────────────────────────────────────────────────────────────
@@ -221,4 +234,5 @@ export const EXTRACT_TYPES: ReferenceExtractType[] = [
   "worldbuilding",
   "plot_beats",
   "craft",
+  "key_cards",
 ];

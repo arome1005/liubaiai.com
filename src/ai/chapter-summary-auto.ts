@@ -6,7 +6,7 @@ import { updateChapter } from "../db/repo";
  * §11 步 20（可选增强）：章节概要自动生成队列（本机）。
  * - 目标：不打断写作，保存正文后后台尝试生成概要。
  * - 原则：复用 `generateChapterSummaryWithRetry` 与 `updateChapter(summary, summaryUpdatedAt)` 同源逻辑。
- * - 策略：按章去重 + 退避；对“门控类错误”（隐私/Key/无正文）不反复重试。
+ * - 策略：按章去重 + 退避；对"门控类错误"（隐私/Key/无正文）不反复重试。
  */
 
 type AutoSummaryStateV1 = {
@@ -148,7 +148,7 @@ export function createAutoSummaryQueue(): AutoSummaryQueue {
       writeState(job.workId, job.chapterId, { ...next, lastError: msg });
       emit({ kind: "error", chapterId: job.chapterId, message: msg });
       if (isGateLikeError(msg)) {
-        // 门控类错误不应被“队列”反复打扰；由用户手动触发或改设置后再入队。
+        // 门控类错误不应被"队列"反复打扰；由用户手动触发或改设置后再入队。
         return;
       }
     } finally {

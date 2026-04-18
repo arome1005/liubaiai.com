@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { WorkFormModal } from "../components/WorkFormModal";
 import { Button } from "../components/ui/button";
 import {
@@ -198,7 +199,7 @@ export function LibraryPage() {
       created = w;
       setWorks((prev) => (prev.some((x) => x.id === w.id) ? prev : [w, ...prev]));
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "导入失败");
+      toast.error(err instanceof Error ? err.message : "导入失败");
     } finally {
       // 必须立即复位：refresh/loadStats 会对每部作品 listChapters，大书架/大章数可能很慢，不能挡在「导入中」后面
       setImportBusy(false);
@@ -257,7 +258,7 @@ export function LibraryPage() {
       await updateWork(wid, { coverImage: dataUrl });
       await refresh();
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "设置封面失败");
+      toast.error(err instanceof Error ? err.message : "设置封面失败");
     }
   }
 
@@ -294,7 +295,7 @@ export function LibraryPage() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "导出失败");
+      toast.error(err instanceof Error ? err.message : "导出失败");
     }
   }
 
@@ -359,7 +360,7 @@ export function LibraryPage() {
       await updateChapter(ch.id, { content: text, title });
       navigate(`/work/${wid}?chapterId=${ch.id}`);
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : "导入章节失败");
+      toast.error(err instanceof Error ? err.message : "导入章节失败");
     }
   }
 

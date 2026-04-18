@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import type { Chapter, ReferenceExcerpt, Work } from "../db/types";
 import { isFirstAiGateCancelledError } from "../ai/client";
@@ -100,7 +101,7 @@ export function SummaryRightPanel(props: {
                     });
                   } catch (e) {
                     if (isChapterSaveConflictError(e)) {
-                      window.alert("概要保存冲突：本章已在其它窗口更新。请打开章节概要总览或切换章节后重试。");
+                      toast.error("概要保存冲突：本章已在其它窗口更新。请打开章节概要总览或切换章节后重试。");
                     }
                   } finally {
                     setSaving(false);
@@ -117,7 +118,7 @@ export function SummaryRightPanel(props: {
                   if (!props.chapter) return;
                   const body = (props.chapterEditorContent ?? props.chapter.content ?? "").trim();
                   if (!body) {
-                    window.alert("本章暂无正文，请先撰写后再生成概要。");
+                    toast.info("本章暂无正文，请先撰写后再生成概要。");
                     return;
                   }
                   void (async () => {
@@ -151,7 +152,7 @@ export function SummaryRightPanel(props: {
                       });
                     } catch (e) {
                       if (isFirstAiGateCancelledError(e)) return;
-                      window.alert(e instanceof Error ? e.message : "生成失败");
+                      toast.error(e instanceof Error ? e.message : "生成失败");
                     } finally {
                       setSummaryAiBusy(false);
                     }
@@ -253,7 +254,7 @@ export function BibleRightPanel(props: { workId: string }) {
           style={{ width: "100%", resize: "vertical" }}
         />
       ) : (
-        <p className="muted small">点击“加载”把本书锦囊导出为 Markdown 预览（会根据上下文上限截断）。</p>
+        <p className="muted small">点击"加载"把本书锦囊导出为 Markdown 预览（会根据上下文上限截断）。</p>
       )}
     </div>
   );
@@ -276,7 +277,7 @@ export function RefRightPanel(props: {
       <div className="rr-block">
         <div className="rr-block-title">本章关联参考（摘录）</div>
         {props.linked.length === 0 ? (
-          <p className="muted small">暂无。本章可在“参考库”阅读器划选保存并关联。</p>
+          <p className="muted small">暂无。本章可在"参考库"阅读器划选保存并关联。</p>
         ) : (
           <>
             <input

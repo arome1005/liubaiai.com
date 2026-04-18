@@ -29,6 +29,7 @@ import type { Chapter, ReferenceLibraryEntry, Work } from "../db/types"
 import { resolveDefaultChapterId } from "../util/resolve-default-chapter"
 import { workTagsToProfileText } from "../util/work-tags"
 import { writeAiPanelDraft } from "../util/ai-panel-draft"
+import { writeEditorHitHandoff } from "../util/editor-hit-handoff"
 import { writeWenceHandoff } from "../util/wence-handoff"
 import ReactFlow, {
   Background,
@@ -1493,6 +1494,8 @@ export default function V0TuiyanPage() {
     return ch
   }, [workId, selectedOutlineId, outline, chapters])
 
+  const selectedNode = selectedOutlineId ? findNodeById(outline, selectedOutlineId) : null
+
   const writeToAiPanelDraftAndOpenEditor = useCallback(
     (draft: string) => {
       if (!workId) return
@@ -1503,9 +1506,22 @@ export default function V0TuiyanPage() {
         appendAssistant(r.error)
         return
       }
-      navigate(`/work/${workId}?chapter=${encodeURIComponent(ch.id)}`)
+      const needle = draft.trim().slice(0, 80)
+      if (needle) {
+        writeEditorHitHandoff({
+          workId,
+          chapterId: ch.id,
+          query: needle,
+          isRegex: false,
+          offset: 0,
+          source: { module: "tuiyan", title: "推演写回草稿", hint: selectedNode?.title ? `节点：${selectedNode.title}` : undefined },
+        })
+        navigate(`/work/${workId}?hit=1&chapter=${encodeURIComponent(ch.id)}`)
+      } else {
+        navigate(`/work/${workId}?chapter=${encodeURIComponent(ch.id)}`)
+      }
     },
-    [workId, navigate, resolveChapterForJump, appendAssistant],
+    [workId, navigate, resolveChapterForJump, appendAssistant, selectedNode?.title],
   )
 
   const goWenceWithPrefill = useCallback(
@@ -1562,7 +1578,6 @@ export default function V0TuiyanPage() {
     URL.revokeObjectURL(a.href)
   }
 
-  const selectedNode = selectedOutlineId ? findNodeById(outline, selectedOutlineId) : null
   const [quickEditTitle, setQuickEditTitle] = useState("")
   const [quickEditSummary, setQuickEditSummary] = useState("")
 
@@ -2994,7 +3009,7 @@ export default function V0TuiyanPage() {
                           )}
                         </div>
                         <div className="flex items-center justify-between text-xs text-muted-foreground">
-                          <span>提示：更丰富的“提炼/标签/摘录”请在藏经页完成。</span>
+                          <span>提示：更丰富的"提炼/标签/摘录"请在藏经页完成。</span>
                           <Link to="/reference" className="text-primary hover:underline">
                             打开藏经
                           </Link>
@@ -3117,7 +3132,7 @@ export default function V0TuiyanPage() {
                       </div>
                       {linkedScenesForSelectedChapter.length === 0 ? (
                         <div className="rounded-lg border border-dashed border-border/40 bg-card/20 p-3 text-xs text-muted-foreground">
-                          暂无关联场景。可用于“场景作为独立节点”，并与章节建立归属/引用关系。
+                          暂无关联场景。可用于"场景作为独立节点"，并与章节建立归属/引用关系。
                         </div>
                       ) : (
                         <div className="space-y-2">

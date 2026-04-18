@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, placeholder } from "@codemirror/view";
-import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
+import { defaultKeymap, history, historyKeymap, indentWithTab, redo, selectAll, undo } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { searchKeymap } from "@codemirror/search";
 import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from "@codemirror/language";
@@ -9,6 +9,9 @@ import { tags } from "@lezer/highlight";
 
 export type CodeMirrorEditorHandle = {
   focus: () => void;
+  undo: () => void;
+  redo: () => void;
+  selectAll: () => void;
   insertTextAtCursor: (text: string) => void;
   appendTextToEnd: (text: string) => void;
   getSelectedText: () => string;
@@ -109,6 +112,24 @@ export const CodeMirrorEditor = forwardRef<
     ref,
     () => ({
       focus: () => viewRef.current?.focus(),
+      undo: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        undo(view);
+        view.focus();
+      },
+      redo: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        redo(view);
+        view.focus();
+      },
+      selectAll: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        selectAll(view);
+        view.focus();
+      },
       insertTextAtCursor: (text: string) => {
         const view = viewRef.current;
         if (!view) return;

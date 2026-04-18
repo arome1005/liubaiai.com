@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   listInspirationCollections,
@@ -11,6 +12,7 @@ import {
   listWorks,
   listChapters,
   deleteInspirationCollection,
+  updateInspirationCollection,
 } from "../db/repo";
 import type { InspirationCollection, InspirationFragment, InspirationLink } from "../db/types";
 import { SCHEMA_VERSION } from "../db/types";
@@ -91,10 +93,51 @@ import {
 
 /** 内部标签前缀：用于 UI「类型」筛选，不在卡片上展示 */
 const KIND_TAG_PREFIX = "lb-kind:";
-/** 内置示例标记：用于“一键清除示例” */
+/** 内置示例标记：用于"一键清除示例" */
 const DEMO_TAG = "lb-demo:1";
 const LS_INSP_DEMO_SEEDED = "liubai:inspirationDemoSeeded:v1";
 const LS_INSP_DEMO_DISABLED = "liubai:inspirationDemoDisabled:v1";
+const LS_INSP_VIEW_STATE = "liubai:inspirationViewState:v1";
+
+type InspirationViewState = {
+  viewMode: "grid" | "list" | "masonry";
+  density: "comfortable" | "cozy" | "compact";
+  searchQuery: string;
+  selectedType: string;
+  selectedCollection: string | null;
+  selectedTag: string | null;
+  showFavoritesOnly: boolean;
+};
+
+function loadInspirationViewState(): InspirationViewState | null {
+  try {
+    const raw = localStorage.getItem(LS_INSP_VIEW_STATE);
+    if (!raw) return null;
+    const j = JSON.parse(raw) as Partial<InspirationViewState>;
+    const okView = j.viewMode === "grid" || j.viewMode === "list" || j.viewMode === "masonry";
+    const okDensity = j.density === "comfortable" || j.density === "cozy" || j.density === "compact";
+    if (!okView || !okDensity) return null;
+    return {
+      viewMode: j.viewMode,
+      density: j.density,
+      searchQuery: typeof j.searchQuery === "string" ? j.searchQuery : "",
+      selectedType: typeof j.selectedType === "string" ? j.selectedType : "all",
+      selectedCollection: typeof j.selectedCollection === "string" ? j.selectedCollection : null,
+      selectedTag: typeof j.selectedTag === "string" ? j.selectedTag : null,
+      showFavoritesOnly: !!j.showFavoritesOnly,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveInspirationViewState(s: InspirationViewState): void {
+  try {
+    localStorage.setItem(LS_INSP_VIEW_STATE, JSON.stringify(s));
+  } catch {
+    /* ignore */
+  }
+}
 
 const V0_DEMO_COLLECTIONS = [
   { name: "凌云志素材", sortOrder: 0 },
@@ -181,7 +224,7 @@ function visibleTagsForFragment(f: InspirationFragment): string[] {
 }
 
 function kindAccentClasses(kindId: string): { iconWrap: string; icon: string; chipOn: string; chipOff: string } {
-  // 目标：接近 v0UI 的“按类型上色”，并在暗色模式下保持对比度
+  // 目标：接近 v0UI 的"按类型上色"，并在暗色模式下保持对比度
   switch (kindId) {
     case "voice":
       return {
@@ -727,6 +770,34 @@ export function InspirationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.search]);
 
+  // 常驻：记忆筛选/视图状态（非仅回跳）
+  useEffect(() => {
+    const sp = new URLSearchParams(location.search);
+    if (sp.get("restore") === "1") return; // 交由回跳逻辑覆盖
+    const s = loadInspirationViewState();
+    if (!s) return;
+    setSearchQuery(s.searchQuery);
+    setSelectedType(s.selectedType);
+    setSelectedCollection(s.selectedCollection);
+    setSelectedTag(s.selectedTag);
+    setShowFavoritesOnly(s.showFavoritesOnly);
+    setViewMode(s.viewMode);
+    setDensity(s.density);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    saveInspirationViewState({
+      viewMode,
+      density,
+      searchQuery,
+      selectedType,
+      selectedCollection,
+      selectedTag,
+      showFavoritesOnly,
+    });
+  }, [density, searchQuery, selectedCollection, selectedTag, selectedType, showFavoritesOnly, viewMode]);
+
   const exportInspiration = useCallback(async () => {
     const payload = {
       app: "liubai-writing",
@@ -770,7 +841,7 @@ export function InspirationPage() {
           const inspCols = Array.isArray(parsed.inspirationCollections) ? parsed.inspirationCollections : [];
           const inspFrags = Array.isArray(parsed.inspirationFragments) ? parsed.inspirationFragments : [];
 
-          // 尝试保留“已存在作品”的归属，否则降级为 null
+          // 尝试保留"已存在作品"的归属，否则降级为 null
           const works = await listWorks();
           const workIdSet = new Set(works.map((w) => w.id));
           const normalizedFrags = inspFrags.map((f) => ({
@@ -784,9 +855,9 @@ export function InspirationPage() {
             inspirationCollections: inspCols,
             inspirationFragments: normalizedFrags,
           });
-          window.alert("合并导入完成。建议刷新页面以加载最新数据。");
+          toast.success("合并导入完成。建议刷新页面以加载最新数据。");
         } catch (e) {
-          window.alert(e instanceof Error ? e.message : "导入失败");
+          toast.error(e instanceof Error ? e.message : "导入失败");
         }
       })();
     };
@@ -835,7 +906,7 @@ export function InspirationPage() {
       const next = await listInspirationFragments();
       setFragments(next);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "装载示例失败");
+      toast.error(e instanceof Error ? e.message : "装载示例失败");
     }
   }, []);
 
@@ -849,7 +920,7 @@ export function InspirationPage() {
       }
       await seedV0DemoData();
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "恢复示例失败");
+      toast.error(e instanceof Error ? e.message : "恢复示例失败");
     }
   }, [seedV0DemoData]);
 
@@ -877,7 +948,7 @@ export function InspirationPage() {
       setFragments(remaining);
       setCollections(await listInspirationCollections());
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "清除失败");
+      toast.error(e instanceof Error ? e.message : "清除失败");
     }
   }, []);
 
@@ -905,7 +976,7 @@ export function InspirationPage() {
         setFragments(fragmentsData);
         setCollections(collectionsData);
 
-        // 新手默认示例：只要碎片为 0 且用户未显式禁用，就自动补回示例（避免“空库时随机灵感消失”）
+        // 新手默认示例：只要碎片为 0 且用户未显式禁用，就自动补回示例（避免"空库时随机灵感消失"）
         try {
           const disabled = localStorage.getItem(LS_INSP_DEMO_DISABLED) === "1";
           const seeded = localStorage.getItem(LS_INSP_DEMO_SEEDED) === "1";
@@ -1011,7 +1082,7 @@ export function InspirationPage() {
       list = list.filter((f) => visibleTagsForFragment(f).includes(selectedTag));
     }
 
-    // 默认隐藏归档；私密默认可见（由云端 RLS 控制“只对自己可见”，无需前端隐藏）
+    // 默认隐藏归档；私密默认可见（由云端 RLS 控制"只对自己可见"，无需前端隐藏）
     list = list.filter((f) => !f.archived);
 
     if (showFavoritesOnly) {
@@ -1028,6 +1099,16 @@ export function InspirationPage() {
     showFavoritesOnly,
   ]);
 
+  const collectionCountById = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const f of fragments) {
+      const cid = f.collectionId;
+      if (!cid) continue;
+      map[cid] = (map[cid] ?? 0) + 1;
+    }
+    return map;
+  }, [fragments]);
+
   const sidebarScopeFragments = useMemo(() => {
     let list = [...fragments];
     if (selectedCollection) list = list.filter((f) => f.collectionId === selectedCollection);
@@ -1036,7 +1117,7 @@ export function InspirationPage() {
     return list;
   }, [fragments, selectedCollection, selectedType, showFavoritesOnly]);
 
-  // v0UI 语义：左侧“随机灵感”来自全局池，不应被当前筛选影响；且默认排除归档
+  // v0UI 语义：左侧"随机灵感"来自全局池，不应被当前筛选影响；且默认排除归档
   const randomPoolFragments = useMemo(() => fragments.filter((f) => !f.archived), [fragments]);
 
   const commonTags = useMemo(() => {
@@ -1079,7 +1160,7 @@ export function InspirationPage() {
       setQuickCaptureContent("");
       setIsQuickCaptureOpen(false);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "保存失败");
+      toast.error(e instanceof Error ? e.message : "保存失败");
     }
   }, [quickCaptureContent]);
 
@@ -1132,7 +1213,7 @@ export function InspirationPage() {
     const f = transferTarget;
     if (!f) return;
     if (!transferWorkId || !transferChapterId) {
-      window.alert("请选择作品与章节");
+      toast.info("请选择作品与章节");
       return;
     }
     const title = f.title?.trim();
@@ -1147,7 +1228,7 @@ export function InspirationPage() {
       sourceId: f.id,
     });
     if (!r.ok) {
-      window.alert(r.error);
+      toast.error(r.error);
       return;
     }
     writeInspirationReturnState({
@@ -1231,7 +1312,7 @@ export function InspirationPage() {
       // 同步到编辑弹层展示
       setEditTarget((cur) => (cur && cur.id === t.id ? { ...cur, ...patch } : cur));
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "抓取失败");
+      toast.error(e instanceof Error ? e.message : "抓取失败");
     } finally {
       setUrlPreviewBusy(false);
     }
@@ -1243,7 +1324,7 @@ export function InspirationPage() {
       await deleteInspirationFragment(id);
       setFragments((prev) => prev.filter((f) => f.id !== id));
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "删除失败");
+      toast.error(e instanceof Error ? e.message : "删除失败");
     }
   }, []);
 
@@ -1274,7 +1355,26 @@ export function InspirationPage() {
         setFragments((prev) => prev.map((f) => (bulkSelection.has(f.id) ? { ...f, archived, updatedAt: Date.now() } : f)));
         setBulkSelection(new Set());
       } catch (e) {
-        window.alert(e instanceof Error ? e.message : "批量操作失败");
+        toast.error(e instanceof Error ? e.message : "批量操作失败");
+      }
+    },
+    [bulkSelection],
+  );
+
+  const bulkFavorite = useCallback(
+    async (isFavorite: boolean) => {
+      const ids = [...bulkSelection];
+      if (!ids.length) return;
+      const ok = window.confirm(isFavorite ? `收藏选中 ${ids.length} 条？` : `取消收藏选中 ${ids.length} 条？`);
+      if (!ok) return;
+      try {
+        await Promise.all(ids.map((id) => updateInspirationFragment(id, { isFavorite })));
+        setFragments((prev) =>
+          prev.map((f) => (bulkSelection.has(f.id) ? { ...f, isFavorite, updatedAt: Date.now() } : f)),
+        );
+        setBulkSelection(new Set());
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "批量收藏失败");
       }
     },
     [bulkSelection],
@@ -1290,7 +1390,7 @@ export function InspirationPage() {
       setFragments((prev) => prev.filter((f) => !bulkSelection.has(f.id)));
       setBulkSelection(new Set());
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "批量删除失败");
+      toast.error(e instanceof Error ? e.message : "批量删除失败");
     }
   }, [bulkSelection]);
 
@@ -1335,8 +1435,9 @@ export function InspirationPage() {
       );
       setBulkTagsOpen(false);
       setBulkTagsValue("");
+      setBulkSelection(new Set());
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "批量打标签失败");
+      toast.error(e instanceof Error ? e.message : "批量打标签失败");
     }
   }, [bulkSelection, bulkTagsValue, fragments]);
 
@@ -1351,8 +1452,9 @@ export function InspirationPage() {
         ),
       );
       setBulkMoveOpen(false);
+      setBulkSelection(new Set());
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "批量移动失败");
+      toast.error(e instanceof Error ? e.message : "批量移动失败");
     }
   }, [bulkMoveCollectionId, bulkSelection]);
 
@@ -1368,12 +1470,41 @@ export function InspirationPage() {
     const name = window.prompt("文件夹名称");
     if (!name?.trim()) return;
     try {
-      const c = await addInspirationCollection({ name: name.trim() });
+      const maxSort = collections.reduce((m, c) => Math.max(m, c.sortOrder), -1);
+      const c = await addInspirationCollection({ name: name.trim(), sortOrder: maxSort + 1 });
       setCollections((prev) => [...prev, c].sort((a, b) => a.sortOrder - b.sortOrder));
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "创建失败");
+      toast.error(e instanceof Error ? e.message : "创建失败");
+    }
+  }, [collections]);
+
+  const renameCollection = useCallback(async (c: InspirationCollection) => {
+    const next = window.prompt("重命名文件夹", c.name) ?? "";
+    if (!next.trim() || next.trim() === c.name.trim()) return;
+    try {
+      await updateInspirationCollection(c.id, { name: next.trim() });
+      setCollections((prev) => prev.map((x) => (x.id === c.id ? { ...x, name: next.trim(), updatedAt: Date.now() } : x)));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "重命名失败");
     }
   }, []);
+
+  const removeCollection = useCallback(async (c: InspirationCollection) => {
+    const ok = window.confirm(`删除文件夹「${c.name}」？其下碎片将移动到"全部灵感"（不删除碎片）。`);
+    if (!ok) return;
+    try {
+      const affected = fragments.filter((f) => f.collectionId === c.id).map((f) => f.id);
+      if (affected.length) {
+        await Promise.all(affected.map((id) => updateInspirationFragment(id, { collectionId: null })));
+        setFragments((prev) => prev.map((f) => (f.collectionId === c.id ? { ...f, collectionId: null, updatedAt: Date.now() } : f)));
+      }
+      await deleteInspirationCollection(c.id);
+      setCollections((prev) => prev.filter((x) => x.id !== c.id));
+      if (selectedCollection === c.id) setSelectedCollection(null);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "删除失败");
+    }
+  }, [fragments, selectedCollection]);
 
   const saveExpandedAsNew = useCallback(async (body: string) => {
     const t = expandTarget;
@@ -1475,27 +1606,69 @@ export function InspirationPage() {
 
                 <div className="my-2 border-t border-border/40" />
 
-                {collections.map((collection) => (
-                  <button
+                <div className="flex items-center justify-between px-2 py-1">
+                  <div className="text-xs font-medium text-muted-foreground">文件夹</div>
+                  <Button
                     type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 w-7 p-0"
+                    title="新建文件夹"
+                    onClick={() => void handleNewCollection()}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
+                </div>
+
+                {collections.map((collection) => (
+                  <div
                     key={collection.id}
-                    onClick={() => setSelectedCollection(collection.id)}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors",
+                      "group flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors",
                       selectedCollection === collection.id
                         ? "bg-primary/20 text-primary"
                         : "text-muted-foreground hover:bg-muted/50",
                     )}
                   >
-                    <span
-                      className={cn("h-2.5 w-2.5 rounded-full", collectionDotClasses(collection.name))}
-                      aria-hidden
-                    />
-                    {collection.name}
-                    <span className="ml-auto text-xs">
-                      {fragments.filter((f) => f.collectionId === collection.id).length}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedCollection(collection.id)}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                    >
+                      <span
+                        className={cn("h-2.5 w-2.5 rounded-full", collectionDotClasses(collection.name))}
+                        aria-hidden
+                      />
+                      <span className="truncate">{collection.name}</span>
+                    </button>
+                    <span className="ml-auto text-xs tabular-nums">
+                      {collectionCountById[collection.id] ?? 0}
                     </span>
-                  </button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <button
+                          type="button"
+                          className="ml-1 inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-muted/60 group-hover:opacity-100"
+                          aria-label="文件夹菜单"
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => void renameCollection(collection)}>
+                          <Edit3 className="mr-2 h-4 w-4" />
+                          重命名
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onClick={() => void removeCollection(collection)}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          删除文件夹
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
                 ))}
               </div>
             </div>
@@ -1672,11 +1845,42 @@ export function InspirationPage() {
               {bulkMode ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-xs text-muted-foreground">已选 {bulkIds.length}</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setBulkSelection(new Set(filteredFragments.map((f) => f.id)));
+                    }}
+                  >
+                    全选
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setBulkSelection((prev) => {
+                        const next = new Set<string>();
+                        const all = filteredFragments.map((f) => f.id);
+                        for (const id of all) if (!prev.has(id)) next.add(id);
+                        return next;
+                      });
+                    }}
+                  >
+                    反选
+                  </Button>
                   <Button type="button" variant="outline" size="sm" onClick={() => setBulkTagsOpen(true)}>
                     批量标签
                   </Button>
                   <Button type="button" variant="outline" size="sm" onClick={() => setBulkMoveOpen(true)}>
                     移动文件夹
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => void bulkFavorite(true)}>
+                    收藏
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => void bulkFavorite(false)}>
+                    取消收藏
                   </Button>
                   <Button type="button" variant="outline" size="sm" onClick={() => void bulkArchive(true)}>
                     归档
@@ -1739,6 +1943,55 @@ export function InspirationPage() {
               </div>
             </div>
 
+            {/* v0：筛选/视图状态回显（可清除） */}
+            <div className="flex flex-wrap items-center gap-2 border-b border-border/30 bg-card/10 px-6 py-2 text-[11px] text-muted-foreground">
+              <span className="font-medium text-foreground/80">当前：</span>
+              {selectedCollection ? (
+                <span className="rounded-md border border-border/50 bg-background/40 px-2 py-0.5">
+                  文件夹：{collections.find((c) => c.id === selectedCollection)?.name ?? "（已删）"}
+                </span>
+              ) : null}
+              {selectedType !== "all" ? (
+                <span className="rounded-md border border-border/50 bg-background/40 px-2 py-0.5">
+                  类型：{inspirationTypes.find((t) => t.id === selectedType)?.label ?? selectedType}
+                </span>
+              ) : null}
+              {selectedTag ? (
+                <span className="rounded-md border border-border/50 bg-background/40 px-2 py-0.5">
+                  标签：{selectedTag}
+                </span>
+              ) : null}
+              {showFavoritesOnly ? (
+                <span className="rounded-md border border-border/50 bg-background/40 px-2 py-0.5">仅收藏</span>
+              ) : null}
+              {searchQuery.trim() ? (
+                <span className="rounded-md border border-border/50 bg-background/40 px-2 py-0.5">
+                  搜索：{searchQuery.trim().slice(0, 16)}
+                  {searchQuery.trim().length > 16 ? "…" : ""}
+                </span>
+              ) : null}
+              <span className="rounded-md border border-border/50 bg-background/40 px-2 py-0.5">
+                视图：{viewMode === "grid" ? "网格" : viewMode === "list" ? "列表" : "瀑布流"} · 密度：
+                {density === "comfortable" ? "舒适" : density === "cozy" ? "适中" : "紧凑"}
+              </span>
+
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="ml-auto h-7 px-2 text-xs"
+                onClick={() => {
+                  setSearchQuery("");
+                  setSelectedType("all");
+                  setSelectedCollection(null);
+                  setSelectedTag(null);
+                  setShowFavoritesOnly(false);
+                }}
+              >
+                清除筛选
+              </Button>
+            </div>
+
             <div className="flex-1 overflow-auto p-6">
               {filteredFragments.length === 0 ? (
                 <div className="flex h-full flex-col items-center justify-center text-center">
@@ -1765,7 +2018,10 @@ export function InspirationPage() {
                       ? "columns-1 gap-4 sm:columns-2 lg:columns-3 xl:columns-4"
                       : "grid gap-4",
                     viewMode === "grid"
-                      ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                      ? cn(
+                          density === "compact" ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2" : "",
+                          density !== "compact" ? "grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" : "",
+                        )
                       : viewMode === "list"
                         ? "grid-cols-1"
                         : "",
@@ -1894,7 +2150,7 @@ export function InspirationPage() {
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>
               <DialogTitle>批量移动到文件夹</DialogTitle>
-              <DialogDescription>把已选碎片移动到指定集合（可选“未归类”）</DialogDescription>
+              <DialogDescription>把已选碎片移动到指定集合（可选"未归类"）</DialogDescription>
             </DialogHeader>
             <div className="space-y-3 py-2">
               <div className="grid gap-2">

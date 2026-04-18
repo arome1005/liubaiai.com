@@ -18,17 +18,19 @@ export type ExtractPdfProgress = { page: number; totalPages: number };
  */
 export async function extractPlainTextFromPdf(
   data: ArrayBuffer,
-  options?: { onProgress?: (p: ExtractPdfProgress) => void },
+  options?: { onProgress?: (p: ExtractPdfProgress) => void; signal?: AbortSignal },
 ): Promise<{ text: string; pageCount: number }> {
   ensurePdfWorker();
   let pdf: PDFDocumentProxy;
   try {
+    if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
     const loadingTask = pdfjsLib.getDocument({
       data: new Uint8Array(data),
       useSystemFonts: true,
     });
     pdf = await loadingTask.promise;
   } catch (e) {
+    if ((e as { name?: string } | null)?.name === "AbortError") throw e;
     const msg = e instanceof Error ? e.message : String(e);
     if (/password|encrypt/i.test(msg)) {
       throw new Error("PDF 已加密或需要密码，当前版本不支持解密导入。");
@@ -41,6 +43,7 @@ export async function extractPlainTextFromPdf(
 
   try {
     for (let i = 1; i <= totalPages; i++) {
+      if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
       options?.onProgress?.({ page: i, totalPages });
       const page = await pdf.getPage(i);
       const tc = await page.getTextContent();
@@ -51,6 +54,7 @@ export async function extractPlainTextFromPdf(
         .trim();
       parts.push(line);
       if (i % 4 === 0) {
+        if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
       }
     }

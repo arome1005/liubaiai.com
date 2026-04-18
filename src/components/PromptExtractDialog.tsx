@@ -112,6 +112,7 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
   // 步骤 5：保存
   const [saved, setSaved] = useState<null | "draft" | "submitted">(null);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const hasResult = streamText.trim().length > 0;
@@ -167,6 +168,7 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
   const handleSave = async (status: "draft" | "submitted") => {
     if (!streamText.trim()) return;
     setSaving(true);
+    setSaveError(null);
     try {
       const slots = selectedSlots.size > 0 ? Array.from(selectedSlots) : undefined;
       await addGlobalPromptTemplate({
@@ -185,6 +187,8 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
         source_note: `type=${selectedType}`,
       });
       setSaved(status);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "保存失败，请重试");
     } finally {
       setSaving(false);
     }
@@ -437,6 +441,9 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
 
         {/* ── 底栏 ── */}
         <DialogFooter className="gap-2 pt-2">
+          {saveError && (
+            <p className="w-full text-xs text-destructive">{saveError}</p>
+          )}
           <Button variant="ghost" onClick={handleClose} disabled={saving}>
             {saved ? "关闭" : "取消"}
           </Button>

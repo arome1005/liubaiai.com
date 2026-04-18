@@ -1,5 +1,7 @@
 import { Link, Outlet, useLocation } from "react-router-dom";
+import { Scan, Search, Settings, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { EditorWritingSettingsSheet } from "./EditorWritingSettingsSheet";
 import { exitDocumentFullscreen, getFullscreenElement, requestDocumentFullscreen } from "../util/browser-fullscreen";
 import { useAuthUserState } from "../hooks/useAuthUserState";
 import { workIdFromPath } from "../util/workPath";
@@ -15,6 +17,53 @@ import { Card, CardContent } from "./ui/card";
 const LS_RIGHT_OPEN = "liubai:rightRailOpen";
 const LS_RIGHT_TAB = "liubai:rightRailTab";
 const LS_RIGHT_W_PX = "liubai:rightRailWidthPx";
+
+/** 返回主页 + 沉浸写作 + 写作设置 三个图标按钮，复用于主顶栏（右栏关闭）和右栏假顶栏（右栏打开） */
+function TopbarIconGroup({
+  zenWrite,
+  onZenToggle,
+  onSettingsOpen,
+}: {
+  zenWrite: boolean;
+  onZenToggle: () => void;
+  onSettingsOpen: () => void;
+}) {
+  return (
+    <>
+      <Link
+        to="/library"
+        className="app-editor-topicon-link"
+        aria-label="返回主页"
+        title="返回主页"
+      >
+        <Undo2 className="size-[1.15rem] shrink-0" strokeWidth={2.25} aria-hidden />
+      </Link>
+      <button
+        type="button"
+        className={"app-editor-topicon-link" + (zenWrite ? " is-on" : "")}
+        aria-label={zenWrite ? "退出沉浸写作" : "沉浸写作"}
+        aria-pressed={zenWrite}
+        title={
+          zenWrite
+            ? "退出沉浸：结束浏览器全屏（Esc 也可）"
+            : "沉浸写作：浏览器全屏专心码字；保留顶栏、章栏与右栏；Alt+Z 切换"
+        }
+        onClick={onZenToggle}
+      >
+        <Scan className="size-[1.15rem] shrink-0" strokeWidth={2.25} aria-hidden />
+      </button>
+      <button
+        type="button"
+        className="app-editor-topicon-link"
+        aria-label="写作设置"
+        title="写作设置"
+        onClick={onSettingsOpen}
+      >
+        <Settings className="size-[1.15rem] shrink-0" strokeWidth={2.25} aria-hidden />
+      </button>
+    </>
+  );
+}
 
 function safeBool(v: string | null, fallback: boolean): boolean {
   if (v === "1") return true;
@@ -40,6 +89,7 @@ export function EditorShell() {
     }
   }, [pathname]);
   const cmdModKey = useMemo(() => shortcutModifierSymbol(), []);
+  const [writingSettingsOpen, setWritingSettingsOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState<boolean>(() => safeBool(localStorage.getItem(LS_RIGHT_OPEN), false));
   const [rightWidthPx, setRightWidthPx] = useState<number>(() => {
     const n = Number(localStorage.getItem(LS_RIGHT_W_PX));
@@ -53,8 +103,8 @@ export function EditorShell() {
   });
   const [tabs, setTabs] = useState<RightRailTab[]>(() => [
     { id: "ai", label: "AI", icon: "✨", content: null, enabled: true },
-    { id: "summary", label: "概要", icon: "🗂", content: null, enabled: true },
-    { id: "bible", label: "锦囊", icon: "📖", content: null, enabled: true },
+    { id: "summary", label: "工具", icon: "🧰", content: null, enabled: true },
+    { id: "bible", label: "设定", icon: "📖", content: null, enabled: true },
     { id: "ref", label: "参考", icon: "📎", content: null, enabled: true },
   ]);
 
@@ -216,6 +266,7 @@ export function EditorShell() {
   const zenApi = useMemo(() => ({ zenWrite, setZenWrite }), [zenWrite]);
 
   return (
+    <>
     <TopbarContext.Provider value={topbarApi}>
       <RightRailContext.Provider value={rightRailApi}>
         <EditorZenProvider value={zenApi}>
@@ -228,10 +279,7 @@ export function EditorShell() {
               className="app-topbar app-topbar--editor app-topbar--editor-xy sticky top-0 z-50 grid min-h-12 shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-b border-border/40 bg-background/95 px-3 py-2 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60 lg:min-h-[3.25rem] lg:gap-3 lg:px-5"
               aria-label="写作顶栏"
             >
-              <div className="app-topbar-left app-topbar-left--editor app-topbar-left--editor-xy flex min-w-0 max-w-[min(100%,14rem)] items-center gap-2 lg:max-w-[16rem] lg:gap-3">
-                <Button asChild variant="outline" size="sm" className="app-editor-back shrink-0">
-                  <Link to="/library">作品库</Link>
-                </Button>
+              <div className="app-topbar-left app-topbar-left--editor app-topbar-left--editor-xy flex min-w-0 max-w-[min(100%,14rem)] items-center gap-2 lg:max-w-[18rem] lg:gap-3">
                 <div className="app-topbar-title app-topbar-title--editor app-topbar-title--editor-xy min-w-0 flex-1 overflow-hidden">
                   {topbarTitleNode ? (
                     topbarTitleNode
@@ -249,23 +297,39 @@ export function EditorShell() {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="app-editor-command-btn"
+                  className="app-editor-command-btn app-editor-command-btn--icon"
+                  aria-label="搜索与命令"
                   title={`搜索与命令（${cmdModKey}+K）；正文聚焦时请先点顶栏或失焦再按快捷键`}
                   onClick={() => setCommandOpen(true)}
                 >
-                  搜索
+                  <Search className="app-editor-command-search-ico size-[1.05rem] shrink-0" strokeWidth={2.25} aria-hidden />
                   <kbd className="app-editor-command-kbd">{cmdModKey}+K</kbd>
                 </Button>
                 <Button
                   type="button"
                   variant={rightOpen ? "default" : "outline"}
                   size="sm"
-                  className="app-editor-rail-toggle"
+                  className="app-editor-rail-toggle h-9"
                   onClick={() => setRightOpen((v) => !v)}
                   title="展开或收起 AI 等辅助侧栏（宽屏侧栏，小屏抽屉）"
                 >
-                  {rightOpen ? "关闭右栏" : "打开右栏"}
+                  {rightOpen ? "关闭右栏" : "辅助创作"}
                 </Button>
+                {/* 右栏关闭时：图标在主顶栏；右栏打开时（宽屏）：图标移入右栏假顶栏，此处隐藏 */}
+                <div className={rightOpen ? "app-topbar-rail-icons--hidden" : "contents"}>
+                  <TopbarIconGroup
+                    zenWrite={zenWrite}
+                    onZenToggle={() => {
+                      if (zenWrite) {
+                        void exitDocumentFullscreen().finally(() => setZenWrite(false));
+                      } else {
+                        setZenWrite(true);
+                        void requestDocumentFullscreen();
+                      }
+                    }}
+                    onSettingsOpen={() => setWritingSettingsOpen(true)}
+                  />
+                </div>
               </div>
             </header>
 
@@ -284,14 +348,24 @@ export function EditorShell() {
                 draggingRef.current = { startX: e.clientX, startW: rightWidthPx };
               }}
             />
-            <div className="app-right-head">
-              <div className="app-right-head-left">
-                <strong>{currentTab?.label ?? "面板"}</strong>
-              </div>
-              <button type="button" className="icon-btn" title="关闭" onClick={() => setRightOpen(false)}>
-                ×
-              </button>
+            {/* 宽屏：图标组浮在右栏假顶栏右侧；小屏抽屉模式不显示（图标留在主顶栏） */}
+            <div className="app-right-topbar-icons">
+              <TopbarIconGroup
+                zenWrite={zenWrite}
+                onZenToggle={() => {
+                  if (zenWrite) {
+                    void exitDocumentFullscreen().finally(() => setZenWrite(false));
+                  } else {
+                    setZenWrite(true);
+                    void requestDocumentFullscreen();
+                  }
+                }}
+                onSettingsOpen={() => setWritingSettingsOpen(true)}
+              />
             </div>
+            <button type="button" className="app-right-close-fab" title="关闭右侧栏" onClick={() => setRightOpen(false)}>
+              ×
+            </button>
             <div className="app-right-tabs" role="tablist" aria-label="右侧栏标签">
               {tabs.map((t) => (
                 <button
@@ -351,5 +425,7 @@ export function EditorShell() {
         </EditorZenProvider>
       </RightRailContext.Provider>
     </TopbarContext.Provider>
+    <EditorWritingSettingsSheet open={writingSettingsOpen} onOpenChange={setWritingSettingsOpen} />
+    </>
   );
 }

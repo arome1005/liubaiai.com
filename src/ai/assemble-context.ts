@@ -58,6 +58,11 @@ export type WritingWorkStyleSlice = {
   bannedPhrases: string;
   styleAnchor: string;
   extraRules: string;
+  sentenceRhythm?: string;
+  punctuationStyle?: string;
+  dialogueDensity?: "low" | "medium" | "high";
+  emotionStyle?: "cold" | "neutral" | "warm";
+  narrativeDistance?: "omniscient" | "limited" | "deep_pov";
 };
 
 export type WritingChapterBibleSlice = {
@@ -245,6 +250,20 @@ function appendWorkStyleAndTagProfileLines(
 ): void {
   if (workStyle.pov.trim()) parts.push(`叙述视角/人称：${workStyle.pov.trim()}`);
   if (workStyle.tone.trim()) parts.push(`整体调性：${workStyle.tone.trim()}`);
+  if (workStyle.sentenceRhythm?.trim()) parts.push(`句节奏：${workStyle.sentenceRhythm.trim()}`);
+  if (workStyle.punctuationStyle?.trim()) parts.push(`标点偏好：${workStyle.punctuationStyle.trim()}`);
+  if (workStyle.dialogueDensity) {
+    const label = workStyle.dialogueDensity === "low" ? "低（以叙述/动作为主）" : workStyle.dialogueDensity === "high" ? "高（对话推动情节）" : "中等";
+    parts.push(`对话密度：${label}`);
+  }
+  if (workStyle.emotionStyle) {
+    const label = workStyle.emotionStyle === "cold" ? "冷峻克制（情绪内化，少用形容词）" : workStyle.emotionStyle === "warm" ? "热烈（意象丰富，可适当抒情）" : "适中";
+    parts.push(`情绪温度：${label}`);
+  }
+  if (workStyle.narrativeDistance) {
+    const label = workStyle.narrativeDistance === "omniscient" ? "全知叙述" : workStyle.narrativeDistance === "deep_pov" ? "深度视角（紧贴视角人物意识流）" : "第三人称有限视角";
+    parts.push(`叙述距离：${label}`);
+  }
   if (workStyle.bannedPhrases.trim()) {
     parts.push("禁用词/禁用套话（必须避免）：\n" + workStyle.bannedPhrases.trim());
   }

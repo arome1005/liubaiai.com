@@ -182,7 +182,7 @@ export async function generateLogicConsistencyFindings(args: {
   const json = safeJsonParse(rawText);
   const findings = normalizeFindings(json, chapterIdSet);
   if (findings.length === 0) {
-    // 允许模型返回“空数组”，但如果不是合法 JSON，给可读错误
+    // 允许模型返回"空数组"，但如果不是合法 JSON，给可读错误
     if (json == null) {
       const clip = rawText.length > 6000 ? rawText.slice(0, 6000) + "\n…（已截断）" : rawText;
       throw new LogicConsistencyScanError(`扫描结果未能解析为 JSON 数组。请重试或更换模型。\n\n原文：\n${clip}`);

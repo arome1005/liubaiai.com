@@ -1,4 +1,5 @@
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { toast } from "sonner";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { getWork, listChapters } from "../db/repo";
 import { useAuthUserState } from "../hooks/useAuthUserState";
@@ -230,7 +231,7 @@ export function AppShell() {
         await uploadUserAvatar(file);
         refreshAuth();
       } catch (err) {
-        window.alert(err instanceof Error ? err.message : "上传失败");
+        toast.error(err instanceof Error ? err.message : "上传失败");
       } finally {
         setCreatorUploading(false);
       }

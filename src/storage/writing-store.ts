@@ -97,6 +97,8 @@ export interface WritingStore {
     },
     options?: {
       onProgress?: (p: { phase: "chunks" | "index"; percent: number; label?: string }) => void;
+      /** 可选：用于取消导入/索引 */
+      signal?: AbortSignal;
     },
   ): Promise<ReferenceLibraryEntry>;
   updateReferenceLibraryEntry(

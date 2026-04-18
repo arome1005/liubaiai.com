@@ -1416,6 +1416,11 @@ export class WritingStoreSupabase implements WritingStore {
       bannedPhrases: patch.bannedPhrases ?? existing?.bannedPhrases ?? "",
       styleAnchor: patch.styleAnchor ?? existing?.styleAnchor ?? "",
       extraRules: patch.extraRules ?? existing?.extraRules ?? "",
+      sentenceRhythm: patch.sentenceRhythm ?? existing?.sentenceRhythm,
+      punctuationStyle: patch.punctuationStyle ?? existing?.punctuationStyle,
+      dialogueDensity: patch.dialogueDensity ?? existing?.dialogueDensity,
+      emotionStyle: patch.emotionStyle ?? existing?.emotionStyle,
+      narrativeDistance: patch.narrativeDistance ?? existing?.narrativeDistance,
       updatedAt: t,
     };
     const { error } = await getSupabase()
@@ -1722,7 +1727,7 @@ export class WritingStoreSupabase implements WritingStore {
       type: input.type,
       tags: input.tags ?? [],
       body: input.body ?? "",
-      status: "draft",
+      status: input.status ?? "draft",
       sortOrder,
       createdAt: t,
       updatedAt: t,
@@ -1738,6 +1743,11 @@ export class WritingStoreSupabase implements WritingStore {
       sort_order: row.sortOrder,
       created_at: row.createdAt,
       updated_at: row.updatedAt,
+      slots: input.slots ?? null,
+      source_kind: input.source_kind ?? null,
+      source_ref_work_id: input.source_ref_work_id ?? null,
+      source_excerpt_ids: input.source_excerpt_ids ?? null,
+      source_note: input.source_note ?? null,
     } as never);
     if (error) throw new Error(error.message);
     return row;

@@ -30,7 +30,7 @@ import {
   resetLifetimeApproxTokens,
   resetSessionApproxTokens,
 } from "../ai/sidepanel-session-tokens";
-import { readTodayApproxTokens, resetTodayApproxTokens } from "../ai/daily-approx-tokens";
+import { listRecentDailyApproxTokens, readTodayApproxTokens, resetTodayApproxTokens } from "../ai/daily-approx-tokens";
 import { loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiSettings } from "../ai/types";
 import { BackendModelConfigModal } from "../components/BackendModelConfigModal";
@@ -217,6 +217,14 @@ export function SettingsPage() {
   const sessionApproxDisplay = useMemo(() => readSessionApproxTokens(), [sidepanelUsageTick]);
   const lifetimeApproxDisplay = useMemo(() => readLifetimeApproxTokens(), [sidepanelUsageTick]);
   const todayApproxDisplay = useMemo(() => readTodayApproxTokens(), [sidepanelUsageTick]);
+  const recentDailyApprox = useMemo(() => listRecentDailyApproxTokens(7), [sidepanelUsageTick]);
+  const recentDailyMax = useMemo(
+    () => Math.max(1, ...recentDailyApprox.map((d) => d.tokens)),
+    [recentDailyApprox],
+  );
+  const dailyBudget = aiSettings.dailyTokenBudget ?? 0;
+  const dailyBudgetPct =
+    dailyBudget > 0 ? Math.min(999, (todayApproxDisplay / Math.max(1, dailyBudget)) * 100) : 0;
 
   useEffect(() => {
     const h = location.hash.replace(/^#/, "");
@@ -479,10 +487,36 @@ export function SettingsPage() {
               setTypography((t) => ({ ...t, fontFamily: e.target.value as EditorFontFamily }))
             }
           >
-            <option value="system">系统无衬线</option>
-            <option value="serif">宋体 / 衬线</option>
-            <option value="mono">等宽</option>
-            <option value="kaiti">楷体风格</option>
+            <optgroup label="通用">
+              <option value="system">系统无衬线</option>
+              <option value="mono">等宽</option>
+            </optgroup>
+            <optgroup label="宋体 / 衬线">
+              <option value="serif">思源宋体</option>
+              <option value="songti">宋体-简</option>
+              <option value="stSong">华文宋体</option>
+              <option value="zhongSong">华文中宋</option>
+            </optgroup>
+            <optgroup label="仿宋 / 楷体">
+              <option value="kaiti">楷体</option>
+              <option value="stKaiti">华文楷体</option>
+              <option value="fangSong">仿宋</option>
+              <option value="stFangSong">华文仿宋</option>
+            </optgroup>
+            <optgroup label="黑体 / 圆体">
+              <option value="msYahei">微软雅黑</option>
+              <option value="lantingHei">兰亭黑-繁</option>
+              <option value="hiragino">冬青黑字体</option>
+              <option value="xihei">华文细黑</option>
+              <option value="yuanti">圆体-简</option>
+            </optgroup>
+            <optgroup label="艺术字体">
+              <option value="xingkai">华文行楷</option>
+              <option value="hannotate">手札体-简</option>
+              <option value="wawati">娃娃体-简</option>
+              <option value="liti">华文隶书</option>
+              <option value="caiyun">华文彩云</option>
+            </optgroup>
           </select>
         </label>
         <label className="row">
@@ -1030,10 +1064,94 @@ export function SettingsPage() {
           </p>
         </div>
 
+        {/* P2-1：预算预警 + 趋势统计（轻量可视化） */}
+        <div className="settings-ai-usage" role="region" aria-label="预算与趋势" style={{ marginTop: 14 }}>
+          <h3 className="settings-ai-usage-title">预算与趋势（最近 7 天）</h3>
+          <p className="muted small" style={{ marginTop: 4 }}>
+            基于「日累计粗估 tokens」的本机统计，不上传。用于帮助你感知消耗与预算压力。
+          </p>
+
+          <div style={{ marginTop: 10 }}>
+            <div className="muted small">
+              今日占用：{" "}
+              {dailyBudget > 0 ? (
+                <>
+                  <strong style={{ color: todayApproxDisplay > dailyBudget ? "var(--destructive)" : undefined }}>
+                    {todayApproxDisplay.toLocaleString()}
+                  </strong>{" "}
+                  / {dailyBudget.toLocaleString()} tokens（约 {Math.round(dailyBudgetPct)}%）
+                </>
+              ) : (
+                <>
+                  <strong>{todayApproxDisplay.toLocaleString()}</strong> tokens（未设置日预算）
+                </>
+              )}
+            </div>
+            {dailyBudget > 0 ? (
+              <div
+                className="reference-heavy-bar"
+                role="progressbar"
+                aria-valuenow={Math.min(100, Math.round(dailyBudgetPct))}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                style={{ marginTop: 6 }}
+              >
+                <div
+                  className="reference-heavy-bar-fill"
+                  style={{
+                    width: `${Math.min(100, dailyBudgetPct)}%`,
+                    background: todayApproxDisplay > dailyBudget ? "var(--destructive)" : undefined,
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <div className="muted small" style={{ marginBottom: 6 }}>
+              最近 7 天（日累计）
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, alignItems: "end" }}>
+              {recentDailyApprox.map((d) => {
+                const h = Math.max(2, Math.round((d.tokens / recentDailyMax) * 52));
+                const isToday = d.date === recentDailyApprox[recentDailyApprox.length - 1]!.date;
+                return (
+                  <div key={d.date} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <div
+                      title={`${d.date}：${d.tokens.toLocaleString()} tokens`}
+                      style={{
+                        height: 56,
+                        borderRadius: 8,
+                        border: "1px solid color-mix(in oklab, var(--border) 70%, transparent)",
+                        background: "color-mix(in oklab, var(--card) 55%, transparent)",
+                        display: "flex",
+                        alignItems: "flex-end",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          height: h,
+                          width: "100%",
+                          background: isToday ? "var(--primary)" : "color-mix(in oklab, var(--muted-foreground) 22%, transparent)",
+                          opacity: isToday ? 0.9 : 0.8,
+                        }}
+                      />
+                    </div>
+                    <div className="muted small" style={{ fontSize: "0.68rem", textAlign: "center" }}>
+                      {d.date.slice(5)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
         <div className="settings-ai-usage" role="region" aria-label="高危操作始终确认" style={{ marginTop: 14 }}>
           <h3 className="settings-ai-usage-title">高危操作 · 始终确认（步 48）</h3>
           <p className="muted small" style={{ marginTop: 4 }}>
-            用于整卷/多章/批量类操作（如全书语义扫描、流光五段扩容等）。开启后，这些操作会在发起前弹出“清单 + 数字确认”，避免误触与高额消耗。
+            用于整卷/多章/批量类操作（如全书语义扫描、流光五段扩容等）。开启后，这些操作会在发起前弹出"清单 + 数字确认"，避免误触与高额消耗。
           </p>
           <label className="row row--check" style={{ marginTop: 10 }}>
             <input

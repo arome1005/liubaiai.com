@@ -24,7 +24,7 @@ function writeLastOkAt(t: number): void {
 }
 
 /**
- * 步 46 后续：问策专用成本确认（不引入新 UI 结构，使用 window.prompt 的“数字确认”）。
+ * 步 46 后续：问策专用成本确认（不引入新 UI 结构，使用 window.prompt 的"数字确认"）。
  * - 仅对云端 provider 生效
  * - 有冷却，避免连续多次确认影响节奏
  */

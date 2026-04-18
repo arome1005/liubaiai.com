@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
@@ -39,7 +40,6 @@ import type {
   WritingStyleSample,
 } from "../db/types";
 import { SNAPSHOT_CAP_PER_CHAPTER, SNAPSHOT_MAX_AGE_MS } from "../db/types";
-import { exportWorkAsMergedMarkdown } from "../storage/backup";
 import {
   buildBookDocx,
   buildBookTxt,
@@ -48,10 +48,10 @@ import {
 } from "../storage/export-txt-docx";
 import { exitDocumentFullscreen, requestDocumentFullscreen } from "../util/browser-fullscreen";
 import { aiPanelDraftStorageKey } from "../util/ai-panel-draft";
-import { addDailyWordsFromDelta, getDailyWordsToday } from "../util/dailyWords";
+import { addDailyWordsFromDelta } from "../util/dailyWords";
 import { clearDraft, readDraft, writeDraftDebounced } from "../util/draftRecovery";
 import { LAST_CHAPTER_SESSION_KEY_PREFIX } from "../util/last-chapter-session";
-import { normalizeLineEndings, readLineEndingMode } from "../util/lineEnding";
+import { readLineEndingMode } from "../util/lineEnding";
 import { formatSummaryScope, formatSummaryUpdatedAt } from "../util/summary-meta";
 import { replaceAllLiteral, replaceFirstLiteral } from "../util/text-replace";
 import { wordCount } from "../util/wordCount";
@@ -62,10 +62,12 @@ import { loadAiSettings } from "../ai/storage";
 import { createAutoSummaryQueue } from "../ai/chapter-summary-auto";
 import type { AutoSummaryStatus } from "../ai/chapter-summary-auto";
 import { clearInspirationTransferHandoff, readInspirationTransferHandoff } from "../util/inspiration-transfer-handoff";
+import { clearEditorHitHandoff, readEditorHitHandoff } from "../util/editor-hit-handoff";
+import { clearEditorRefsImport, readEditorRefsImport, type EditorRefsImportItem } from "../util/editor-refs-import";
 import { CodeMirrorEditor, type CodeMirrorEditorHandle } from "../components/CodeMirrorEditor";
 import { AiPanel } from "../components/AiPanel";
 import { useEditorZen } from "../components/EditorZenContext";
-import { useRightRail } from "../components/RightRailContext";
+import { useRightRail, type RightRailTabId } from "../components/RightRailContext";
 import { BibleRightPanel, RefRightPanel, SummaryRightPanel } from "../components/RightRailPanels";
 import { useTopbar } from "../components/TopbarContext";
 import { EDITOR_TYPOGRAPHY_EVENT, loadEditorTypography, type EditorPaperTint } from "../util/editor-typography";
@@ -127,9 +129,14 @@ export function EditorPage() {
   const [content, setContent] = useState("");
   const [liuguangReturnVisible, setLiuguangReturnVisible] = useState(false);
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error" | "conflict">("idle");
-  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  /** 离章后台保存失败（不阻塞当前章顶栏「保存冲突」语义） */
+  const [bgSaveIssue, setBgSaveIssue] = useState<null | { chapterId: string; title: string; kind: "conflict" | "error" }>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
   const [findQ, setFindQ] = useState("");
+  const [incomingHit, setIncomingHit] = useState<{ title: string; hint?: string } | null>(null);
+  const [incomingRefs, setIncomingRefs] = useState<EditorRefsImportItem[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
       return localStorage.getItem(SIDEBAR_KEY) === "1";
@@ -172,7 +179,6 @@ export function EditorPage() {
   const [volumes, setVolumes] = useState<Volume[]>([]);
   const [bookSearchScope, setBookSearchScope] = useState<BookSearchScope>("full");
   const [dragChapterId, setDragChapterId] = useState<string | null>(null);
-  const [dailyTick, setDailyTick] = useState(0);
   const [inspirationOpen, setInspirationOpen] = useState(false);
   const [inspirationList, setInspirationList] = useState<
     Array<ReferenceExcerpt & { refTitle: string; tagIds: string[] }>
@@ -188,6 +194,11 @@ export function EditorPage() {
   const [styleBanned, setStyleBanned] = useState("");
   const [styleAnchor, setStyleAnchor] = useState("");
   const [styleExtra, setStyleExtra] = useState("");
+  const [styleSentenceRhythm, setStyleSentenceRhythm] = useState<string | undefined>(undefined);
+  const [stylePunctuationStyle, setStylePunctuationStyle] = useState<string | undefined>(undefined);
+  const [styleDialogueDensity, setStyleDialogueDensity] = useState<"low" | "medium" | "high" | undefined>(undefined);
+  const [styleEmotionStyle, setStyleEmotionStyle] = useState<"cold" | "neutral" | "warm" | undefined>(undefined);
+  const [styleNarrativeDistance, setStyleNarrativeDistance] = useState<"omniscient" | "limited" | "deep_pov" | undefined>(undefined);
   const [glossaryTerms, setGlossaryTerms] = useState<BibleGlossaryTerm[]>([]);
   const [writingStyleSamples, setWritingStyleSamples] = useState<WritingStyleSample[]>([]);
   /** 锦囊「提示词」页跳转：一次性写入 AI 侧栏「额外要求」 */
@@ -243,6 +254,10 @@ export function EditorPage() {
   const chapterServerUpdatedAtRef = useRef<Map<string, number>>(new Map());
   const chapterOrderRef = useRef<Map<string, number>>(new Map());
   const persistInFlightRef = useRef(false);
+  /** 章节正文写入串行队列，避免离章后台保存与防抖保存交错导致乱序 */
+  const persistQueueRef = useRef(Promise.resolve());
+  /** 供早于 `switchChapter` 声明的 effect / 侧栏 JSX 调用，避免 TDZ */
+  const switchChapterRef = useRef<(id: string) => Promise<void>>(async () => {});
   const contentRef = useRef(content);
   const activeIdRef = useRef(activeId);
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
@@ -288,6 +303,24 @@ export function EditorPage() {
   const activeChapter = useMemo(
     () => chapters.find((c) => c.id === activeId) ?? null,
     [chapters, activeId],
+  );
+
+  const editorPaperFrameStyle = useMemo(
+    () =>
+      editorAutoWidth
+        ? {
+            width: "100%",
+            maxWidth: "100%",
+            boxSizing: "border-box" as const,
+          }
+        : {
+            width: "100%",
+            maxWidth: `${Math.min(editorMaxWidthPx, EDITOR_AUTO_MAX_CAP_PX)}px`,
+            marginLeft: "auto",
+            marginRight: "auto",
+            boxSizing: "border-box" as const,
+          },
+    [editorAutoWidth, editorMaxWidthPx],
   );
 
   /** 卷的 id 与章节里存的 volumeId 不一致时，章节不会出现在任何卷下（合并/导入/删卷遗留）；须单独展示并允许并入首卷 */
@@ -341,7 +374,7 @@ export function EditorPage() {
   }, []);
 
   useEffect(() => {
-    // 切章时取消后台概要生成，避免“上一章概要写回”带来的扰动感
+    // 切章时取消后台概要生成，避免"上一章概要写回"带来的扰动感
     autoSummaryQueueRef.current?.cancel();
     setAutoSummaryStatus({ kind: "idle" });
   }, [activeId]);
@@ -352,18 +385,6 @@ export function EditorPage() {
   }, [summaryOpen, activeChapter]);
 
   const chapterWords = useMemo(() => wordCount(content), [content]);
-  const bookWords = useMemo(
-    () =>
-      chapters.reduce((s, c) => {
-        if (c.id === activeId) return s + wordCount(content);
-        return s + (c.wordCountCache ?? wordCount(c.content));
-      }, 0),
-    [chapters, activeId, content],
-  );
-  const dailyWordsDisplay = useMemo(() => {
-    void dailyTick;
-    return getDailyWordsToday();
-  }, [dailyTick]);
 
   /** 3.6：摘录侧已关联当前章时，在侧栏展示入口 */
   const linkedExcerptsForChapter = useMemo(
@@ -407,6 +428,7 @@ export function EditorPage() {
     rightRail.setTabContent(
       "ai",
       <AiPanel
+        hideHeader
         onClose={() => {
           setAiOpen(false);
           rightRail.setOpen(false);
@@ -439,6 +461,11 @@ export function EditorPage() {
           bannedPhrases: styleBanned,
           styleAnchor: styleAnchor,
           extraRules: styleExtra,
+          sentenceRhythm: styleSentenceRhythm,
+          punctuationStyle: stylePunctuationStyle,
+          dialogueDensity: styleDialogueDensity,
+          emotionStyle: styleEmotionStyle,
+          narrativeDistance: styleNarrativeDistance,
         }}
         onUpdateWorkStyle={(patch) => {
           if (!workId) return;
@@ -447,6 +474,11 @@ export function EditorPage() {
           if (patch.bannedPhrases !== undefined) setStyleBanned(patch.bannedPhrases);
           if (patch.styleAnchor !== undefined) setStyleAnchor(patch.styleAnchor);
           if (patch.extraRules !== undefined) setStyleExtra(patch.extraRules);
+          if (patch.sentenceRhythm !== undefined) setStyleSentenceRhythm(patch.sentenceRhythm);
+          if (patch.punctuationStyle !== undefined) setStylePunctuationStyle(patch.punctuationStyle);
+          if (patch.dialogueDensity !== undefined) setStyleDialogueDensity(patch.dialogueDensity);
+          if (patch.emotionStyle !== undefined) setStyleEmotionStyle(patch.emotionStyle);
+          if (patch.narrativeDistance !== undefined) setStyleNarrativeDistance(patch.narrativeDistance);
           void upsertWorkStyleCard(workId, patch);
         }}
         linkedExcerptsForChapter={linkedExcerptsForChapter}
@@ -466,7 +498,7 @@ export function EditorPage() {
         chapterEditorContent={content}
         chapters={chapters}
         autoSummaryStatus={autoSummaryStatus}
-        onJumpToChapter={(id) => void switchChapter(id)}
+        onJumpToChapter={(id) => void switchChapterRef.current(id)}
         onChapterPatch={(id, patch) => {
           setChapters((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
         }}
@@ -563,6 +595,11 @@ export function EditorPage() {
       setStyleBanned(row?.bannedPhrases ?? "");
       setStyleAnchor(row?.styleAnchor ?? "");
       setStyleExtra(row?.extraRules ?? "");
+      setStyleSentenceRhythm(row?.sentenceRhythm);
+      setStylePunctuationStyle(row?.punctuationStyle);
+      setStyleDialogueDensity(row?.dialogueDensity);
+      setStyleEmotionStyle(row?.emotionStyle);
+      setStyleNarrativeDistance(row?.narrativeDistance);
     });
   }, [workId]);
 
@@ -658,13 +695,81 @@ export function EditorPage() {
       const u = new URL(window.location.href);
       const c = u.searchParams.get("chapter");
       if (c && chapters.some((x) => x.id === c)) {
-        void switchChapter(c);
+        void switchChapterRef.current(c);
         u.searchParams.delete("chapter");
         window.history.replaceState({}, "", u.toString());
       }
     } catch {
       /* ignore */
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workId, chapters.length]);
+
+  // P0-3：跨模块引用材料导入（一次性消费，写作页可见可移除）
+  useEffect(() => {
+    if (!workId || !chapters.length) return;
+    let should = false;
+    try {
+      const u = new URL(window.location.href);
+      should = u.searchParams.get("refsImport") === "1";
+      if (should) {
+        u.searchParams.delete("refsImport");
+        window.history.replaceState({}, "", u.toString());
+      }
+    } catch {
+      should = false;
+    }
+    if (!should) return;
+    const payload = readEditorRefsImport();
+    clearEditorRefsImport();
+    if (!payload) return;
+    if (payload.workId !== workId) return;
+    if (!chapters.some((c) => c.id === payload.chapterId)) return;
+    setIncomingRefs(payload.items.slice(0, 8));
+    void switchChapterRef.current(payload.chapterId);
+    queueMicrotask(() => {
+      rightRail.setOpen(true);
+      rightRail.setActiveTab("ref");
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workId, chapters.length]);
+
+  // P0-3：跨模块定位到命中片段（一次性消费）
+  useEffect(() => {
+    if (!workId || !chapters.length) return;
+    let should = false;
+    try {
+      const u = new URL(window.location.href);
+      should = u.searchParams.get("hit") === "1";
+      if (should) {
+        u.searchParams.delete("hit");
+        window.history.replaceState({}, "", u.toString());
+      }
+    } catch {
+      should = false;
+    }
+    if (!should) return;
+    const payload = readEditorHitHandoff();
+    clearEditorHitHandoff();
+    if (!payload) return;
+    if (payload.workId !== workId) return;
+    if (!payload.query.trim()) return;
+    const exists = chapters.some((c) => c.id === payload.chapterId);
+    if (!exists) return;
+
+    setIncomingHit({ title: payload.source.title, hint: payload.source.hint });
+    pendingScrollRef.current = {
+      query: payload.query,
+      isRegex: payload.isRegex ?? false,
+      offset: payload.offset ?? 0,
+    };
+    void switchChapterRef.current(payload.chapterId);
+    setFindQ(payload.query);
+    setFindOpen(true);
+    queueMicrotask(() => {
+      rightRail.setOpen(true);
+      rightRail.setActiveTab("ai");
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workId, chapters.length]);
 
@@ -679,7 +784,7 @@ export function EditorPage() {
     });
   }, [activeId, content]);
 
-  // 步 38：流光转入”光标位插入”handoff（跳转到写作页后执行）
+  // 步 38：流光转入"光标位插入"handoff（跳转到写作页后执行）
   useEffect(() => {
     if (!workId || !activeId) return;
     let should = false;
@@ -848,6 +953,22 @@ export function EditorPage() {
     editorRef.current?.replaceSelection(text);
   }
 
+  async function copySelectionToClipboard() {
+    const t = getSelectedText();
+    if (!t) return;
+    try {
+      await navigator.clipboard.writeText(t);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function duplicateSelectionAfterCaret() {
+    const t = getSelectedText();
+    if (!t) return;
+    editorRef.current?.insertTextAtCursor(t);
+  }
+
   useEffect(() => {
     if (!workId || !activeId) return;
     const t = window.setTimeout(() => {
@@ -930,17 +1051,25 @@ export function EditorPage() {
         clearDraft(workId, c.id);
       }
       setSaveState("saved");
-      setLastSavedAt(Date.now());
+      setBgSaveIssue((cur) => (cur?.chapterId === activeId ? null : cur));
     } catch {
       setSaveState("error");
     }
   }, [workId, activeId]);
 
-  const persistContent = useCallback(
-    async (chapterId: string, text: string) => {
-      if (!workId) return;
+  const enqueueChapterPersist = useCallback((task: () => Promise<void>) => {
+    const p = persistQueueRef.current.then(task);
+    persistQueueRef.current = p.catch(() => {});
+    return p;
+  }, []);
+
+  const runPersistChapter = useCallback(
+    async (chapterId: string, text: string, mode: "active" | "silent"): Promise<boolean> => {
+      if (!workId) return false;
       persistInFlightRef.current = true;
-      setSaveState("saving");
+      const showUi = mode === "active";
+      if (showUi) setSaveState("saving");
+      let ok = false;
       try {
         const prev = lastPersistedRef.current.get(chapterId) ?? "";
         addDailyWordsFromDelta(prev, text);
@@ -952,17 +1081,13 @@ export function EditorPage() {
         );
         lastPersistedRef.current.set(chapterId, text);
         clearDraft(workId, chapterId);
-        setDailyTick((t) => t + 1);
         const t = Date.now();
         chapterServerUpdatedAtRef.current.set(chapterId, t);
         setChapters((prevCh) =>
           prevCh.map((c) =>
-            c.id === chapterId
-              ? { ...c, content: text, updatedAt: t, wordCountCache: wordCount(text) }
-              : c,
+            c.id === chapterId ? { ...c, content: text, updatedAt: t, wordCountCache: wordCount(text) } : c,
           ),
         );
-        // 步 20：保存成功后后台队列自动生成概要（可被切章取消）
         const chapterTitle = chapterTitleRef.current.get(chapterId) ?? "未命名章节";
         const chapterOrder = chapterOrderRef.current.get(chapterId) ?? 0;
         const workTitle = workTitleRef.current.trim();
@@ -977,17 +1102,92 @@ export function EditorPage() {
             expectedUpdatedAt: t,
           });
         }
-        setSaveState("saved");
-        setLastSavedAt(t);
+        if (showUi) {
+          setSaveState("saved");
+        }
+        setBgSaveIssue((cur) => (cur?.chapterId === chapterId ? null : cur));
+        ok = true;
       } catch (e) {
-        if (isChapterSaveConflictError(e)) setSaveState("conflict");
-        else setSaveState("error");
+        if (showUi) {
+          if (isChapterSaveConflictError(e)) setSaveState("conflict");
+          else setSaveState("error");
+        } else {
+          const title = chapterTitleRef.current.get(chapterId) ?? "未命名章节";
+          setBgSaveIssue({
+            chapterId,
+            title,
+            kind: isChapterSaveConflictError(e) ? "conflict" : "error",
+          });
+        }
       } finally {
         persistInFlightRef.current = false;
       }
+      return ok;
     },
     [workId],
   );
+
+  const persistContent = useCallback(
+    async (chapterId: string, text: string) => {
+      return enqueueChapterPersist(() => runPersistChapter(chapterId, text, "active"));
+    },
+    [enqueueChapterPersist, runPersistChapter],
+  );
+
+  const switchChapter = useCallback(
+    async (nextId: string) => {
+      if (activeId && activeId !== nextId) {
+        const leaveId = activeId;
+        const leaveText = content;
+        const wid = workId;
+        const bible = { ...cbStateRef.current };
+        const ch = chapters.find((c) => c.id === nextId);
+        const nextBody = ch?.content ?? "";
+        setChapters((prev) =>
+          prev.map((c) =>
+            c.id === leaveId ? { ...c, content: leaveText, wordCountCache: wordCount(leaveText) } : c,
+          ),
+        );
+        setActiveId(nextId);
+        setContent(nextBody);
+        lastPersistedRef.current.set(nextId, nextBody);
+        const titleForErr = chapterTitleRef.current.get(leaveId) ?? "未命名章节";
+        void enqueueChapterPersist(async () => {
+          const ok = await runPersistChapter(leaveId, leaveText, "silent");
+          if (!ok) return;
+          try {
+            await addChapterSnapshot(leaveId, leaveText);
+          } catch {
+            setBgSaveIssue({ chapterId: leaveId, title: titleForErr, kind: "error" });
+            return;
+          }
+          if (wid) {
+            try {
+              await upsertChapterBible({
+                chapterId: leaveId,
+                workId: wid,
+                goalText: bible.goal,
+                forbidText: bible.forbid,
+                povText: bible.pov,
+                sceneStance: bible.scene,
+                characterStateText: bible.characterState,
+              });
+            } catch {
+              setBgSaveIssue({ chapterId: leaveId, title: titleForErr, kind: "error" });
+            }
+          }
+        });
+        return;
+      }
+      const chNext = chapters.find((c) => c.id === nextId);
+      setActiveId(nextId);
+      const nextBodyOnly = chNext?.content ?? "";
+      setContent(nextBodyOnly);
+      lastPersistedRef.current.set(nextId, nextBodyOnly);
+    },
+    [activeId, chapters, content, enqueueChapterPersist, runPersistChapter, workId],
+  );
+  switchChapterRef.current = switchChapter;
 
   useEffect(() => {
     if (!activeId) return;
@@ -1017,8 +1217,15 @@ export function EditorPage() {
 
   // Inject write tools into global topbar
   useEffect(() => {
-    if (!work) return;
-    topbar.setTitleNode(null);
+    if (!work) {
+      topbar.setTitleNode(null);
+      return;
+    }
+    topbar.setTitleNode(
+      <span className="editor-xy-work-title" title={work.title}>
+        {work.title}
+      </span>,
+    );
     topbar.setCenterNode(
       <div className="editor-xy-center-stack">
         <div className="editor-xy-pills-scroller">
@@ -1097,27 +1304,6 @@ export function EditorPage() {
           </Button>
           <Button
             type="button"
-            variant={zenWrite ? "default" : "outline"}
-            size="sm"
-            className="editor-xy-pill"
-            title={
-              zenWrite
-                ? "退出沉浸：结束浏览器全屏（Esc 也可）"
-                : "沉浸写作：浏览器全屏专心码字；保留顶栏、章栏与右栏；Alt+Z 切换"
-            }
-            onClick={() => {
-              if (zenWrite) {
-                void exitDocumentFullscreen().finally(() => setZenWrite(false));
-              } else {
-                setZenWrite(true);
-                void requestDocumentFullscreen();
-              }
-            }}
-          >
-            {zenWrite ? "退出沉浸" : "沉浸"}
-          </Button>
-          <Button
-            type="button"
             variant="outline"
             size="sm"
             className="editor-xy-pill"
@@ -1126,228 +1312,50 @@ export function EditorPage() {
             {editorAutoWidth ? "宽度：自适应" : "宽度：自定义"}
           </Button>
         </div>
-        <div className="editor-xy-stats-line">
-          <span className="editor-xy-stats-nums" title="本章 · 全书 · 今日">
-            <span>{chapterWords}</span>
-            <span aria-hidden> · </span>
-            <span>{bookWords}</span>
-            <span aria-hidden> · </span>
-            <span>今日 {dailyWordsDisplay}</span>
-          </span>
-          <span className={`save-pill save-${saveState}`} title="保存状态">
-            {saveState === "saving" && "保存中"}
-            {saveState === "saved" && "已保存"}
-            {saveState === "idle" && ""}
-            {saveState === "error" && "保存失败"}
-            {saveState === "conflict" && (
-              <>
-                保存冲突
+        {saveState === "saving" || saveState === "error" || saveState === "conflict" || bgSaveIssue ? (
+          <div className="editor-xy-stats-line">
+            {saveState === "saving" || saveState === "error" || saveState === "conflict" ? (
+              <span className={`save-pill save-${saveState}`} title="保存状态">
+                {saveState === "saving" && "保存中"}
+                {saveState === "error" && "保存失败"}
+                {saveState === "conflict" && (
+                  <>
+                    保存冲突
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="save-conflict-reload"
+                      onClick={() => void resolveSaveConflict()}
+                    >
+                      重新载入本章
+                    </Button>
+                  </>
+                )}
+              </span>
+            ) : null}
+            {bgSaveIssue ? (
+              <span className="editor-xy-bg-save-issue" title="离开该章时后台写入未成功；可打开该章后重试同步">
+                「{bgSaveIssue.title}」{bgSaveIssue.kind === "conflict" ? "离章保存冲突" : "离章保存失败"}
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="save-conflict-reload"
-                  onClick={() => void resolveSaveConflict()}
+                  className="editor-xy-bg-save-issue__btn"
+                  onClick={() => void switchChapter(bgSaveIssue.chapterId)}
                 >
-                  重新载入本章
+                  打开该章
                 </Button>
-              </>
-            )}
-          </span>
-        </div>
+                <button type="button" className="editor-xy-bg-save-issue__dismiss" onClick={() => setBgSaveIssue(null)}>
+                  忽略
+                </button>
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>,
     );
-    topbar.setActionsNode(
-      <div className="editor-xy-trail">
-        {lastSavedAt ? (
-          <span className="editor-xy-saved-full" title="最后一次保存完成时间">
-            最后保存：{new Date(lastSavedAt).toLocaleString()}
-          </span>
-        ) : (
-          <span className="editor-xy-saved-full editor-xy-saved-full--muted">尚未保存到本机</span>
-        )}
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={cn("icon-btn editor-xy-trail-icon", findOpen && "is-on")}
-          title="查找 / 替换"
-          onClick={() => setFindOpen((v) => !v)}
-        >
-          ⌕
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className={cn("icon-btn editor-xy-trail-icon", bookSearchOpen && "is-on")}
-          title="全书搜索"
-          onClick={() => (bookSearchOpen ? closeBookSearch() : openBookSearch())}
-        >
-          全书
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="icon-btn editor-xy-trail-icon"
-          title="章节历史"
-          disabled={!activeChapter}
-          onClick={() => setSnapshotOpen(true)}
-        >
-          历史
-        </Button>
-        <div className="toolbar-more-wrap" ref={moreWrapRef}>
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="icon-btn editor-xy-trail-icon"
-            title="更多"
-            aria-expanded={moreOpen}
-            onClick={() => setMoreOpen((v) => !v)}
-          >
-            ···
-          </Button>
-          {moreOpen ? (
-            <div className="toolbar-more-menu" role="menu">
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  setZenWrite(true);
-                  void requestDocumentFullscreen();
-                }}
-              >
-                沉浸写作
-              </button>
-              <div className="toolbar-menu-divider" />
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  setFindOpen(true);
-                }}
-              >
-                查找 / 替换
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  openBookSearch();
-                }}
-              >
-                全书搜索
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!activeChapter}
-                onClick={() => {
-                  setMoreOpen(false);
-                  setSnapshotOpen(true);
-                }}
-              >
-                章节历史
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!activeChapter}
-                onClick={() => {
-                  setMoreOpen(false);
-                  void handleManualSnapshot();
-                }}
-              >
-                保存章节快照
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                disabled={!workId}
-                onClick={() => {
-                  setMoreOpen(false);
-                  window.location.href = `/work/${workId}/summary`;
-                }}
-              >
-                概要总览
-              </button>
-              <div className="toolbar-menu-divider" />
-              <div className="toolbar-menu-label">纯文本</div>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  exportChapterTxt();
-                }}
-              >
-                导出本章 .txt
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  void exportBookTxt();
-                }}
-              >
-                导出全书 .txt
-              </button>
-              <div className="toolbar-menu-label">Word</div>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  void exportChapterDocx();
-                }}
-              >
-                导出本章 .docx
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  void exportBookDocx();
-                }}
-              >
-                导出全书 .docx
-              </button>
-              <div className="toolbar-menu-label">Markdown</div>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  void exportChapterMd();
-                }}
-              >
-                导出本章 .md
-              </button>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  setMoreOpen(false);
-                  void exportBookMd();
-                }}
-              >
-                导出全书 .md
-              </button>
-              <Link to="/settings" role="menuitem" onClick={() => setMoreOpen(false)}>
-                设置
-              </Link>
-            </div>
-          ) : null}
-        </div>
-      </div>,
-    );
+    topbar.setActionsNode(null);
     return () => {
       topbar.setTitleNode(null);
       topbar.setCenterNode(null);
@@ -1357,22 +1365,16 @@ export function EditorPage() {
     topbar,
     work,
     workId,
-    chapterWords,
-    bookWords,
-    dailyWordsDisplay,
     saveState,
-    lastSavedAt,
     activeChapter,
     aiOpen,
     canAiDrawCard,
     editorAutoWidth,
-    findOpen,
-    bookSearchOpen,
-    moreOpen,
     rightRail,
     resolveSaveConflict,
-    setZenWrite,
-    zenWrite,
+    handleManualSnapshot,
+    bgSaveIssue,
+    switchChapter,
   ]);
 
   useEffect(() => {
@@ -1423,29 +1425,6 @@ export function EditorPage() {
     };
   }, [sidebarWidthPx]);
 
-  async function switchChapter(nextId: string) {
-    if (activeId && activeId !== nextId) {
-      await persistContent(activeId, content);
-      await addChapterSnapshot(activeId, content);
-      if (workId) {
-        await upsertChapterBible({
-          chapterId: activeId,
-          workId,
-          goalText: cbStateRef.current.goal,
-          forbidText: cbStateRef.current.forbid,
-          povText: cbStateRef.current.pov,
-          sceneStance: cbStateRef.current.scene,
-          characterStateText: cbStateRef.current.characterState,
-        });
-      }
-    }
-    const ch = chapters.find((c) => c.id === nextId);
-    setActiveId(nextId);
-    const nextBody = ch?.content ?? "";
-    setContent(nextBody);
-    lastPersistedRef.current.set(nextId, nextBody);
-  }
-
   async function handleRestoreSnapshot(snap: ChapterSnapshot) {
     if (!activeChapter || snap.chapterId !== activeChapter.id) return;
     if (!window.confirm("用此历史版本覆盖当前正文？")) return;
@@ -1478,7 +1457,7 @@ export function EditorPage() {
 
   function handleReplaceFirst() {
     if (!findQ) {
-      window.alert("请先输入查找内容。");
+      toast.info("请先输入查找内容。");
       return;
     }
     setContent((prev) => replaceFirstLiteral(prev, findQ, replaceQ));
@@ -1486,7 +1465,7 @@ export function EditorPage() {
 
   function handleReplaceAll() {
     if (!findQ) {
-      window.alert("请先输入查找内容。");
+      toast.info("请先输入查找内容。");
       return;
     }
     if (!window.confirm(`将本章中全部「${findQ}」替换为「${replaceQ}」？`)) return;
@@ -1519,6 +1498,17 @@ export function EditorPage() {
   function closeBookSearch() {
     setBookSearchOpen(false);
     setBookSearchHits(null);
+  }
+
+  function toggleRightRailTab(tab: RightRailTabId) {
+    if (rightRail.open && rightRail.activeTab === tab) {
+      rightRail.setOpen(false);
+      if (tab === "ai") setAiOpen(false);
+      return;
+    }
+    rightRail.setActiveTab(tab);
+    rightRail.setOpen(true);
+    if (tab === "ai") setAiOpen(true);
   }
 
   async function jumpToSearchHit(hit: BookSearchHit) {
@@ -1574,7 +1564,7 @@ export function EditorPage() {
       await deleteVolume(volId);
       await load();
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "无法删除该卷");
+      toast.error(e instanceof Error ? e.message : "无法删除该卷");
     }
   }
 
@@ -1677,33 +1667,6 @@ export function EditorPage() {
     if (w) setWork(w);
   }
 
-  async function exportChapterMd() {
-    if (!activeChapter || !activeId) return;
-    await persistContent(activeId, content);
-    await addChapterSnapshot(activeId, content);
-    const le = readLineEndingMode();
-    const md = normalizeLineEndings(`# ${activeChapter.title}\n\n${content}`, le);
-    const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
-    downloadBlob(blob, `${safeFilename(activeChapter.title)}.md`);
-  }
-
-  async function exportBookMd() {
-    if (!work || !workId || !activeId) return;
-    await persistContent(activeId, content);
-    const list = await listChapters(workId);
-    for (const c of list) {
-      await addChapterSnapshot(c.id, c.content);
-    }
-    const merged = list.map((c) => ({
-      title: c.title,
-      content: c.content,
-    }));
-    const le = readLineEndingMode();
-    const nl = le === "crlf" ? "\r\n" : "\n";
-    const blob = await exportWorkAsMergedMarkdown(work.title, merged, nl);
-    downloadBlob(blob, `${safeFilename(work.title)}.md`);
-  }
-
   async function exportChapterTxt() {
     if (!activeChapter || !activeId) return;
     await persistContent(activeId, content);
@@ -1735,7 +1698,7 @@ export function EditorPage() {
       const blob = await buildChapterDocx(activeChapter.title, content);
       downloadBlob(blob, `${safeFilename(activeChapter.title)}.docx`);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "导出 Word 失败");
+      toast.error(e instanceof Error ? e.message : "导出 Word 失败");
     }
   }
 
@@ -1754,7 +1717,7 @@ export function EditorPage() {
       const blob = await buildBookDocx(work.title, merged);
       downloadBlob(blob, `${safeFilename(work.title)}.docx`);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "导出 Word 失败");
+      toast.error(e instanceof Error ? e.message : "导出 Word 失败");
     }
   }
 
@@ -1931,6 +1894,51 @@ export function EditorPage() {
           >
             返回流光
           </Link>
+        ) : null}
+        {incomingHit ? (
+          <div className="ml-3 inline-flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-xs text-foreground/90">
+            <span className="muted">定位来源：</span>
+            <span className="font-medium">{incomingHit.title}</span>
+            {incomingHit.hint ? <span className="muted">· {incomingHit.hint}</span> : null}
+            <button
+              type="button"
+              className="ml-1 rounded px-1 text-muted-foreground hover:text-foreground"
+              onClick={() => setIncomingHit(null)}
+              title="关闭回显"
+            >
+              ×
+            </button>
+          </div>
+        ) : null}
+        {incomingRefs.length > 0 ? (
+          <div className="ml-3 inline-flex items-center gap-2 rounded-md border border-border/60 bg-background px-2 py-1 text-xs">
+            <span className="muted">引用材料：</span>
+            <span className="muted">{incomingRefs.length} 条</span>
+            <div className="flex items-center gap-1">
+              {incomingRefs.slice(0, 2).map((r) => (
+                <span key={r.id} className="inline-flex items-center gap-1 rounded border border-border/50 bg-background/60 px-1.5 py-0.5">
+                  <span className="max-w-[10rem] truncate" title={r.title}>{r.title}</span>
+                  <button
+                    type="button"
+                    className="rounded px-0.5 text-muted-foreground hover:text-foreground"
+                    onClick={() => setIncomingRefs((prev) => prev.filter((x) => x.id !== r.id))}
+                    title="移除该引用"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              {incomingRefs.length > 2 ? <span className="muted">…</span> : null}
+            </div>
+            <button
+              type="button"
+              className="rounded px-1 text-muted-foreground hover:text-foreground"
+              onClick={() => setIncomingRefs([])}
+              title="清空回显"
+            >
+              清空
+            </button>
+          </div>
         ) : null}
       </header>
 
@@ -2235,26 +2243,204 @@ export function EditorPage() {
           )}
           <div className="editor-scroll">
             <div className="editor-scroll-inner">
+            <div className="editor-xy-paper-stack" style={editorPaperFrameStyle}>
+            <div className="editor-xy-inline-toolbar" aria-label="正文快捷工具">
+              <div className="editor-xy-inline-toolbar__left">
+                <button
+                  type="button"
+                  className="icon-btn editor-xy-inline-icon"
+                  title="撤销"
+                  disabled={!activeChapter}
+                  onClick={() => editorRef.current?.undo()}
+                >
+                  ↶
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn editor-xy-inline-icon"
+                  title="重做"
+                  disabled={!activeChapter}
+                  onClick={() => editorRef.current?.redo()}
+                >
+                  ↷
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn editor-xy-inline-icon"
+                  title="复制选区"
+                  disabled={!activeChapter}
+                  onClick={() => void copySelectionToClipboard()}
+                >
+                  ⧉
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn editor-xy-inline-icon"
+                  title="在光标后重复插入选区"
+                  disabled={!activeChapter}
+                  onClick={() => duplicateSelectionAfterCaret()}
+                >
+                  ⎘
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn editor-xy-inline-icon"
+                  title="全选"
+                  disabled={!activeChapter}
+                  onClick={() => editorRef.current?.selectAll()}
+                >
+                  ▣
+                </button>
+                <button
+                  type="button"
+                  className={cn("icon-btn editor-xy-inline-icon", findOpen && "is-on")}
+                  title="查找 / 替换"
+                  disabled={!activeChapter}
+                  onClick={() => setFindOpen((v) => !v)}
+                >
+                  ⌕
+                </button>
+                <button
+                  type="button"
+                  className={cn("icon-btn editor-xy-inline-icon", bookSearchOpen && "is-on")}
+                  title="全书搜索"
+                  disabled={!activeChapter}
+                  onClick={() => (bookSearchOpen ? closeBookSearch() : openBookSearch())}
+                >
+                  ⌁
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn editor-xy-inline-icon"
+                  title="章节历史"
+                  disabled={!activeChapter}
+                  onClick={() => setSnapshotOpen(true)}
+                >
+                  ⧗
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn editor-xy-inline-icon"
+                  title="保存章节快照"
+                  disabled={!activeChapter}
+                  onClick={() => void handleManualSnapshot()}
+                >
+                  ⧈
+                </button>
+                <button
+                  type="button"
+                  className="icon-btn editor-xy-inline-icon"
+                  title="概要总览"
+                  disabled={!workId}
+                  onClick={() => {
+                    if (!workId) return;
+                    window.location.href = `/work/${workId}/summary`;
+                  }}
+                >
+                  ≋
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "icon-btn editor-xy-inline-icon",
+                    rightRail.open && rightRail.activeTab === "bible" && "is-on",
+                  )}
+                  title="设定（本章圣经）"
+                  disabled={!activeChapter}
+                  onClick={() => toggleRightRailTab("bible")}
+                >
+                  ◎
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "icon-btn editor-xy-inline-icon",
+                    rightRail.open && rightRail.activeTab === "ref" && "is-on",
+                  )}
+                  title="参考"
+                  disabled={!activeChapter}
+                  onClick={() => toggleRightRailTab("ref")}
+                >
+                  ⌗
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "icon-btn editor-xy-inline-icon",
+                    rightRail.open && rightRail.activeTab === "ai" && "is-on",
+                  )}
+                  title="AI 侧栏"
+                  disabled={!activeChapter}
+                  onClick={() => toggleRightRailTab("ai")}
+                >
+                  ✦
+                </button>
+              </div>
+              <div className="editor-xy-inline-toolbar__right">
+                <div className="toolbar-more-wrap" ref={moreWrapRef}>
+                  <button
+                    type="button"
+                    className="icon-btn editor-xy-inline-icon"
+                    title="更多"
+                    aria-expanded={moreOpen}
+                    onClick={() => setMoreOpen((v) => !v)}
+                  >
+                    ···
+                  </button>
+                  {moreOpen ? (
+                    <div className="toolbar-more-menu" role="menu">
+                      <div className="toolbar-menu-label">纯文本</div>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreOpen(false);
+                          exportChapterTxt();
+                        }}
+                      >
+                        导出本章 .txt
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreOpen(false);
+                          void exportBookTxt();
+                        }}
+                      >
+                        导出全书 .txt
+                      </button>
+                      <div className="toolbar-menu-label">Word</div>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreOpen(false);
+                          void exportChapterDocx();
+                        }}
+                      >
+                        导出本章 .docx
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setMoreOpen(false);
+                          void exportBookDocx();
+                        }}
+                      >
+                        导出全书 .docx
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
             <div
               className="editor-paper card"
               role="region"
               aria-label="正文纸面"
               data-paper-tint={paperTint}
-              style={
-                editorAutoWidth
-                  ? {
-                      width: "100%",
-                      maxWidth: "100%",
-                      boxSizing: "border-box",
-                    }
-                  : {
-                      width: "100%",
-                      maxWidth: `${Math.min(editorMaxWidthPx, EDITOR_AUTO_MAX_CAP_PX)}px`,
-                      marginLeft: "auto",
-                      marginRight: "auto",
-                      boxSizing: "border-box",
-                    }
-              }
             >
               {activeChapter ? (
                 <div className="editor-chapter-title" aria-label="当前章节标题">
@@ -2329,6 +2515,7 @@ export function EditorPage() {
                   {chapterWords.toLocaleString()}
                 </div>
               ) : null}
+            </div>
             </div>
             </div>
           </div>
@@ -2423,7 +2610,7 @@ export function EditorPage() {
                     } catch (e) {
                       if (isFirstAiGateCancelledError(e)) return;
                       if (e instanceof DOMException && e.name === "AbortError") return;
-                      window.alert(e instanceof Error ? e.message : "生成失败");
+                      toast.error(e instanceof Error ? e.message : "生成失败");
                     } finally {
                       setSummaryAiBusy(false);
                       summaryAiAbortRef.current = null;
@@ -2481,7 +2668,7 @@ export function EditorPage() {
                       setSummaryOpen(false);
                     } catch (e) {
                       if (isChapterSaveConflictError(e)) {
-                        window.alert("概要保存冲突：请关闭弹窗后「重新载入本章」再试。");
+                        toast.error("概要保存冲突：请关闭弹窗后「重新载入本章」再试。");
                       }
                     }
                   })();

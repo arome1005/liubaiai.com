@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { Toaster } from "./components/ui/sonner";
 import { LibraryPage } from "./pages/LibraryPage";
 import { LogicPage as _LogicPageDeprecated } from "./pages/LogicPage"; // @deprecated — replaced by V0TuiyanPage at /logic
 import { InspirationPage } from "./pages/InspirationPage";
@@ -73,6 +74,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      <Toaster position="top-center" richColors />
       <FirstAiGateHost />
       <InspirationGlobalCapture />
       <RegisterDemoPackEffect />

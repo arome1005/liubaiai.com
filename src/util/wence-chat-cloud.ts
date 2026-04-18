@@ -9,7 +9,7 @@ export type WenceCloudSyncResult = {
 };
 
 export function canSyncWenceToCloud(settings: AiSettings): boolean {
-  // 问策会话包含用户正文/对话，视为“云端上传范围”一部分；仅在用户明确允许时开启。
+  // 问策会话包含用户正文/对话，视为"云端上传范围"一部分；仅在用户明确允许时开启。
   return Boolean(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);
 }
 

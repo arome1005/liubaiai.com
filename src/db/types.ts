@@ -42,6 +42,16 @@ export type WorkStyleCard = {
   styleAnchor: string;
   /** 其他硬约束（可选） */
   extraRules: string;
+  /** 句节奏描述（如：多用短句，节奏急促；长句收尾） */
+  sentenceRhythm?: string;
+  /** 标点偏好（如：善用破折号表停顿，少用感叹号） */
+  punctuationStyle?: string;
+  /** 对话密度 */
+  dialogueDensity?: "low" | "medium" | "high";
+  /** 情绪温度（叙述风格冷暖） */
+  emotionStyle?: "cold" | "neutral" | "warm";
+  /** 叙述距离 */
+  narrativeDistance?: "omniscient" | "limited" | "deep_pov";
   updatedAt: number;
 };
 
@@ -72,7 +82,7 @@ export type Chapter = {
    * 概要覆盖范围（流水线元数据，步 22）。
    * - 约定为章节序号（`Chapter.order`）的闭区间 [from, to]
    * - 单章概要：from=to=当前章 order
-   * - 预留给“每 N 章合并摘要”等流水线
+   * - 预留给"每 N 章合并摘要"等流水线
    */
   summaryScopeFromOrder?: number;
   summaryScopeToOrder?: number;
@@ -235,7 +245,7 @@ export type BibleTimelineEvent = {
 
 /**
  * 推演地图：地点节点（步 34 后续）。
- * - 独立于世界观条目；用于“地点-事件”表与地图视图。
+ * - 独立于世界观条目；用于"地点-事件"表与地图视图。
  * - x/y 为 0~100 的百分比坐标（便于 SVG 画布自适应）。
  */
 export type LogicPlaceNode = {
@@ -466,7 +476,7 @@ export type InspirationFragment = {
   collectionId: string | null;
   /** 可选标题（UI 列表/详情展示；不再通过 body 前缀 hack） */
   title?: string;
-  /** 来源：自由文本（如“微信读书”“随手记”） */
+  /** 来源：自由文本（如"微信读书""随手记"） */
   sourceName?: string;
   /** 来源 URL：书签/引用等 */
   sourceUrl?: string;
@@ -573,7 +583,12 @@ export type ReferenceSearchHit = {
 };
 
 /** 提炼要点类型 */
-export type ReferenceExtractType = "characters" | "worldbuilding" | "plot_beats" | "craft";
+export type ReferenceExtractType =
+  | "characters"
+  | "worldbuilding"
+  | "plot_beats"
+  | "craft"
+  | "key_cards";
 
 /**
  * 提炼要点条目 —— AI 对参考书目的结构化摘取（P1-03）。

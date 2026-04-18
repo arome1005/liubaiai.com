@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { listChapters, listWorks } from "../db/repo";
+import {
+  listBibleCharacters,
+  listBibleWorldEntries,
+  listBibleGlossaryTerms,
+  listBibleTimelineEvents,
+  listChapters,
+  listReferenceLibrary,
+  listWorks,
+} from "../db/repo";
 import { cn } from "../lib/utils";
 import { shortcutModifierSymbol } from "../util/keyboardHints";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -242,8 +250,73 @@ export function GlobalCommandPalette(props: {
             }));
           }),
         );
+
+        // 本书锦囊条目（当前 workId）：条目级跳转与定位
+        const bibleRows: CommandRow[] = [];
+        if (workId) {
+          const [chars, world, glossary, timeline] = await Promise.all([
+            listBibleCharacters(workId),
+            listBibleWorldEntries(workId),
+            listBibleGlossaryTerms(workId),
+            listBibleTimelineEvents(workId),
+          ]);
+          for (const c of chars.slice(0, 120)) {
+            bibleRows.push({
+              id: `bible-char-${c.id}`,
+              label: `锦囊 · 人物 · ${c.name}`,
+              keywords: `${c.name} 人物 锦囊 设定`,
+              path: `/work/${workId}/bible?tab=characters&entry=${encodeURIComponent(c.id)}`,
+              group: "锦囊（当前作品）",
+            });
+          }
+          for (const w of world.slice(0, 120)) {
+            bibleRows.push({
+              id: `bible-world-${w.id}`,
+              label: `锦囊 · 世界观 · ${w.title}`,
+              keywords: `${w.title} ${w.entryKind} 世界观 锦囊 设定`,
+              path: `/work/${workId}/bible?tab=world&entry=${encodeURIComponent(w.id)}`,
+              group: "锦囊（当前作品）",
+            });
+          }
+          for (const g of glossary.slice(0, 160)) {
+            bibleRows.push({
+              id: `bible-glossary-${g.id}`,
+              label: `锦囊 · 术语 · ${g.term}`,
+              keywords: `${g.term} 术语 词典 锦囊 设定`,
+              path: `/work/${workId}/bible?tab=glossary&entry=${encodeURIComponent(g.id)}`,
+              group: "锦囊（当前作品）",
+            });
+          }
+          for (const ev of timeline.slice(0, 160)) {
+            bibleRows.push({
+              id: `bible-time-${ev.id}`,
+              label: `锦囊 · 时间线 · ${ev.label}`,
+              keywords: `${ev.label} 时间线 锦囊 设定`,
+              path: `/work/${workId}/bible?tab=timeline&entry=${encodeURIComponent(ev.id)}`,
+              group: "锦囊（当前作品）",
+            });
+          }
+        }
+
+        // 藏经书目（全局）：条目级跳转
+        const refRows: CommandRow[] = [];
+        try {
+          const refs = await listReferenceLibrary();
+          for (const r of refs.slice(0, 200)) {
+            refRows.push({
+              id: `ref-${r.id}`,
+              label: `藏经 · ${r.title}`,
+              keywords: `${r.title} 藏经 参考 资料`,
+              path: `/reference?ref=${encodeURIComponent(r.id)}&ord=0`,
+              group: "藏经",
+            });
+          }
+        } catch {
+          // ignore
+        }
+
         if (!cancelled) {
-          setIndexRows([...workRows, ...chapterBatches.flat()]);
+          setIndexRows([...workRows, ...chapterBatches.flat(), ...bibleRows, ...refRows]);
           setIndexLoading(false);
         }
       } catch {
