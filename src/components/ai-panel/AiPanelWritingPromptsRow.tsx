@@ -1,3 +1,4 @@
+import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { GlobalPromptTemplate } from "../../db/types";
@@ -8,20 +9,104 @@ import {
 } from "../PromptPicker";
 import { GlobalPromptQuickDialog } from "../prompt-quick/GlobalPromptQuickDialog";
 
+export type WritingPromptMode = "quick" | "custom";
+
 export type AiPanelWritingPromptsRowProps = {
-  /** 当前选中的文风模板 id（用于快捷窗高亮） */
   selectedStyleTemplateId: string | null;
-  /** 当前选中的要求模板 id */
   selectedReqTemplateId: string | null;
-  /** 展示在按钮上的标题（选词后） */
   styleTemplateTitle: string | null;
   reqTemplateTitle: string | null;
   onStyleTemplatePick: (template: GlobalPromptTemplate | null) => void;
   onReqTemplatePick: (template: GlobalPromptTemplate | null) => void;
+  styleMode: WritingPromptMode;
+  onStyleModeChange: (mode: WritingPromptMode) => void;
+  styleCustomText: string;
+  onStyleCustomTextChange: (v: string) => void;
+  reqMode: WritingPromptMode;
+  onReqModeChange: (mode: WritingPromptMode) => void;
+  reqCustomText: string;
+  onReqCustomTextChange: (v: string) => void;
 };
 
+type SectionProps = {
+  label: string;
+  mode: WritingPromptMode;
+  onModeChange: (m: WritingPromptMode) => void;
+  templateTitle: string | null;
+  customText: string;
+  onCustomTextChange: (v: string) => void;
+  onOpenPicker: () => void;
+  onBrowse: () => void;
+  pickerPlaceholder: string;
+  customPlaceholder: string;
+};
+
+function WritingPromptSection(props: SectionProps) {
+  const {
+    label,
+    mode,
+    onModeChange,
+    templateTitle,
+    customText,
+    onCustomTextChange,
+    onOpenPicker,
+    onBrowse,
+    pickerPlaceholder,
+    customPlaceholder,
+  } = props;
+
+  return (
+    <div className="wprow-section">
+      <div className="small muted" style={{ marginBottom: 5 }}>
+        {label}
+      </div>
+      <div className="wprow-tabs">
+        <button
+          type="button"
+          className={`wprow-tab${mode === "quick" ? " wprow-tab--active" : ""}`}
+          onClick={() => onModeChange("quick")}
+        >
+          快捷选项
+        </button>
+        <button
+          type="button"
+          className={`wprow-tab${mode === "custom" ? " wprow-tab--active" : ""}`}
+          onClick={() => onModeChange("custom")}
+        >
+          自定义
+        </button>
+        <button type="button" className="wprow-tab wprow-tab--more" onClick={onBrowse}>
+          更多
+        </button>
+      </div>
+
+      {mode === "quick" ? (
+        <button
+          type="button"
+          className="wprow-selector"
+          data-placeholder={!templateTitle ? "true" : undefined}
+          onClick={onOpenPicker}
+        >
+          <span className="wprow-selector-label">
+            {templateTitle || pickerPlaceholder}
+          </span>
+          <ChevronDown size={13} className="wprow-selector-chevron" />
+        </button>
+      ) : (
+        <textarea
+          className="wprow-custom"
+          placeholder={customPlaceholder}
+          value={customText}
+          onChange={(e) => onCustomTextChange(e.target.value)}
+          rows={3}
+        />
+      )}
+    </div>
+  );
+}
+
 /**
- * AI 侧栏「写作提示词」：文风 / 要求，与文章概要批量选词同套快捷窗交互
+ * AI 侧栏「写作提示词」：文风 / 要求，带 快捷选项 / 自定义 / 更多 三标签
  */
 export function AiPanelWritingPromptsRow(props: AiPanelWritingPromptsRowProps) {
   const {
@@ -31,6 +116,14 @@ export function AiPanelWritingPromptsRow(props: AiPanelWritingPromptsRowProps) {
     reqTemplateTitle,
     onStyleTemplatePick,
     onReqTemplatePick,
+    styleMode,
+    onStyleModeChange,
+    styleCustomText,
+    onStyleCustomTextChange,
+    reqMode,
+    onReqModeChange,
+    reqCustomText,
+    onReqCustomTextChange,
   } = props;
 
   const navigate = useNavigate();
@@ -41,27 +134,31 @@ export function AiPanelWritingPromptsRow(props: AiPanelWritingPromptsRowProps) {
 
   return (
     <div className="ai-panel-writing-prompts">
-      <div className="small muted" style={{ marginBottom: 6 }}>
-        写作提示词
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
-        <button type="button" className="btn" onClick={() => setStyleOpen(true)} title="从提示词库选择写作风格类模板">
-          文风
-          {styleTemplateTitle ? (
-            <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
-              · {styleTemplateTitle.length > 14 ? `${styleTemplateTitle.slice(0, 14)}…` : styleTemplateTitle}
-            </span>
-          ) : null}
-        </button>
-        <button type="button" className="btn" onClick={() => setReqOpen(true)} title="从提示词库选择续写/开篇/人设/世界观等要求类模板">
-          要求
-          {reqTemplateTitle ? (
-            <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
-              · {reqTemplateTitle.length > 14 ? `${reqTemplateTitle.slice(0, 14)}…` : reqTemplateTitle}
-            </span>
-          ) : null}
-        </button>
-      </div>
+      <WritingPromptSection
+        label="写作风格"
+        mode={styleMode}
+        onModeChange={onStyleModeChange}
+        templateTitle={styleTemplateTitle}
+        customText={styleCustomText}
+        onCustomTextChange={onStyleCustomTextChange}
+        onOpenPicker={() => setStyleOpen(true)}
+        onBrowse={browse}
+        pickerPlaceholder="选择写作风格…"
+        customPlaceholder="输入自定义写作风格要求…"
+      />
+
+      <WritingPromptSection
+        label="写作要求"
+        mode={reqMode}
+        onModeChange={onReqModeChange}
+        templateTitle={reqTemplateTitle}
+        customText={reqCustomText}
+        onCustomTextChange={onReqCustomTextChange}
+        onOpenPicker={() => setReqOpen(true)}
+        onBrowse={browse}
+        pickerPlaceholder="选择写作要求…"
+        customPlaceholder="输入自定义写作要求…"
+      />
 
       <GlobalPromptQuickDialog
         open={styleOpen}

@@ -223,6 +223,31 @@ export type WritingSidepanelAssembleInput = {
   chapterBibleInjectMask?: Partial<Record<ChapterBibleFieldKey, boolean>>;
   /** 全书锦囊 Markdown 板块子集；缺省全注入 */
   workBibleSectionMask?: Record<string, boolean>;
+
+  // --- 以下为 AiPanel 报错缺失的字段 ---
+  linkedChapterSummaryText?: string;
+  linkedChapterFullText?: string;
+  linkedChapterSummaryCount?: number;
+  linkedChapterFullCount?: number;
+  /** 章纲粘贴（outline 模式下的提纲输入） */
+  chapterOutlinePaste?: string;
+  /** 本章书斋人物卡（学习模式） */
+  chapterStudyCharacterCards?: WritingStudyCharacterCardSlice[];
+  /** 本章书斋 NPC 备注（学习模式，npc 来源时） */
+  chapterStudyNpcNotes?: string;
+  /** 书斋术语挑选模式 */
+  studyGlossaryMode?: string;
+  /** 书斋术语挑选列表 */
+  chapterStudyGlossaryTerms?: WritingGlossaryTermSlice[];
+};
+
+/** 装配器用的书斋人物卡切片 */
+export type WritingStudyCharacterCardSlice = {
+  name: string;
+  motivation: string;
+  relationships: string;
+  voiceNotes: string;
+  taboos: string;
 };
 
 function writingSidepanelTask(mode: WritingSkillMode, selectedText: string): { task: string; appendSelectedForRewrite: boolean } {
@@ -638,6 +663,16 @@ export type WritingMaterialsSummaryParams = {
   workBibleSectionMask?: Record<string, boolean>;
   approxInjectChars: number;
   approxInjectTokens: number;
+  /** 书斋人物卡数量 */
+  studyCharacterCardCount?: number;
+  /** 书斋人物来源 */
+  studyCharacterSource?: string;
+  /** 书斋 NPC 备注字符数 */
+  studyNpcNoteChars?: number;
+  /** 书斋术语挑选模式 */
+  studyGlossaryMode?: string;
+  /** 书斋术语挑选数量 */
+  studyGlossaryPickCount?: number;
 };
 
 export function buildWritingSidepanelMaterialsSummaryLines(p: WritingMaterialsSummaryParams): string[] {

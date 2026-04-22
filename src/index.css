@@ -5060,6 +5060,12 @@ select {
   background: color-mix(in srgb, var(--surface) 93%, var(--surface-2));
 }
 
+.ai-panel-section--flat {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
 .ai-panel-section-title {
   margin: 0 0 0.45rem;
   font-size: 0.68rem;
@@ -5272,6 +5278,215 @@ select {
 .ai-panel-error {
   color: #b91c1c;
   margin: 0.4rem 0;
+}
+
+/* ── 写作提示词行（快捷选项 / 自定义 / 更多 三标签） ── */
+.ai-panel-writing-prompts {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.wprow-section {
+  margin-bottom: 0.55rem;
+}
+
+.wprow-tabs {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 6px;
+}
+
+.wprow-tab {
+  appearance: none;
+  padding: 0.18rem 0.55rem;
+  font: inherit;
+  font-size: 0.73rem;
+  font-weight: 500;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.wprow-tab:hover {
+  border-color: color-mix(in srgb, var(--border) 200%, transparent);
+  color: var(--fg);
+}
+
+.wprow-tab--active {
+  background: #10b981;
+  border-color: #10b981;
+  color: #fff;
+  font-weight: 600;
+}
+
+.wprow-tab--active:hover {
+  background: #0ea572;
+  border-color: #0ea572;
+  color: #fff;
+}
+
+.wprow-tab--more {
+  margin-left: auto;
+}
+
+.wprow-selector {
+  appearance: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--fg);
+  text-align: left;
+  transition: border-color 0.12s;
+}
+
+.wprow-selector:hover {
+  border-color: color-mix(in srgb, var(--border) 180%, transparent);
+}
+
+.wprow-selector-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+.wprow-selector[data-placeholder="true"] .wprow-selector-label {
+  color: var(--muted);
+}
+
+.wprow-selector-chevron {
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+
+.wprow-custom {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.35rem 0.55rem;
+  font: inherit;
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--fg);
+  resize: vertical;
+  min-height: 64px;
+  transition: border-color 0.12s;
+}
+
+.wprow-custom:focus {
+  outline: none;
+  border-color: #10b981;
+}
+
+/* ── 书斋人物卡 / 词条卡 下拉选择 ── */
+.study-dropdown {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.study-dropdown-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 5px;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.study-search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.45rem;
+  font: inherit;
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--fg);
+  transition: border-color 0.12s;
+}
+
+.study-search-input::placeholder {
+  color: var(--muted);
+  font-size: 0.73rem;
+}
+
+.study-search-input:focus {
+  outline: none;
+  border-color: #10b981;
+}
+
+.ai-panel-study-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.ai-panel-study-chip {
+  appearance: none;
+  padding: 0.18rem 0.55rem;
+  font: inherit;
+  font-size: 0.73rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.ai-panel-study-chip:hover {
+  border-color: color-mix(in srgb, var(--border) 200%, transparent);
+  color: var(--fg);
+}
+
+.ai-panel-study-chip[data-on="true"] {
+  background: #10b981;
+  border-color: #10b981;
+  color: #fff;
+  font-weight: 600;
+}
+
+.ai-panel-study-chip[data-on="true"]:hover {
+  background: #0ea572;
+  border-color: #0ea572;
+}
+
+.study-empty {
+  font-size: 0.73rem;
+  color: var(--muted);
+  margin: 0;
+  padding: 0.15rem 0;
+}
+
+.study-hint {
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin: 0;
+  opacity: 0.75;
 }
 
 .chapter-sidebar {

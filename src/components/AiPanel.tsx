@@ -74,6 +74,7 @@ import type {
   AiPanelWorkWritingVars,
   AiPanelWorkWritingVarsPatch,
 } from "./ai-panel/types";
+import { Bot } from "lucide-react";
 
 function providerLogoImgSrc(p: AiProviderId): string | null {
   switch (p) {
@@ -228,21 +229,24 @@ export const AiPanel = memo(function AiPanelBase(props: {
       ragWorkSources: typeof up === "function" ? up(ragWorkSources) : up,
     });
   };
-  const setNeighborSummaryIncludeByIdUp = (up: SetStateAction<Record<string, boolean>>) => {
+  const _setNeighborSummaryIncludeByIdUp = (up: SetStateAction<Record<string, boolean>>) => {
     patchRagInject({
       neighborSummaryIncludeById: typeof up === "function" ? up(neighborSummaryIncludeById) : up,
     });
   };
-  const setChapterBibleInjectMaskUp = (up: SetStateAction<Record<ChapterBibleFieldKey, boolean>>) => {
+  void _setNeighborSummaryIncludeByIdUp;
+  const _setChapterBibleInjectMaskUp = (up: SetStateAction<Record<ChapterBibleFieldKey, boolean>>) => {
     patchRagInject({
       chapterBibleInjectMask: typeof up === "function" ? up(chapterBibleInjectMask) : up,
     });
   };
-  const setWorkBibleSectionMaskUp = (up: SetStateAction<Record<string, boolean>>) => {
+  void _setChapterBibleInjectMaskUp;
+  const _setWorkBibleSectionMaskUp = (up: SetStateAction<Record<string, boolean>>) => {
     patchRagInject({
       workBibleSectionMask: typeof up === "function" ? up(workBibleSectionMask) : up,
     });
   };
+  void _setWorkBibleSectionMaskUp;
 
   const GEMINI_MIND = {
     初见: "gemini-3.1-flash-lite-preview",
@@ -250,13 +254,15 @@ export const AiPanel = memo(function AiPanelBase(props: {
     化境: "gemini-3.1-pro-preview",
   } as const;
 
-  const GEMINI_GEAR_KEYS = ["初见", "入微", "化境"] as const;
+  const _GEMINI_GEAR_KEYS = ["初见", "入微", "化境"] as const;
+  void _GEMINI_GEAR_KEYS;
 
-  function geminiGearIndex(model: string): number {
+  function _geminiGearIndex(model: string): number {
     if (model === GEMINI_MIND["初见"]) return 0;
     if (model === GEMINI_MIND["入微"]) return 1;
     return 2;
   }
+  void _geminiGearIndex;
 
   function tempBand(t: number): "沉稳" | "意兴渐起" | "灵感喷发" {
     if (t <= 0.7) return "沉稳";
@@ -420,6 +426,10 @@ export const AiPanel = memo(function AiPanelBase(props: {
   const [selectedReqTemplateId, setSelectedReqTemplateId] = useState<string | null>(null);
   const [styleTemplateTitle, setStyleTemplateTitle] = useState<string | null>(null);
   const [reqTemplateTitle, setReqTemplateTitle] = useState<string | null>(null);
+  const [styleMode, setStyleMode] = useState<"quick" | "custom">("quick");
+  const [reqMode, setReqMode] = useState<"quick" | "custom">("quick");
+  const [styleCustomText, setStyleCustomText] = useState("");
+  const [reqCustomText, setReqCustomText] = useState("");
 
   // 书斋：本章勾选（localStorage）；新章节给一套默认推荐（可改）
   useEffect(() => {
@@ -557,6 +567,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [biblePreview, setBiblePreview] = useState<{ text: string; chars: number } | null>(null);
   const [bibleLoading, setBibleLoading] = useState(false);
+  void bibleLoading;
   const [linkedChaptersTick, setLinkedChaptersTick] = useState(0);
 
   useEffect(() => {
@@ -679,10 +690,12 @@ export const AiPanel = memo(function AiPanelBase(props: {
 
   const composedUserHint = useMemo(() => {
     const parts: string[] = [];
-    if (writingStyleInject.trim()) parts.push(`【文风】\n${writingStyleInject.trim()}`);
-    if (writingReqInject.trim()) parts.push(`【要求】\n${writingReqInject.trim()}`);
+    const styleText = styleMode === "custom" ? styleCustomText : writingStyleInject;
+    const reqText = reqMode === "custom" ? reqCustomText : writingReqInject;
+    if (styleText.trim()) parts.push(`【文风】\n${styleText.trim()}`);
+    if (reqText.trim()) parts.push(`【要求】\n${reqText.trim()}`);
     return parts.join("\n\n");
-  }, [writingReqInject, writingStyleInject]);
+  }, [writingReqInject, writingStyleInject, styleMode, reqMode, styleCustomText, reqCustomText]);
 
   const onStyleTemplatePick = useCallback(
     (t: GlobalPromptTemplate | null) => {
@@ -1478,17 +1491,30 @@ export const AiPanel = memo(function AiPanelBase(props: {
       )}
 
       <div className="ai-panel-body-stack">
-        <section className="ai-panel-section ai-panel-section--flat ai-panel-section--model-line" aria-label="AI 模型">
-          <div className="ai-panel-model-line">
-            <span className="ai-panel-model-line__k">AI模型</span>
+        <section className="ai-panel-section ai-panel-section--flat" aria-label="AI 模型选择">
+          <div className="flex items-center justify-between gap-2 px-0.5 py-1">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground/70 tracking-wider">
+              <Bot className="h-3 w-3" />
+              AI模型
+            </span>
             <button
               type="button"
-              className="ai-panel-model-line__v"
-              title={PROVIDER_UI[settings.provider]?.tip ?? "选择模型与提供方"}
               onClick={() => setProviderPickerOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/50 bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-primary active:scale-[0.98]"
             >
-              <AiProviderLogo provider={settings.provider} />
-              <span>{PROVIDER_UI[settings.provider]?.label ?? settings.provider}</span>
+              {(() => {
+                const logoSrc = providerLogoImgSrc(settings.provider);
+                return (
+                  <span className="flex items-center gap-1.5">
+                    {logoSrc ? (
+                      <img src={logoSrc} alt="" className="h-3.5 w-3.5 rounded-sm object-contain" />
+                    ) : null}
+                    <span className="font-semibold text-foreground">
+                      {PROVIDER_UI[settings.provider]?.label ?? settings.provider}
+                    </span>
+                  </span>
+                );
+              })()}
             </button>
           </div>
         </section>
@@ -1863,6 +1889,14 @@ export const AiPanel = memo(function AiPanelBase(props: {
         reqTemplateTitle={reqTemplateTitle}
         onStyleTemplatePick={onStyleTemplatePick}
         onReqTemplatePick={onReqTemplatePick}
+        styleMode={styleMode}
+        onStyleModeChange={setStyleMode}
+        styleCustomText={styleCustomText}
+        onStyleCustomTextChange={setStyleCustomText}
+        reqMode={reqMode}
+        onReqModeChange={setReqMode}
+        reqCustomText={reqCustomText}
+        onReqCustomTextChange={setReqCustomText}
       />
 
       <label className="ai-panel-field">

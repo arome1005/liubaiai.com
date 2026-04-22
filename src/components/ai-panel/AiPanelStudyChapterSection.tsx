@@ -1,10 +1,80 @@
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { BibleCharacter, BibleGlossaryTerm } from "../../db/types";
 
-const CHAR_PLACEHOLDER =
-  "只勾选本章会出场、会被对白点到名的角色；不会落笔的不必选，少占上下文更省字。\n\n在此输入关键字可筛选列表（可选）。";
-const TERM_PLACEHOLDER =
-  "只勾选本章写法里用得到的专有名词/称谓；用不到的别堆满，上下文更干净。\n\n在此输入关键字可筛选列表（可选）。";
+function PickerDropdown(props: {
+  label: string;
+  placeholder: string;
+  items: { id: string; label: string; title?: string }[];
+  pickedIds: string[];
+  onToggle: (id: string) => void;
+}) {
+  const { label, placeholder, items, pickedIds, onToggle } = props;
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return items;
+    return items.filter((it) => it.label.toLowerCase().includes(s) || it.title?.toLowerCase().includes(s));
+  }, [items, q]);
+
+  const pickedCount = pickedIds.length;
+
+  return (
+    <div className="study-dropdown">
+      <button
+        type="button"
+        className="wprow-selector"
+        data-placeholder={pickedCount === 0 ? "true" : undefined}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="wprow-selector-label">
+          {pickedCount > 0 ? `已选 ${pickedCount} 个${label}` : placeholder}
+        </span>
+        {open
+          ? <ChevronUp size={13} className="wprow-selector-chevron" />
+          : <ChevronDown size={13} className="wprow-selector-chevron" />}
+      </button>
+
+      {open && (
+        <div className="study-dropdown-panel">
+          <input
+            type="text"
+            className="study-search-input"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="输入关键字筛选…"
+            spellCheck={false}
+            autoFocus
+          />
+          <div className="ai-panel-study-chips" role="list">
+            {items.length === 0 ? (
+              <p className="study-empty">暂无{label}，前往库中添加。</p>
+            ) : filtered.length === 0 ? (
+              <p className="study-empty">无匹配结果。</p>
+            ) : filtered.map((it) => {
+              const on = pickedIds.includes(it.id);
+              return (
+                <button
+                  key={it.id}
+                  type="button"
+                  role="listitem"
+                  className="ai-panel-study-chip"
+                  data-on={on ? "true" : "false"}
+                  title={it.title ?? it.label}
+                  onClick={() => onToggle(it.id)}
+                >
+                  {it.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function AiPanelStudyChapterSection(props: {
   characters: BibleCharacter[];
@@ -18,24 +88,6 @@ export function AiPanelStudyChapterSection(props: {
   pickedGlossaryIds: string[];
   onPickedGlossaryIdsChange: (next: string[]) => void;
 }) {
-  const [qChar, setQChar] = useState("");
-  const [qTerm, setQTerm] = useState("");
-
-  const filteredCharacters = useMemo(() => {
-    const q = qChar.trim().toLowerCase();
-    if (!q) return props.characters;
-    return props.characters.filter((c) => {
-      const blob = `${c.name}\n${c.motivation}\n${c.relationships}\n${c.voiceNotes}\n${c.taboos}`.toLowerCase();
-      return blob.includes(q);
-    });
-  }, [props.characters, qChar]);
-
-  const filteredTerms = useMemo(() => {
-    const q = qTerm.trim().toLowerCase();
-    if (!q) return props.glossaryTerms;
-    return props.glossaryTerms.filter((t) => `${t.term}\n${t.note}`.toLowerCase().includes(q));
-  }, [props.glossaryTerms, qTerm]);
-
   function toggleId(id: string, cur: string[], set: (next: string[]) => void) {
     const s = new Set(cur);
     if (s.has(id)) s.delete(id);
@@ -43,106 +95,72 @@ export function AiPanelStudyChapterSection(props: {
     set([...s]);
   }
 
+  const charItems = useMemo(
+    () => props.characters.map((c) => ({ id: c.id, label: c.name.trim() || "（未命名）" })),
+    [props.characters],
+  );
+
+  const termItems = useMemo(
+    () => props.glossaryTerms.map((t) => {
+      const cat = t.category === "name" ? "人名" : t.category === "dead" ? "已死" : "术语";
+      return { id: t.id, label: t.term.trim() || "（未命名）", title: `${t.term}（${cat}）` };
+    }),
+    [props.glossaryTerms],
+  );
+
   return (
     <section className="ai-panel-section ai-panel-section--flat" aria-label="本章人物与词条">
-      <div className="ai-panel-row ai-panel-row--flush" style={{ alignItems: "flex-start" }}>
-        <div className="flex flex-wrap items-center gap-1">
+      {/* ── 人物卡 / NPC ── */}
+      <div className="wprow-section">
+        <div className="wprow-tabs">
           <button
             type="button"
-            className="ai-panel-study-pill"
-            data-on={props.characterSource === "cards" ? "true" : "false"}
+            className={`wprow-tab${props.characterSource === "cards" ? " wprow-tab--active" : ""}`}
             onClick={() => props.onCharacterSourceChange("cards")}
           >
             人物卡
           </button>
           <button
             type="button"
-            className="ai-panel-study-pill"
-            data-on={props.characterSource === "npc" ? "true" : "false"}
+            className={`wprow-tab${props.characterSource === "npc" ? " wprow-tab--active" : ""}`}
             onClick={() => props.onCharacterSourceChange("npc")}
           >
             NPC
           </button>
         </div>
+
+        {props.characterSource === "cards" ? (
+          <PickerDropdown
+            label="人物"
+            placeholder="选择本章出场人物…"
+            items={charItems}
+            pickedIds={props.pickedCharacterIds}
+            onToggle={(id) => toggleId(id, props.pickedCharacterIds, props.onPickedCharacterIdsChange)}
+          />
+        ) : (
+          <textarea
+            className="wprow-custom"
+            rows={3}
+            value={props.npcText}
+            onChange={(e) => props.onNpcTextChange(e.target.value)}
+            placeholder="手写临时角色、关系补充…"
+            aria-label="本章 NPC"
+          />
+        )}
       </div>
 
-      {props.characterSource === "cards" ? (
-        <>
-          <label className="ai-panel-field ai-panel-study-pick-field">
-            <textarea
-              value={qChar}
-              onChange={(e) => setQChar(e.target.value)}
-              placeholder={CHAR_PLACEHOLDER}
-              rows={4}
-              spellCheck={false}
-              aria-label="人物卡：说明与筛选关键字"
-            />
-          </label>
-          <div className="ai-panel-study-chips" role="list">
-            {filteredCharacters.map((c) => {
-              const on = props.pickedCharacterIds.includes(c.id);
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  role="listitem"
-                  className="ai-panel-study-chip truncate"
-                  data-on={on ? "true" : "false"}
-                  title={c.name}
-                  onClick={() => toggleId(c.id, props.pickedCharacterIds, props.onPickedCharacterIdsChange)}
-                >
-                  {c.name.trim() || "（未命名）"}
-                </button>
-              );
-            })}
-          </div>
-        </>
-      ) : (
-        <textarea
-          className="ai-panel-study-npc"
-          rows={3}
-          value={props.npcText}
-          onChange={(e) => props.onNpcTextChange(e.target.value)}
-          placeholder="手写临时角色、关系补充…"
-          aria-label="本章 NPC"
+      {/* ── 词条卡 ── */}
+      <div className="wprow-section">
+        <div className="wprow-tabs" style={{ marginBottom: 6 }}>
+          <span className="wprow-tab wprow-tab--active" style={{ cursor: "default" }}>词条卡</span>
+        </div>
+        <PickerDropdown
+          label="词条"
+          placeholder="选择本章用到的词条…"
+          items={termItems}
+          pickedIds={props.pickedGlossaryIds}
+          onToggle={(id) => toggleId(id, props.pickedGlossaryIds, props.onPickedGlossaryIdsChange)}
         />
-      )}
-
-      <div className="ai-panel-study-split">
-        <div className="ai-panel-row ai-panel-row--flush" style={{ alignItems: "center" }}>
-          <span className="small muted" style={{ paddingTop: 1 }}>
-            词条卡
-          </span>
-        </div>
-        <label className="ai-panel-field ai-panel-study-pick-field">
-          <textarea
-            value={qTerm}
-            onChange={(e) => setQTerm(e.target.value)}
-            placeholder={TERM_PLACEHOLDER}
-            rows={4}
-            spellCheck={false}
-            aria-label="词条卡：说明与筛选关键字"
-          />
-        </label>
-        <div className="ai-panel-study-chips" role="list">
-          {filteredTerms.map((t) => {
-            const on = props.pickedGlossaryIds.includes(t.id);
-            const cat = t.category === "name" ? "人名" : t.category === "dead" ? "已死" : "术语";
-            return (
-              <button
-                key={t.id}
-                type="button"
-                role="listitem"
-                className="ai-panel-study-chip truncate"
-                data-on={on ? "true" : "false"}
-                title={`${t.term}（${cat}）`}
-                onClick={() => toggleId(t.id, props.pickedGlossaryIds, props.onPickedGlossaryIdsChange)}
-              >
-                {t.term.trim() || "（未命名）"}
-              </button>
-            );
-          })}
-        </div>
       </div>
     </section>
   );
