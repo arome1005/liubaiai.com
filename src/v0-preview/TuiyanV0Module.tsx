@@ -49,6 +49,7 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { LiubaiLogo } from "../components/LiubaiLogo";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Badge } from "../components/ui/badge";
@@ -805,7 +806,7 @@ function ChatMessageBubble({
           isUser ? "bg-primary/20" : "bg-muted",
         )}
       >
-        {isUser ? <User className="h-4 w-4 text-primary" /> : <Bot className="h-4 w-4 text-muted-foreground" />}
+        {isUser ? <User className="h-4 w-4 text-primary" /> : <LiubaiLogo className="h-4 w-4 text-muted-foreground" />}
       </div>
 
       {/* Content */}

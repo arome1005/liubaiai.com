@@ -53,6 +53,30 @@ export class WritingStoreHybrid implements WritingStore {
     }
   }
 
+  /**
+   * 全局提示词 id 去重合并：优先远端顺序，再补上仅存在于 IndexedDB 的行。
+   * 解决：写入 Supabase 后 warmLocal 已有数据，但 SELECT 因会话/RLS 短暂为空时列表仍可见。
+   */
+  private mergeGlobalPromptLists(
+    remote: GlobalPromptTemplate[],
+    local: GlobalPromptTemplate[],
+  ): GlobalPromptTemplate[] {
+    const seen = new Set<string>();
+    const out: GlobalPromptTemplate[] = [];
+    for (const t of remote) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      out.push(t);
+    }
+    for (const t of local) {
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
+      out.push(t);
+    }
+    out.sort((a, b) => a.sortOrder - b.sortOrder);
+    return out;
+  }
+
   /** 写操作成功后，静默更新本地 IndexedDB 缓存（不阻塞主流程，失败忽略）。 */
   private warmLocal(op: () => Promise<unknown>): void {
     op().catch(() => {});
@@ -585,10 +609,14 @@ export class WritingStoreHybrid implements WritingStore {
   // ── 全局提示词库（Sprint 1）─────────────────────────────────────────────────
 
   async listGlobalPromptTemplates(): Promise<GlobalPromptTemplate[]> {
-    return this.tryRemote(
-      () => this.remote.listGlobalPromptTemplates(),
-      () => this.local.listGlobalPromptTemplates(),
-    );
+    let remote: GlobalPromptTemplate[] = [];
+    try {
+      remote = await this.remote.listGlobalPromptTemplates();
+    } catch {
+      /* 网络/鉴权失败时 remote 置空，完全依赖 local */
+    }
+    const local = await this.local.listGlobalPromptTemplates();
+    return this.mergeGlobalPromptLists(remote, local);
   }
 
   async addGlobalPromptTemplate(
@@ -619,11 +647,14 @@ export class WritingStoreHybrid implements WritingStore {
   }
 
   async listApprovedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
-    // 已发布模板必须从远端获取（本地无他人数据）；离线时退化为本地 approved
-    return this.tryRemote(
-      () => this.remote.listApprovedPromptTemplates(),
-      () => this.local.listApprovedPromptTemplates(),
-    );
+    let remote: GlobalPromptTemplate[] = [];
+    try {
+      remote = await this.remote.listApprovedPromptTemplates();
+    } catch {
+      /* 同上 */
+    }
+    const local = await this.local.listApprovedPromptTemplates();
+    return this.mergeGlobalPromptLists(remote, local);
   }
 
   async listSubmittedPromptTemplates(): Promise<GlobalPromptTemplate[]> {

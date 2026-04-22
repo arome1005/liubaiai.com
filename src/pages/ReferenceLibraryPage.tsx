@@ -119,6 +119,7 @@ import {
 } from "lucide-react";
 import { PromptExtractDialog } from "../components/PromptExtractDialog";
 import { ReferenceAiChatDialog } from "../components/ReferenceAiChatDialog";
+
 import { parseReferenceKeyCardsFromExtractBody, type ReferenceKeyCard } from "../util/reference-key-cards";
 import { writeAiPanelDraft } from "../util/ai-panel-draft";
 import { writeWenceRefsImport } from "../util/wence-refs-import";
@@ -2196,51 +2197,53 @@ export function ReferenceLibraryPage() {
                       </div>
 
                       {/* 悬浮操作层 */}
-                      <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/60 opacity-0 backdrop-blur-sm transition-opacity group-hover:opacity-100">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          className="gap-1.5 text-xs"
-                          onClick={() => void openReader(r, 0, null)}
-                        >
-                          <Eye className="h-3.5 w-3.5" />
-                          阅读
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          className="gap-1.5 text-xs"
-                          onClick={() => {
-                            setWorkbenchRefId(r.id);
-                            setWorkbenchTab("overview");
-                            setWorkbenchOpen(true);
-                          }}
-                        >
-                          <Reply className="h-3.5 w-3.5" />
-                          工作台
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          className="gap-1.5 text-xs"
-                          onClick={async () => { await openReader(r, 0, null); setExtractPanelOpen(true); }}
-                        >
-                          <Edit3 className="h-3.5 w-3.5" />
-                          提炼
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="secondary"
-                          className="gap-1.5 text-xs"
-                          onClick={() => void openPromptExtractFromEntry(r)}
-                        >
-                          <Wand2 className="h-3.5 w-3.5" />
-                          提示词
-                        </Button>
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 backdrop-blur-sm transition-opacity p-4 group-hover:opacity-100">
+                        <div className="grid w-full grid-cols-2 gap-2">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="w-full gap-1.5 text-xs"
+                            onClick={() => void openReader(r, 0, null)}
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            阅读
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="w-full gap-1.5 text-xs"
+                            onClick={() => {
+                              setWorkbenchRefId(r.id);
+                              setWorkbenchTab("overview");
+                              setWorkbenchOpen(true);
+                            }}
+                          >
+                            <Reply className="h-3.5 w-3.5" />
+                            工作台
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="w-full gap-1.5 text-xs"
+                            onClick={async () => { await openReader(r, 0, null); setExtractPanelOpen(true); }}
+                          >
+                            <Edit3 className="h-3.5 w-3.5" />
+                            提炼
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="secondary"
+                            className="w-full gap-1.5 text-xs"
+                            onClick={() => void openPromptExtractFromEntry(r)}
+                          >
+                            <Wand2 className="h-3.5 w-3.5" />
+                            提示词
+                          </Button>
+                        </div>
                       </div>
                     </div>
 

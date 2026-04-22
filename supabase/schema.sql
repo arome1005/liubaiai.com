@@ -101,6 +101,9 @@ create table if not exists public.chapter (
   summary_updated_at  bigint  null,                          -- 概要最后生成/编辑时间
   summary_scope_from  integer null,                          -- 概要覆盖范围 [from, to] 章序号闭区间
   summary_scope_to    integer null,
+  outline_draft       text    null,                          -- 推演页推送的细纲快照（可空）
+  outline_node_id     text    null,                          -- 推演树节点 id（可空）
+  outline_pushed_at   bigint  null,                          -- 推送时间戳（毫秒；可空）
   "order"             integer not null,
   updated_at          bigint  not null,
   word_count_cache    integer null                           -- 字数缓存
@@ -111,6 +114,9 @@ create index if not exists idx_chapter_volume_order on public.chapter (volume_id
 alter table public.chapter add column if not exists summary_updated_at bigint  null;
 alter table public.chapter add column if not exists summary_scope_from integer null;
 alter table public.chapter add column if not exists summary_scope_to   integer null;
+alter table public.chapter add column if not exists outline_draft     text    null;
+alter table public.chapter add column if not exists outline_node_id   text    null;
+alter table public.chapter add column if not exists outline_pushed_at bigint  null;
 alter table public.chapter add column if not exists word_count_cache   integer null;
 
 -- ---- 2.4 章节快照 ----

@@ -15,10 +15,10 @@
 | 2   | 滑动段落窗口（正文末尾 N 段选择）                  | ⬜ 待做            | ShengHuiPage.tsx, sheng-hui-generate.ts |
 | 3   | RAG 风格解构器（先提炼笔法再注入）                 | ⬜ 待做            | ShengHuiPage.tsx, sheng-hui-generate.ts |
 | 4   | 人物声音锁（对话场景动态注入人物语气卡）                | ⬜ 待做            | ShengHuiPage.tsx, sheng-hui-generate.ts |
-| 5   | 风格指纹扩展（句节奏/标点/对话密度等6维）              | ✅ 完成 2026-04-18 | db/types.ts, WorkStyleCardForm          |
-| 6   | 生成模式扩展（场景骨架/对话优先/分段接龙）              | ✅ 完成 2026-04-18 | sheng-hui-generate.ts, ShengHuiPage.tsx |
-| 7   | 快照删除改用应用内 Dialog（替换 window.confirm） | ✅ 完成 2026-04-18 | ShengHuiPage.tsx                        |
-| 8   | 情绪温度 slider（控制形容词密度/语气热度）           | ✅ 完成 2026-04-18 | sheng-hui-generate.ts, ShengHuiPage.tsx |
+| 5   | 风格指纹扩展（句节奏/标点/对话密度等6维）              | ⬜ 待做            | db/types.ts, WorkStyleCardForm          |
+| 6   | 生成模式扩展（场景骨架/对话优先/分段接龙）              | ⬜ 待做            | sheng-hui-generate.ts, ShengHuiPage.tsx |
+| 7   | 快照删除改用应用内 Dialog（替换 window.confirm） | ⬜ 待做            | ShengHuiPage.tsx                        |
+| 8   | 情绪温度 slider（控制形容词密度/语气热度）           | ⬜ 待做            | sheng-hui-generate.ts, ShengHuiPage.tsx |
 
 
 ---

@@ -109,7 +109,9 @@ import {
   X,
 } from "lucide-react"
 import { cn } from "../lib/utils"
-import { AIModelSelector, AI_MODELS } from "../components/ai-model-selector"
+import { LiubaiLogo } from "../components/LiubaiLogo"
+import { AI_MODELS } from "../components/ai-model-selector"
+import { UnifiedAIModelSelector as AIModelSelector } from "../components/ai-model-selector-unified"
 import { Button } from "../components/ui/button"
 import { Input } from "../components/ui/input"
 import { Badge } from "../components/ui/badge"
@@ -1046,7 +1048,7 @@ function ChatMessageBubble({
         "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
         isUser ? "bg-primary/20" : "bg-muted"
       )}>
-        {isUser ? <User className="h-4 w-4 text-primary" /> : <Bot className="h-4 w-4 text-muted-foreground" />}
+        {isUser ? <User className="h-4 w-4 text-primary" /> : <LiubaiLogo className="h-4 w-4 text-muted-foreground" />}
       </div>
       <div className={cn("flex-1 max-w-[85%]", isUser && "text-right")}>
         <div className={cn(

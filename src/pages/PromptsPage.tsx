@@ -11,22 +11,21 @@ import {
   Copy,
   FileText,
   Layers,
-  Lock,
   MessageSquare,
   PenLine,
   Plus,
   Search,
-  ShieldCheck,
   Sparkles,
+  ScrollText,
   Star,
-  ThumbsDown,
-  ThumbsUp,
   Trash2,
   Type,
+  User,
   Users,
   X,
   Zap,
 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -42,7 +41,6 @@ import {
   deleteGlobalPromptTemplate,
   listApprovedPromptTemplates,
   listGlobalPromptTemplates,
-  listSubmittedPromptTemplates,
   reorderGlobalPromptTemplates,
   updateGlobalPromptTemplate,
 } from "../db/repo";
@@ -54,7 +52,10 @@ import {
   type PromptStatus,
   type PromptType,
 } from "../db/types";
+import { getSupabase } from "../lib/supabase";
+import { PersonalPromptCard } from "../components/prompts/PersonalPromptCard";
 import { readLastWorkId } from "../util/lastWorkId";
+import { bumpPromptHeat, getPromptHeat } from "../util/prompt-usage-heat";
 
 // ── 收藏持久化 ────────────────────────────────────────────────────────────────
 
@@ -76,25 +77,27 @@ function saveFavorites(set: Set<string>): void {
 // ── 图标 & 颜色映射 ────────────────────────────────────────────────────────────
 
 const TYPE_ICONS: Record<PromptType, React.ReactNode> = {
-  continue:      <PenLine   className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  outline:       <Layers    className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  volume:        <BookOpen  className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  scene:         <FileText  className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  style:         <Type      className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  opening:       <Zap       className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  character:     <Users     className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  worldbuilding: <Sparkles  className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  continue:       <PenLine    className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  outline:        <Layers     className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  volume:         <BookOpen   className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  scene:          <FileText   className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  style:          <Type       className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  opening:        <Zap        className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  character:      <Users      className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  worldbuilding:  <Sparkles   className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  article_summary: <ScrollText className="h-3.5 w-3.5" strokeWidth={1.6} />,
 };
 
 const TYPE_COLOR: Record<PromptType, string> = {
-  continue:      "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-  outline:       "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
-  volume:        "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
-  scene:         "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
-  style:         "bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300",
-  opening:       "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-  character:     "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-  worldbuilding: "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300",
+  continue:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
+  outline:        "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
+  volume:         "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
+  scene:          "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
+  style:          "bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300",
+  opening:        "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  character:      "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
+  worldbuilding:  "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300",
+  article_summary: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200",
 };
 
 const STATUS_STYLE: Record<PromptStatus, string> = {
@@ -106,20 +109,22 @@ const STATUS_STYLE: Record<PromptStatus, string> = {
 
 // ── 视图模式 ──────────────────────────────────────────────────────────────────
 
-type ViewTab = "mine" | "approved" | "favorites" | "admin";
+type ViewTab = "mine" | "approved" | "favorites" | "personal";
 
-// ── 管理员解锁 ────────────────────────────────────────────────────────────────
+type PersonalSort = "updated" | "heat";
 
-const ADMIN_SESSION_KEY = "liubai:admin_unlocked";
-
-function isAdminUnlocked(): boolean {
-  try { return sessionStorage.getItem(ADMIN_SESSION_KEY) === "1"; }
-  catch { return false; }
-}
-
-function persistAdminUnlock(): void {
-  try { sessionStorage.setItem(ADMIN_SESSION_KEY, "1"); }
-  catch { /* ignore */ }
+function pickAuthorLabel(u: {
+  email?: string | null;
+  user_metadata?: Record<string, unknown> | null;
+}): string {
+  const meta = u.user_metadata;
+  const candidates = [meta?.full_name, meta?.name, meta?.preferred_username, meta?.user_name];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c.trim();
+  }
+  const em = u.email?.trim();
+  if (em) return em.split("@")[0] || em;
+  return "本地用户";
 }
 
 // ── 表单状态 ──────────────────────────────────────────────────────────────────
@@ -144,7 +149,7 @@ function parseTags(raw: string): string[] {
 // ── 状态 Badge ────────────────────────────────────────────────────────────────
 
 function StatusBadge({ status }: { status: PromptStatus }) {
-  if (status === "draft") return null; // 草稿不显示
+  if (status !== "rejected") return null;
   return (
     <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE[status])}>
       {PROMPT_STATUS_LABELS[status]}
@@ -161,8 +166,6 @@ function PromptCard(props: {
   onToggleFavorite: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
-  onSubmit?: () => void;
-  onWithdraw?: () => void;
   onSaveAsMyDraft?: () => void;
   onAssemble: () => void;
   onMoveUp?: () => void;
@@ -173,7 +176,7 @@ function PromptCard(props: {
   const {
     item, isOwn, isFavorite,
     onToggleFavorite, onEdit, onDelete,
-    onSubmit, onWithdraw, onSaveAsMyDraft,
+    onSaveAsMyDraft,
     onAssemble, onMoveUp, onMoveDown, isFirst, isLast,
   } = props;
 
@@ -191,8 +194,6 @@ function PromptCard(props: {
     ? item.body.slice(0, 130) + "…"
     : item.body;
 
-  const canSubmit  = isOwn && item.status === "draft";
-  const canWithdraw = isOwn && item.status === "submitted";
   const isRejected = isOwn && item.status === "rejected";
 
   return (
@@ -279,29 +280,6 @@ function PromptCard(props: {
           装配
         </Button>
 
-        {/* 提交审核 / 撤回 */}
-        {canSubmit && onSubmit && (
-          <Button size="sm" variant="ghost"
-            className="h-7 gap-1 px-2 text-xs text-amber-600 hover:text-amber-700"
-            onClick={onSubmit}>
-            提交审核
-          </Button>
-        )}
-        {canWithdraw && onWithdraw && (
-          <Button size="sm" variant="ghost"
-            className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-            onClick={onWithdraw}>
-            撤回
-          </Button>
-        )}
-        {isRejected && onSubmit && (
-          <Button size="sm" variant="ghost"
-            className="h-7 gap-1 px-2 text-xs text-amber-600 hover:text-amber-700"
-            onClick={onSubmit}>
-            重新提交
-          </Button>
-        )}
-
         {/* 他人精选：另存为草稿 */}
         {!isOwn && onSaveAsMyDraft && (
           <Button size="sm" variant="ghost"
@@ -312,15 +290,15 @@ function PromptCard(props: {
           </Button>
         )}
 
-        {/* 自己的：编辑 / 删除（submitted 期间不可编辑正文） */}
+        {/* 自己的：编辑 / 删除 */}
         {isOwn && (
           <div className="ml-auto flex items-center gap-1">
-            {onEdit && item.status !== "submitted" && (
+            {onEdit && (
               <Button size="sm" variant="ghost" className="h-7 px-2 text-xs text-muted-foreground" onClick={onEdit}>
                 编辑
               </Button>
             )}
-            {onDelete && item.status !== "submitted" && item.status !== "approved" && (
+            {onDelete && (
               <Button size="sm" variant="ghost"
                 className="h-7 px-2 text-xs text-destructive hover:text-destructive"
                 onClick={onDelete}>
@@ -429,153 +407,6 @@ function PromptFormDialog(props: {
   );
 }
 
-// ── 管理员审核卡片 ────────────────────────────────────────────────────────────
-
-function AdminReviewCard(props: {
-  item: GlobalPromptTemplate;
-  onApprove: () => void;
-  onReject: (note: string) => void;
-  busy: boolean;
-}) {
-  const { item, onApprove, onReject, busy } = props;
-  const [expanded, setExpanded]     = useState(false);
-  const [rejecting, setRejecting]   = useState(false);
-  const [rejectNote, setRejectNote] = useState("");
-
-  const bodyPreview = item.body.length > 200 && !expanded
-    ? item.body.slice(0, 200) + "…"
-    : item.body;
-
-  const sourceLabel: Record<string, string> = {
-    manual:             "手动创建",
-    reference_excerpt:  "摘录提炼",
-    reference_book:     "整书提炼",
-    reference_chat:     "藏经对话",
-  };
-
-  const handleRejectConfirm = () => {
-    onReject(rejectNote.trim());
-    setRejecting(false);
-    setRejectNote("");
-  };
-
-  return (
-    <div className="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/60 p-4 shadow-sm dark:border-amber-800/40 dark:bg-amber-900/10">
-      {/* 顶行：类型 + 来源 + 提交时间 */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className={cn(
-          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium",
-          TYPE_COLOR[item.type],
-        )}>
-          {TYPE_ICONS[item.type]}
-          {PROMPT_TYPE_LABELS[item.type]}
-        </span>
-        {item.source_kind && (
-          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:bg-sky-900/40 dark:text-sky-300">
-            {sourceLabel[item.source_kind] ?? item.source_kind}
-          </span>
-        )}
-        <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-medium", STATUS_STYLE["submitted"])}>
-          {PROMPT_STATUS_LABELS["submitted"]}
-        </span>
-        <span className="ml-auto text-[11px] text-muted-foreground">
-          {new Date(item.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}
-        </span>
-      </div>
-
-      {/* 标题 */}
-      <h3 className="text-sm font-semibold leading-snug text-foreground">{item.title}</h3>
-
-      {/* 标签 */}
-      {item.tags.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {item.tags.map((tag) => (
-            <span key={tag} className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-              #{tag}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* 槽位 */}
-      {item.slots && item.slots.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {item.slots.map((s) => (
-            <span key={s} className="rounded border border-primary/30 bg-primary/5 px-1.5 py-0.5 text-[11px] font-medium text-primary">
-              {s}
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* 提交者 ID（匿名显示后6位） */}
-      {item.userId && (
-        <p className="text-[11px] text-muted-foreground">
-          提交者 UID：…{item.userId.slice(-6)}
-        </p>
-      )}
-
-      {/* 正文 */}
-      <div className="rounded-lg border border-border/40 bg-background px-3 py-2.5">
-        <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground">
-          {bodyPreview}
-        </p>
-        {item.body.length > 200 && (
-          <button type="button" onClick={() => setExpanded((v) => !v)}
-            className="mt-1 text-[11px] text-primary hover:underline">
-            {expanded ? "收起" : "展开全部"}
-          </button>
-        )}
-      </div>
-
-      {/* 驳回理由输入区 */}
-      {rejecting && (
-        <div className="flex flex-col gap-2">
-          <textarea
-            className="min-h-[4rem] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-xs leading-relaxed placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-            placeholder="请填写驳回原因（将展示给提交者）…"
-            value={rejectNote}
-            onChange={(e) => setRejectNote(e.target.value)}
-            autoFocus
-          />
-          <div className="flex items-center gap-2">
-            <Button size="sm" variant="destructive" className="h-7 gap-1 px-3 text-xs"
-              disabled={busy || !rejectNote.trim()}
-              onClick={handleRejectConfirm}>
-              <ThumbsDown className="h-3.5 w-3.5" />
-              确认驳回
-            </Button>
-            <Button size="sm" variant="ghost" className="h-7 px-3 text-xs"
-              onClick={() => { setRejecting(false); setRejectNote(""); }}>
-              取消
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* 操作行 */}
-      {!rejecting && (
-        <div className="flex items-center gap-2 border-t border-amber-200/60 pt-2 dark:border-amber-800/30">
-          <Button size="sm"
-            className="h-8 gap-1.5 bg-green-600 px-3 text-xs text-white hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600"
-            disabled={busy}
-            onClick={onApprove}>
-            <ThumbsUp className="h-3.5 w-3.5" />
-            通过发布
-          </Button>
-          <Button size="sm" variant="outline"
-            className="h-8 gap-1.5 border-red-300 px-3 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-400 dark:hover:bg-red-900/20"
-            disabled={busy}
-            onClick={() => setRejecting(true)}>
-            <ThumbsDown className="h-3.5 w-3.5" />
-            驳回
-          </Button>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── 主页面 ────────────────────────────────────────────────────────────────────
 
 export function PromptsPage() {
@@ -584,7 +415,6 @@ export function PromptsPage() {
   // 数据
   const [myTemplates, setMyTemplates] = useState<GlobalPromptTemplate[]>([]);
   const [approvedTemplates, setApprovedTemplates] = useState<GlobalPromptTemplate[]>([]);
-  const [submittedTemplates, setSubmittedTemplates] = useState<GlobalPromptTemplate[]>([]);
   const [loading, setLoading] = useState(true);
 
   // UI 状态
@@ -592,14 +422,9 @@ export function PromptsPage() {
   const [typeFilter, setTypeFilter] = useState<PromptType | "all">("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [favorites, setFavorites] = useState<Set<string>>(() => loadFavorites());
-
-  // 管理员解锁
-  const [adminUnlocked, setAdminUnlocked] = useState(isAdminUnlocked);
-  const [unlockDialogOpen, setUnlockDialogOpen] = useState(false);
-  const [unlockInput, setUnlockInput] = useState("");
-  const [unlockError, setUnlockError] = useState("");
-  const [adminBusyId, setAdminBusyId] = useState<string | null>(null);
-  const [adminLoading, setAdminLoading] = useState(false);
+  const [authorLabel, setAuthorLabel] = useState("本地用户");
+  const [personalSort, setPersonalSort] = useState<PersonalSort>("updated");
+  const [heatTick, setHeatTick] = useState(0);
 
   // 弹层
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -611,39 +436,51 @@ export function PromptsPage() {
 
   // ── 数据加载 ────────────────────────────────────────────────────────────────
 
-  const refresh = useCallback(async (withAdmin = false) => {
-    const fetches: [
-      Promise<GlobalPromptTemplate[]>,
-      Promise<GlobalPromptTemplate[]>,
-      Promise<GlobalPromptTemplate[]>,
-    ] = [
-      listGlobalPromptTemplates(),
-      listApprovedPromptTemplates(),
-      withAdmin ? listSubmittedPromptTemplates() : Promise.resolve([]),
-    ];
-    const [mine, approved, submitted] = await Promise.all(fetches);
+  const refresh = useCallback(async () => {
+    let mine = await listGlobalPromptTemplates();
     mine.sort((a, b) => a.sortOrder - b.sortOrder);
+    const stuckSubmitted = mine.filter((t) => t.status === "submitted");
+    if (stuckSubmitted.length > 0) {
+      await Promise.all(
+        stuckSubmitted.map((t) => updateGlobalPromptTemplate(t.id, { status: "approved", reviewNote: "" })),
+      );
+      mine = (await listGlobalPromptTemplates()).sort((a, b) => a.sortOrder - b.sortOrder);
+    }
+    const approved = await listApprovedPromptTemplates();
     setMyTemplates(mine);
     setApprovedTemplates(approved);
-    if (withAdmin) setSubmittedTemplates(submitted);
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       setLoading(true);
-      try { await refresh(adminUnlocked); }
+      try { await refresh(); }
       finally { if (!cancelled) setLoading(false); }
     })();
     return () => { cancelled = true; };
-  }, [refresh, adminUnlocked]);
+  }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const { data } = await getSupabase().auth.getUser();
+        if (cancelled || !data.user) return;
+        setAuthorLabel(pickAuthorLabel(data.user));
+      } catch {
+        /* 未配置 Supabase 或未登录 */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // ── 过滤逻辑 ────────────────────────────────────────────────────────────────
 
   const baseList: GlobalPromptTemplate[] = (() => {
     if (viewTab === "mine") return myTemplates;
+    if (viewTab === "personal") return myTemplates;
     if (viewTab === "approved") return approvedTemplates;
-    if (viewTab === "admin") return [];   // admin 面板单独渲染，不走通用过滤
     // favorites：先 mine，再 approved（去重）
     const myIds = new Set(myTemplates.map((t) => t.id));
     const favApproved = approvedTemplates.filter(
@@ -663,6 +500,13 @@ export function PromptsPage() {
           t.body.toLowerCase().includes(q) ||
           t.tags.some((tag) => tag.toLowerCase().includes(q)),
       );
+    }
+    if (viewTab === "personal") {
+      if (personalSort === "heat") {
+        list = [...list].sort((a, b) => getPromptHeat(b.id) - getPromptHeat(a.id));
+      } else {
+        list = [...list].sort((a, b) => b.updatedAt - a.updatedAt);
+      }
     }
     // 精选 tab 按更新时间降序；我的/收藏保持 sortOrder
     if (viewTab === "approved") list = [...list].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -696,82 +540,22 @@ export function PromptsPage() {
       if (isNew) {
         await addGlobalPromptTemplate({
           title: form.title.trim() || "未命名模板",
-          type: form.type, tags, body: form.body, status: "draft",
+          type: form.type, tags, body: form.body, status: "approved",
         });
       } else {
         await updateGlobalPromptTemplate(editingId!, {
           title: form.title.trim() || "未命名模板",
           type: form.type, tags, body: form.body,
+          status: "approved",
+          reviewNote: "",
         });
       }
       await refresh();
       closeDialog();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "保存失败";
+      toast.error(msg);
     } finally { setSaving(false); }
-  };
-
-  // ── 管理员解锁 ──────────────────────────────────────────────────────────────
-
-  const handleUnlock = () => {
-    const key = import.meta.env.VITE_ADMIN_KEY;
-    if (!key) {
-      setUnlockError("未配置 VITE_ADMIN_KEY，请在 .env.local 中设置后重新构建。");
-      return;
-    }
-    if (unlockInput.trim() !== key) {
-      setUnlockError("密码错误，请重试。");
-      return;
-    }
-    persistAdminUnlock();
-    setAdminUnlocked(true);
-    setUnlockError("");
-    setUnlockInput("");
-    setUnlockDialogOpen(false);
-    setViewTab("admin");
-  };
-
-  // ── 管理员：通过 / 驳回 ─────────────────────────────────────────────────────
-
-  const handleApprove = async (item: GlobalPromptTemplate) => {
-    setAdminBusyId(item.id);
-    try {
-      await updateGlobalPromptTemplate(item.id, { status: "approved", reviewNote: "" });
-      setSubmittedTemplates((prev) => prev.filter((t) => t.id !== item.id));
-    } finally {
-      setAdminBusyId(null);
-    }
-  };
-
-  const handleReject = async (item: GlobalPromptTemplate, note: string) => {
-    setAdminBusyId(item.id);
-    try {
-      await updateGlobalPromptTemplate(item.id, { status: "rejected", reviewNote: note });
-      setSubmittedTemplates((prev) => prev.filter((t) => t.id !== item.id));
-    } finally {
-      setAdminBusyId(null);
-    }
-  };
-
-  const refreshSubmitted = async () => {
-    setAdminLoading(true);
-    try {
-      const submitted = await listSubmittedPromptTemplates();
-      setSubmittedTemplates(submitted);
-    } finally {
-      setAdminLoading(false);
-    }
-  };
-
-  // ── 审核操作 ────────────────────────────────────────────────────────────────
-
-  const handleSubmit = async (item: GlobalPromptTemplate) => {
-    if (!window.confirm(`提交「${item.title}」进行审核？提交后不可编辑，直到审核结束。`)) return;
-    await updateGlobalPromptTemplate(item.id, { status: "submitted" });
-    await refresh();
-  };
-
-  const handleWithdraw = async (item: GlobalPromptTemplate) => {
-    await updateGlobalPromptTemplate(item.id, { status: "draft" });
-    await refresh();
   };
 
   // ── 另存为草稿（他人精选 → 我的草稿） ─────────────────────────────────────
@@ -809,16 +593,15 @@ export function PromptsPage() {
 
   // ── 装配 ────────────────────────────────────────────────────────────────────
 
-  const handleAssemble = (body: string) => {
+  const handleAssemble = (item: GlobalPromptTemplate) => {
+    bumpPromptHeat(item.id);
+    setHeatTick((x) => x + 1);
     const workId = readLastWorkId();
     if (!workId) { alert("尚未打开过作品，请先去作品库选择或新建作品。"); return; }
-    navigate(`/work/${workId}`, { state: { applyUserHint: body } });
+    navigate(`/work/${workId}`, { state: { applyUserHint: item.body } });
   };
 
   // ── 计数徽标 ────────────────────────────────────────────────────────────────
-
-  const pendingCount  = myTemplates.filter((t) => t.status === "submitted").length;
-  const reviewCount   = submittedTemplates.length;
 
   // ── 渲染 ────────────────────────────────────────────────────────────────────
 
@@ -844,9 +627,8 @@ export function PromptsPage() {
           <TypeFilterBtn active={typeFilter === "all"} onClick={() => setTypeFilter("all")}
             icon={<Layers className="h-4 w-4" />} label="全部"
             count={
-              viewTab === "mine"     ? myTemplates.length :
+              viewTab === "mine" || viewTab === "personal" ? myTemplates.length :
               viewTab === "approved" ? approvedTemplates.length :
-              viewTab === "admin"    ? submittedTemplates.length :
               favorites.size
             } />
           {PROMPT_TYPES.map((pt) => (
@@ -862,51 +644,32 @@ export function PromptsPage() {
           <div className="mb-4 flex items-center gap-2 flex-wrap">
             <div className="flex items-center gap-0.5 rounded-xl border border-border bg-muted/40 p-1">
               {([
-                { id: "mine",      label: "我的",    badge: pendingCount },
-                { id: "approved",  label: "精选",    badge: 0 },
-                { id: "favorites", label: "已收藏",  badge: 0 },
-                ...(adminUnlocked
-                  ? [{ id: "admin" as ViewTab, label: "审核", badge: reviewCount }]
-                  : []),
-              ] as { id: ViewTab; label: string; badge: number }[]).map(({ id, label, badge }) => (
+                { id: "mine" as const,      label: "我的",    badge: 0 },
+                { id: "personal" as const, label: "个人中心", badge: 0 },
+                { id: "approved" as const,  label: "精选",    badge: 0 },
+                { id: "favorites" as const, label: "已收藏",  badge: 0 },
+              ] as const).map(({ id, label, badge }) => (
                 <button key={id} type="button" onClick={() => setViewTab(id)}
                   className={cn(
-                    "relative rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
+                    "relative inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors",
                     viewTab === id
                       ? "bg-background text-foreground shadow-sm"
                       : "text-muted-foreground hover:text-foreground",
-                    id === "admin" && "text-amber-600 dark:text-amber-400",
                   )}>
-                  {id === "admin" && <ShieldCheck className="mr-1 inline h-3.5 w-3.5" />}
+                  {id === "personal" && <User className="mr-1 h-3.5 w-3.5 opacity-80" />}
                   {label}
                   {badge > 0 && (
-                    <span className={cn(
-                      "ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-bold text-white",
-                      id === "admin" ? "bg-red-500" : "bg-amber-500",
-                    )}>
+                    <span className="ml-1 rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
                       {badge}
                     </span>
                   )}
                 </button>
               ))}
             </div>
-
-            {/* 管理员解锁入口（未解锁时显示锁图标，已解锁不显示） */}
-            {!adminUnlocked && (
-              <button
-                type="button"
-                title="管理员入口"
-                onClick={() => { setUnlockInput(""); setUnlockError(""); setUnlockDialogOpen(true); }}
-                className="rounded-lg border border-border/50 p-1.5 text-muted-foreground/40 transition-colors hover:border-border hover:text-muted-foreground"
-              >
-                <Lock className="h-3.5 w-3.5" />
-              </button>
-            )}
           </div>
 
-          {/* 搜索 + 移动端类型筛选（admin tab 不需要） */}
-          {viewTab !== "admin" && (
-            <div className="mb-4 flex flex-col gap-3">
+          {/* 搜索 + 移动端类型筛选 */}
+          <div className="mb-4 flex flex-col gap-3">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input className="pl-9 pr-9" placeholder="搜索标题、正文或标签…"
@@ -934,65 +697,47 @@ export function PromptsPage() {
                 ))}
               </div>
             </div>
-          )}
-
-          {/* ── 管理员审核面板 ── */}
-          {viewTab === "admin" && (
-            <div className="flex flex-col gap-4">
-              {/* 说明栏 */}
-              <div className="flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50/60 px-4 py-3 dark:border-amber-800/40 dark:bg-amber-900/10">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                  <span className="text-sm font-medium text-amber-700 dark:text-amber-300">管理员审核</span>
-                  <span className="text-xs text-amber-600/70 dark:text-amber-400/70">
-                    · 共 {submittedTemplates.length} 条待审核
-                  </span>
-                </div>
-                <Button
-                  size="sm" variant="ghost"
-                  className="h-7 gap-1 px-2 text-xs text-amber-700 hover:text-amber-800 dark:text-amber-400"
-                  disabled={adminLoading}
-                  onClick={() => void refreshSubmitted()}
-                >
-                  {adminLoading ? "刷新中…" : "刷新"}
-                </Button>
-              </div>
-
-              {/* 列表 */}
-              {adminLoading ? (
-                <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">加载中…</div>
-              ) : submittedTemplates.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-16 text-center text-sm text-muted-foreground">
-                  <ShieldCheck className="h-10 w-10 opacity-30" />
-                  <p>暂无待审核提示词</p>
-                  <p className="text-xs">用户提交后将出现在这里。</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                  {submittedTemplates.map((item) => (
-                    <AdminReviewCard
-                      key={item.id}
-                      item={item}
-                      busy={adminBusyId === item.id}
-                      onApprove={() => void handleApprove(item)}
-                      onReject={(note) => void handleReject(item, note)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
 
           {/* 精选 tab 说明 */}
           {viewTab === "approved" && !loading && (
             <p className="mb-3 text-xs text-muted-foreground">
-              以下为已通过审核的精选提示词（含其他用户贡献）。点「另存为草稿」可复制到你的草稿库。
+              以下为已发布的提示词（含其他用户贡献）。点「另存为草稿」可复制到你的草稿库。
             </p>
           )}
 
-          {/* 普通卡片区（非 admin tab） */}
-          {viewTab !== "admin" && (
-            loading ? (
+          {viewTab === "personal" && !loading && (
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-xs text-muted-foreground">
+                查看你创建的提示词：<span className="font-medium text-foreground">{authorLabel}</span>
+                。热度为本地统计的「装配」次数；最近更新来自保存时间。
+              </p>
+              <div className="flex shrink-0 gap-1 rounded-lg border border-border/60 bg-muted/30 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setPersonalSort("updated")}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
+                    personalSort === "updated" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  最近更新
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPersonalSort("heat")}
+                  className={cn(
+                    "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
+                    personalSort === "heat" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  热度
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* 卡片区 */}
+          {loading ? (
               <div className="flex h-40 items-center justify-center text-sm text-muted-foreground">加载中…</div>
             ) : displayed.length === 0 ? (
               <EmptyState
@@ -1005,8 +750,27 @@ export function PromptsPage() {
             ) : (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {displayed.map((item, idx) => {
-                  const isOwn = viewTab === "mine" || !item.userId ||
+                  const isOwn = viewTab === "mine" || viewTab === "personal" || !item.userId ||
                     myTemplates.some((m) => m.id === item.id);
+                  if (viewTab === "personal") {
+                    return (
+                      <PersonalPromptCard
+                        key={`${item.id}-${heatTick}`}
+                        item={item}
+                        authorLabel={authorLabel}
+                        heat={getPromptHeat(item.id)}
+                        isFavorite={favorites.has(item.id)}
+                        onToggleFavorite={() => toggleFavorite(item.id)}
+                        onEdit={() => openEdit(item)}
+                        onDelete={() => void handleDelete(item.id, item.title)}
+                        onAssemble={() => handleAssemble(item)}
+                        onMoveUp={() => void handleMove(item.id, -1)}
+                        onMoveDown={() => void handleMove(item.id, 1)}
+                        isFirst={idx === 0}
+                        isLast={idx === displayed.length - 1}
+                      />
+                    );
+                  }
                   return (
                     <PromptCard
                       key={item.id}
@@ -1016,10 +780,8 @@ export function PromptsPage() {
                       onToggleFavorite={() => toggleFavorite(item.id)}
                       onEdit={isOwn ? () => openEdit(item) : undefined}
                       onDelete={isOwn ? () => void handleDelete(item.id, item.title) : undefined}
-                      onSubmit={isOwn ? () => void handleSubmit(item) : undefined}
-                      onWithdraw={isOwn ? () => void handleWithdraw(item) : undefined}
                       onSaveAsMyDraft={!isOwn ? () => void handleSaveAsMyDraft(item) : undefined}
-                      onAssemble={() => handleAssemble(item.body)}
+                      onAssemble={() => handleAssemble(item)}
                       onMoveUp={isOwn && viewTab === "mine" ? () => void handleMove(item.id, -1) : undefined}
                       onMoveDown={isOwn && viewTab === "mine" ? () => void handleMove(item.id, 1) : undefined}
                       isFirst={idx === 0}
@@ -1028,8 +790,7 @@ export function PromptsPage() {
                   );
                 })}
               </div>
-            )
-          )}
+            )}
         </main>
       </div>
 
@@ -1040,46 +801,6 @@ export function PromptsPage() {
         onSave={() => void handleSave()}
         onClose={closeDialog}
       />
-
-      {/* ── 管理员解锁弹窗 ── */}
-      <Dialog open={unlockDialogOpen} onOpenChange={(v) => { if (!v) { setUnlockDialogOpen(false); setUnlockError(""); setUnlockInput(""); } }}>
-        <DialogContent className="w-full max-w-sm"
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleUnlock(); } }}>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-amber-600" />
-              管理员解锁
-            </DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-3 py-2">
-            <p className="text-xs text-muted-foreground">
-              输入管理员密码（VITE_ADMIN_KEY）以解锁审核 Tab。解锁状态保持到关闭浏览器标签页。
-            </p>
-            <Input
-              type="password"
-              placeholder="管理员密码…"
-              value={unlockInput}
-              onChange={(e) => { setUnlockInput(e.target.value); setUnlockError(""); }}
-              autoFocus
-            />
-            {unlockError && (
-              <p className="flex items-center gap-1.5 text-xs text-destructive">
-                <AlertCircle className="h-3.5 w-3.5 shrink-0" />
-                {unlockError}
-              </p>
-            )}
-          </div>
-          <DialogFooter className="gap-2">
-            <Button variant="ghost" onClick={() => { setUnlockDialogOpen(false); setUnlockError(""); setUnlockInput(""); }}>
-              取消
-            </Button>
-            <Button onClick={handleUnlock} disabled={!unlockInput.trim()}>
-              <Lock className="mr-1.5 h-3.5 w-3.5" />
-              解锁
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
@@ -1126,7 +847,7 @@ function EmptyState(props: {
       <div className="flex flex-col items-center gap-2 py-16 text-center text-sm text-muted-foreground">
         <Sparkles className="h-8 w-8 opacity-40" />
         <p>暂无精选提示词</p>
-        <p className="text-xs">提交你的草稿审核后，通过即可出现在这里。</p>
+        <p className="text-xs">创建或保存为已发布后，会出现在这里（含他人分享的提示词）。</p>
       </div>
     );
   }
@@ -1136,6 +857,18 @@ function EmptyState(props: {
         <Star className="h-8 w-8 opacity-40" />
         <p>还没有收藏任何提示词</p>
         <p className="text-xs">点卡片右上角的星标即可收藏。</p>
+      </div>
+    );
+  }
+  if (props.viewTab === "personal") {
+    return (
+      <div className="flex flex-col items-center gap-2 py-16 text-center text-sm text-muted-foreground">
+        <User className="h-8 w-8 opacity-40" />
+        <p>个人中心暂无提示词</p>
+        <p className="max-w-sm text-xs">在「我的」中创建后，会同步出现在这里，可查看热度与最近更新时间。</p>
+        <Button onClick={props.onNew} className="mt-1 gap-1.5">
+          <Plus className="h-4 w-4" />新建提示词
+        </Button>
       </div>
     );
   }

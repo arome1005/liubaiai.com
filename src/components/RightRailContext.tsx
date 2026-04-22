@@ -28,7 +28,7 @@ export function useRightRail(): RightRailApi {
     return {
       tabs: [
         { id: "ai", label: "AI", icon: "✨", content: null, enabled: true },
-        { id: "summary", label: "工具", icon: "🧰", content: null, enabled: true },
+        { id: "summary", label: "知识库", icon: "🧰", content: null, enabled: true },
         { id: "bible", label: "设定", icon: "📖", content: null, enabled: true },
         { id: "ref", label: "参考", icon: "📎", content: null, enabled: true },
       ],

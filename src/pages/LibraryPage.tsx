@@ -478,15 +478,15 @@ export function LibraryPage() {
         onSubmit={(p) => void handleWorkModalSubmit(p)}
       />
 
-      <input
-        ref={fileRef}
-        name="importWorkFile"
-        type="file"
-        accept=".txt,.md,.markdown,.docx,text/plain"
-        className="visually-hidden"
-        aria-hidden
-        onChange={(ev) => void handleImportFile(ev)}
-      />
+          <input
+            ref={fileRef}
+            name="importWorkFile"
+            type="file"
+            accept=".txt,.md,.markdown,.docx,text/plain"
+            className="visually-hidden"
+            aria-hidden
+            onChange={(ev) => void handleImportFile(ev)}
+          />
       <input
         ref={coverFileRef}
         name="libraryCoverFile"
@@ -769,7 +769,7 @@ export function LibraryPage() {
                         {w.tags.map((tag, i) => (
                           <span key={`${i}-${tag}`} className="library-work-card-tag">
                             {tag}
-                          </span>
+                </span>
                         ))}
                       </div>
                     ) : null}
@@ -804,12 +804,12 @@ export function LibraryPage() {
                       </div>
                     ) : null}
                   </div>
-                </Link>
+              </Link>
                 <div className="library-work-card-toolbar">
                   <Button asChild variant="ghost" size="sm">
                     <Link to={`/work/${w.id}`} title="进入写作页">
                       写作
-                    </Link>
+              </Link>
                   </Button>
                   <Button
                     type="button"
@@ -938,8 +938,8 @@ export function LibraryPage() {
                   <span className="text-sm font-medium text-muted-foreground">新建作品</span>
                 </button>
                 <div className="mx-4 h-px shrink-0 bg-border/40" />
-                <button
-                  type="button"
+              <button
+                type="button"
                   className="flex h-12 shrink-0 items-center justify-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-card/60 hover:text-foreground"
                   disabled={importBusy}
                   onClick={openImportPicker}
@@ -951,7 +951,7 @@ export function LibraryPage() {
                     <line x1="12" x2="12" y1="3" y2="15" />
                   </svg>
                   {importBusy ? "导入中…" : "导入作品"}
-                </button>
+              </button>
               </div>
             </li>
           ) : null}

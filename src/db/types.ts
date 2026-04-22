@@ -178,7 +178,7 @@ export type BookSearchHit = {
 export type BookSearchScope = "full" | "beforeProgress";
 
 export const DB_NAME = "liubai-writing";
-export const SCHEMA_VERSION = 29;
+export const SCHEMA_VERSION = 30;
 
 export type InspirationLink = {
   id: string;
@@ -289,7 +289,7 @@ export const PROMPT_STATUS_LABELS: Record<PromptStatus, string> = {
   rejected:  "已驳回",
 };
 
-/** 8 种标准提示词类型（Sprint 1 第一版） */
+/** 标准提示词类型（随功能扩展） */
 export const PROMPT_TYPES = [
   "continue",       // 续写
   "outline",        // 大纲
@@ -299,19 +299,21 @@ export const PROMPT_TYPES = [
   "opening",        // 黄金开篇
   "character",      // 人设
   "worldbuilding",  // 世界观
+  "article_summary", // 文章概括（章节概要 / 省 token 向压缩）
 ] as const;
 
 export type PromptType = (typeof PROMPT_TYPES)[number];
 
 export const PROMPT_TYPE_LABELS: Record<PromptType, string> = {
-  continue:      "续写",
-  outline:       "大纲",
-  volume:        "卷纲",
-  scene:         "细纲",
-  style:         "写作风格",
-  opening:       "黄金开篇",
-  character:     "人设",
-  worldbuilding: "世界观",
+  continue:       "续写",
+  outline:        "大纲",
+  volume:         "卷纲",
+  scene:          "细纲",
+  style:          "写作风格",
+  opening:        "黄金开篇",
+  character:      "人设",
+  worldbuilding:  "世界观",
+  article_summary: "文章概括",
 };
 
 /**
@@ -361,7 +363,7 @@ export const PROMPT_SCOPE_LABELS: Record<string, string> = {
 /**
  * 全局（跨作品）提示词模板——存 IndexedDB `globalPromptTemplates` 或
  * Supabase `prompt_template`（与 per-work `WritingPromptTemplate` 并存）。
- * Sprint 2 状态机：draft → submitted → approved/rejected。
+ * 状态：draft（仅草稿）/ approved（已发布，全库与精选可见）/ submitted·rejected 为历史兼容。
  */
 export type GlobalPromptTemplate = {
   id: string;

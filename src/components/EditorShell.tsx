@@ -18,7 +18,7 @@ const LS_RIGHT_OPEN = "liubai:rightRailOpen";
 const LS_RIGHT_TAB = "liubai:rightRailTab";
 const LS_RIGHT_W_PX = "liubai:rightRailWidthPx";
 
-/** 返回主页 + 沉浸写作 + 写作设置 三个图标按钮，复用于主顶栏（右栏关闭）和右栏假顶栏（右栏打开） */
+/** 返回主页 + 沉浸写作 + 写作设置 三个图标按钮（写作顶栏右侧） */
 function TopbarIconGroup({
   zenWrite,
   onZenToggle,
@@ -103,7 +103,7 @@ export function EditorShell() {
   });
   const [tabs, setTabs] = useState<RightRailTab[]>(() => [
     { id: "ai", label: "AI", icon: "✨", content: null, enabled: true },
-    { id: "summary", label: "工具", icon: "🧰", content: null, enabled: true },
+    { id: "summary", label: "知识库", icon: "🧰", content: null, enabled: true },
     { id: "bible", label: "设定", icon: "📖", content: null, enabled: true },
     { id: "ref", label: "参考", icon: "📎", content: null, enabled: true },
   ]);
@@ -274,25 +274,25 @@ export function EditorShell() {
           style={{ ["--shell-right-w" as string]: `${rightWidthPx}px` } as CSSProperties}
           className={"app-shell app-shell--editor app-shell--editor-xy" + (!rightOpen ? " app-shell--right-closed" : "")}
         >
-          <div className="app-body">
-            <header
-              className="app-topbar app-topbar--editor app-topbar--editor-xy sticky top-0 z-50 grid min-h-12 shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-b border-border/40 bg-background/95 px-3 py-2 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60 lg:min-h-[3.25rem] lg:gap-3 lg:px-5"
-              aria-label="写作顶栏"
-            >
-              <div className="app-topbar-left app-topbar-left--editor app-topbar-left--editor-xy flex min-w-0 max-w-[min(100%,14rem)] items-center gap-2 lg:max-w-[18rem] lg:gap-3">
-                <div className="app-topbar-title app-topbar-title--editor app-topbar-title--editor-xy min-w-0 flex-1 overflow-hidden">
-                  {topbarTitleNode ? (
-                    topbarTitleNode
-                  ) : (
-                    <span className="text-sm text-muted-foreground">加载中…</span>
-                  )}
-                </div>
+          <header
+            className="app-topbar app-topbar--editor app-topbar--editor-xy sticky top-0 z-50 grid min-h-12 shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-b border-border/40 bg-background/95 px-3 py-2 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60 lg:min-h-[3.25rem] lg:gap-3 lg:px-5"
+            aria-label="写作顶栏"
+          >
+            <div className="app-topbar-left app-topbar-left--editor app-topbar-left--editor-xy flex min-w-0 max-w-[min(100%,14rem)] items-center gap-2 lg:max-w-[18rem] lg:gap-3">
+              <div className="app-topbar-title app-topbar-title--editor app-topbar-title--editor-xy min-w-0 flex-1 overflow-hidden">
+                {topbarTitleNode ? (
+                  topbarTitleNode
+                ) : (
+                  <span className="text-sm text-muted-foreground">加载中…</span>
+                )}
               </div>
-              <div className="app-topbar-center app-topbar-center--editor app-topbar-center--editor-xy min-w-0 justify-self-stretch px-1">
-                {topbarCenterNode}
-              </div>
-              <div className="app-topbar-actions app-topbar-actions--editor app-topbar-actions--editor-xy flex min-w-0 flex-shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
-                {topbarActionsNode}
+            </div>
+            <div className="app-topbar-center app-topbar-center--editor app-topbar-center--editor-xy min-w-0 justify-self-stretch px-1">
+              {topbarCenterNode}
+            </div>
+            <div className="app-topbar-actions app-topbar-actions--editor app-topbar-actions--editor-xy flex min-w-0 flex-shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+              {topbarActionsNode}
+              <span className="app-topbar-rail-toggle-area">
                 <Button
                   type="button"
                   variant="ghost"
@@ -307,38 +307,38 @@ export function EditorShell() {
                 </Button>
                 <Button
                   type="button"
-                  variant={rightOpen ? "default" : "outline"}
+                  variant="outline"
                   size="sm"
                   className="app-editor-rail-toggle h-9"
                   onClick={() => setRightOpen((v) => !v)}
                   title="展开或收起 AI 等辅助侧栏（宽屏侧栏，小屏抽屉）"
                 >
-                  {rightOpen ? "关闭右栏" : "辅助创作"}
+                  {rightOpen ? "关闭" : "辅助"}
                 </Button>
-                {/* 右栏关闭时：图标在主顶栏；右栏打开时（宽屏）：图标移入右栏假顶栏，此处隐藏 */}
-                <div className={rightOpen ? "app-topbar-rail-icons--hidden" : "contents"}>
-                  <TopbarIconGroup
-                    zenWrite={zenWrite}
-                    onZenToggle={() => {
-                      if (zenWrite) {
-                        void exitDocumentFullscreen().finally(() => setZenWrite(false));
-                      } else {
-                        setZenWrite(true);
-                        void requestDocumentFullscreen();
-                      }
-                    }}
-                    onSettingsOpen={() => setWritingSettingsOpen(true)}
-                  />
-                </div>
-              </div>
-            </header>
+                <TopbarIconGroup
+                  zenWrite={zenWrite}
+                  onZenToggle={() => {
+                    if (zenWrite) {
+                      void exitDocumentFullscreen().finally(() => setZenWrite(false));
+                    } else {
+                      setZenWrite(true);
+                      void requestDocumentFullscreen();
+                    }
+                  }}
+                  onSettingsOpen={() => setWritingSettingsOpen(true)}
+                />
+              </span>
+            </div>
+          </header>
 
-            <main className="app-main app-main--editor" aria-label="写作区">
-              <Outlet />
-            </main>
-          </div>
+          <div className="app-editor-split">
+            <div className="app-body">
+              <main className="app-main app-main--editor" aria-label="写作区">
+                <Outlet />
+              </main>
+            </div>
 
-          <aside className={"app-right" + (rightOpen ? " open" : "")} aria-label="右侧栏">
+            <aside className={"app-right" + (rightOpen ? " open" : "")} aria-label="右侧栏">
             <div
               className="app-right-resize"
               role="separator"
@@ -348,24 +348,6 @@ export function EditorShell() {
                 draggingRef.current = { startX: e.clientX, startW: rightWidthPx };
               }}
             />
-            {/* 宽屏：图标组浮在右栏假顶栏右侧；小屏抽屉模式不显示（图标留在主顶栏） */}
-            <div className="app-right-topbar-icons">
-              <TopbarIconGroup
-                zenWrite={zenWrite}
-                onZenToggle={() => {
-                  if (zenWrite) {
-                    void exitDocumentFullscreen().finally(() => setZenWrite(false));
-                  } else {
-                    setZenWrite(true);
-                    void requestDocumentFullscreen();
-                  }
-                }}
-                onSettingsOpen={() => setWritingSettingsOpen(true)}
-              />
-            </div>
-            <button type="button" className="app-right-close-fab" title="关闭右侧栏" onClick={() => setRightOpen(false)}>
-              ×
-            </button>
             <div className="app-right-tabs" role="tablist" aria-label="右侧栏标签">
               {tabs.map((t) => (
                 <button
@@ -392,7 +374,7 @@ export function EditorShell() {
               {currentContent ? (
                 currentContent
               ) : (
-                <Card className="gap-0 border-border/60 py-4 shadow-none">
+                <Card className="app-right-empty-card gap-0 border-border/60 py-4 shadow-none">
                   <CardContent className="flex flex-col gap-4 px-4">
                     <p className="m-0 text-sm text-muted-foreground">
                       写作辅助侧栏。选择上方标签进入对应面板。
@@ -413,6 +395,7 @@ export function EditorShell() {
               )}
             </div>
           </aside>
+          </div>
 
           <div
             className={"app-right-overlay" + (rightOpen ? " open" : "")}

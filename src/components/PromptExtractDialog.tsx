@@ -18,6 +18,7 @@ import { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   BookOpen,
+  Bot,
   Check,
   Copy,
   Loader2,
@@ -48,18 +49,38 @@ import {
   extractPromptTemplateFromBook,
   PromptExtractError,
 } from "../ai/extract-prompt-template";
+import { UnifiedAIModelSelector as AIModelSelector } from "./ai-model-selector-unified";
+import { AI_MODELS } from "./ai-model-selector";
+import { loadAiSettings } from "../ai/storage";
+import { aiModelIdToProvider } from "../util/ai-ui-model-map";
 
 // ── 类型显示颜色（复用 PromptsPage 的配色） ───────────────────────────────────
 
+function providerLogoSrc(providerId: string | null | undefined): string | null {
+  switch (providerId) {
+    case "openai":    return "/logos/openai.png";
+    case "anthropic": return "/logos/claude.png";
+    case "gemini":    return "/logos/gemini.png";
+    case "doubao":    return "/logos/doubao.png";
+    case "zhipu":     return "/logos/zhipu.png";
+    case "kimi":      return "/logos/kimi.png";
+    case "xiaomi":    return "/logos/xiaomi.png";
+    case "ollama":    return "/logos/ollama.png";
+    case "mlx":       return "/logos/ollama.png";
+    default:          return null;
+  }
+}
+
 const TYPE_COLOR: Record<PromptType, string> = {
-  continue:      "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
-  outline:       "border-purple-300 bg-purple-50 text-purple-700 dark:border-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
-  volume:        "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
-  scene:         "border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
-  style:         "border-pink-300 bg-pink-50 text-pink-700 dark:border-pink-700 dark:bg-pink-900/30 dark:text-pink-300",
-  opening:       "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-  character:     "border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-900/30 dark:text-green-300",
-  worldbuilding: "border-teal-300 bg-teal-50 text-teal-700 dark:border-teal-700 dark:bg-teal-900/30 dark:text-teal-300",
+  continue:       "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+  outline:        "border-purple-300 bg-purple-50 text-purple-700 dark:border-purple-700 dark:bg-purple-900/30 dark:text-purple-300",
+  volume:         "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
+  scene:          "border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
+  style:          "border-pink-300 bg-pink-50 text-pink-700 dark:border-pink-700 dark:bg-pink-900/30 dark:text-pink-300",
+  opening:        "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  character:      "border-green-300 bg-green-50 text-green-700 dark:border-green-700 dark:bg-green-900/30 dark:text-green-300",
+  worldbuilding:  "border-teal-300 bg-teal-50 text-teal-700 dark:border-teal-700 dark:bg-teal-900/30 dark:text-teal-300",
+  article_summary: "border-sky-300 bg-sky-50 text-sky-800 dark:border-sky-700 dark:bg-sky-900/30 dark:text-sky-200",
 };
 
 // ── Props ─────────────────────────────────────────────────────────────────────
@@ -110,10 +131,16 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
   const abortRef = useRef<AbortController | null>(null);
 
   // 步骤 5：保存
-  const [saved, setSaved] = useState<null | "draft" | "submitted">(null);
+  const [saved, setSaved] = useState<null | "draft" | "published">(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // AI 模型选择
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [selectedModelId, setSelectedModelId] = useState<string>(
+    () => AI_MODELS[0]?.id ?? "gemini"
+  );
 
   const hasResult = streamText.trim().length > 0;
 
@@ -133,6 +160,7 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
     setSaved(null);
     setExtracting(true);
     abortRef.current = new AbortController();
+    const overrideProvider = aiModelIdToProvider(selectedModelId);
 
     try {
       if (props.source === "excerpt") {
@@ -141,6 +169,7 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
           excerptNote: props.excerptNote,
           bookTitle,
           type: selectedType,
+          overrideProvider,
           onDelta: (d) => setStreamText((prev) => prev + d),
           signal: abortRef.current.signal,
         });
@@ -149,6 +178,7 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
           chunkTexts: props.chunkTexts,
           bookTitle,
           type: selectedType,
+          overrideProvider,
           onDelta: (d) => setStreamText((prev) => prev + d),
           signal: abortRef.current.signal,
         });
@@ -165,7 +195,7 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
 
   // ── 保存草稿 ────────────────────────────────────────────────────────────────
 
-  const handleSave = async (status: "draft" | "submitted") => {
+  const handleSave = async (status: "draft" | "approved") => {
     if (!streamText.trim()) return;
     setSaving(true);
     setSaveError(null);
@@ -186,7 +216,7 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
             : null,
         source_note: `type=${selectedType}`,
       });
-      setSaved(status);
+      setSaved(status === "approved" ? "published" : "draft");
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : "保存失败，请重试");
     } finally {
@@ -256,12 +286,36 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
   // ── 渲染 ────────────────────────────────────────────────────────────────────
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
       <DialogContent className="max-h-[90dvh] w-full max-w-xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-primary" />
-            提炼为提示词
+          <DialogTitle className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              提炼为提示词
+            </span>
+            <button
+              type="button"
+              onClick={() => setModelPickerOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border/60 bg-muted/50 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary"
+              title="切换 AI 模型"
+            >
+              <Bot className="h-3 w-3 opacity-60" />
+              <span className="text-muted-foreground/70">AI模型</span>
+              {(() => {
+                const model = AI_MODELS.find((m) => m.id === selectedModelId);
+                const logoSrc = providerLogoSrc(model?.providerId);
+                return (
+                  <span className="flex items-center gap-1">
+                    {logoSrc ? (
+                      <img src={logoSrc} alt="" className="h-3.5 w-3.5 rounded-sm object-contain" />
+                    ) : null}
+                    <span className="font-medium text-foreground">{model?.name ?? "未选择"}</span>
+                  </span>
+                );
+              })()}
+            </button>
           </DialogTitle>
         </DialogHeader>
 
@@ -456,14 +510,14 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
                 disabled={saving}
                 className="gap-1.5"
               >
-                {saving ? <><Loader2 className="h-4 w-4 animate-spin" />保存中…</> : "保存为草稿"}
+                {saving ? <><Loader2 className="h-4 w-4 animate-spin" />保存中…</> : "仅保存草稿"}
               </Button>
               <Button
-                onClick={() => void handleSave("submitted")}
+                onClick={() => void handleSave("approved")}
                 disabled={saving}
                 className="gap-1.5"
               >
-                {saving ? <><Loader2 className="h-4 w-4 animate-spin" />提交中…</> : "提交审核"}
+                {saving ? <><Loader2 className="h-4 w-4 animate-spin" />保存中…</> : "保存到提示词库"}
               </Button>
             </>
           )}
@@ -475,11 +529,20 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
               onClick={() => { handleClose(); navigate("/prompts"); }}
             >
               <Check className="h-4 w-4" />
-              {saved === "submitted" ? "已提交 · 去提示词库" : "已保存 · 去提示词库"}
+              {saved === "published" ? "已保存 · 去提示词库" : "草稿已保存 · 去提示词库"}
             </Button>
           )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    <AIModelSelector
+      open={modelPickerOpen}
+      onOpenChange={setModelPickerOpen}
+      selectedModelId={selectedModelId}
+      onSelectModel={(id) => setSelectedModelId(id)}
+      title="选择 AI 模型"
+    />
+  </>
   );
 }

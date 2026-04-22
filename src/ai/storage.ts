@@ -4,6 +4,52 @@ import type { AiProviderConfig, AiProviderId } from "./types";
 const KEY = "liubai:aiSettings";
 const GATE_KEY = "liubai:firstAiUseGateCompleted";
 
+export const AI_SETTINGS_UPDATED_EVENT = "liubai:aiSettingsUpdated";
+
+const CLOUD_TEMPERATURE_PROVIDER_IDS: AiProviderId[] = [
+  "openai",
+  "anthropic",
+  "gemini",
+  "doubao",
+  "zhipu",
+  "kimi",
+  "xiaomi",
+];
+
+function clampTemperature(v: number): number {
+  if (!Number.isFinite(v)) return 0.7;
+  return Math.max(0.1, Math.min(2.0, v));
+}
+
+function normalizeTemperatureByProvider(
+  parsed: Partial<AiSettings> | undefined,
+  fallbackBase: number,
+): AiSettings["temperatureByProvider"] {
+  const base = clampTemperature(fallbackBase);
+  const raw = (parsed?.temperatureByProvider ?? {}) as Partial<Record<AiProviderId, number>>;
+  const out: NonNullable<NonNullable<AiSettings["temperatureByProvider"]>> = {};
+
+  // 仅持久化“显式覆盖”的温度；未覆盖的提供方走 `geminiTemperature`（兼容旧版全局温度语义）
+  for (const id of CLOUD_TEMPERATURE_PROVIDER_IDS) {
+    const v = raw[id];
+    if (typeof v === "number" && Number.isFinite(v)) {
+      const cv = clampTemperature(v);
+      if (Math.abs(cv - base) > 1e-9) out[id] = cv;
+    }
+  }
+
+  return Object.keys(out).length ? out : undefined;
+}
+
+function dispatchAiSettingsUpdated() {
+  try {
+    if (typeof window === "undefined") return;
+    window.dispatchEvent(new CustomEvent(AI_SETTINGS_UPDATED_EVENT));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function defaultAiSettings(): AiSettings {
   return {
     provider: "ollama",
@@ -55,6 +101,10 @@ export function loadAiSettings(): AiSettings {
     const parsed = JSON.parse(raw) as Partial<AiSettings>;
     const px = parsed as unknown as Record<string, unknown>;
     const d = defaultAiSettings();
+    const geminiTemperature =
+      typeof px.geminiTemperature === "number" && Number.isFinite(px.geminiTemperature)
+        ? Math.max(0.1, Math.min(2.0, px.geminiTemperature))
+        : d.geminiTemperature;
     return {
       ...d,
       ...parsed,
@@ -95,10 +145,8 @@ export function loadAiSettings(): AiSettings {
         }
         return p;
       })(),
-      geminiTemperature:
-        typeof px.geminiTemperature === "number" && Number.isFinite(px.geminiTemperature)
-          ? Math.max(0.1, Math.min(2.0, px.geminiTemperature))
-          : d.geminiTemperature,
+      geminiTemperature,
+      temperatureByProvider: normalizeTemperatureByProvider(parsed, geminiTemperature),
       injectApproxTokenThreshold:
         typeof px.injectApproxTokenThreshold === "number" && Number.isFinite(px.injectApproxTokenThreshold)
           ? Math.max(0, Math.min(500_000, Math.floor(px.injectApproxTokenThreshold)))
@@ -136,6 +184,7 @@ export function loadAiSettings(): AiSettings {
 export function saveAiSettings(next: AiSettings) {
   try {
     localStorage.setItem(KEY, JSON.stringify(next));
+    dispatchAiSettingsUpdated();
   } catch {
     /* ignore */
   }
@@ -189,5 +238,29 @@ export function patchProviderConfig(s: AiSettings, id: AiProviderId, patch: Part
   const cur = getProviderConfig(s, id);
   const next = { ...cur, ...patch };
   return { ...s, [id]: next } as AiSettings;
+}
+
+export function getProviderTemperature(s: AiSettings, id: AiProviderId): number {
+  const base = clampTemperature(s.geminiTemperature);
+  const map = s.temperatureByProvider ?? {};
+  const v = map[id];
+  if (typeof v === "number" && Number.isFinite(v)) return clampTemperature(v);
+  return base;
+}
+
+export function patchProviderTemperature(s: AiSettings, id: AiProviderId, temperature: number): AiSettings {
+  const t = clampTemperature(temperature);
+  const base = clampTemperature(s.geminiTemperature);
+  const prev = { ...(s.temperatureByProvider ?? {}) } as Partial<Record<AiProviderId, number>>;
+  const nextMap: Partial<Record<AiProviderId, number>> = { ...prev };
+
+  // 与全局默认一致则删除覆盖项，避免无意义膨胀
+  if (Math.abs(t - base) <= 1e-9) delete nextMap[id];
+  else nextMap[id] = t;
+
+  const cleaned = normalizeTemperatureByProvider({ temperatureByProvider: nextMap } as Partial<AiSettings>, base);
+
+  // 兼容旧逻辑：调整温度时同步更新全局 geminiTemperature（历史上 UI 只维护这一份）
+  return { ...s, geminiTemperature: t, temperatureByProvider: cleaned };
 }
 

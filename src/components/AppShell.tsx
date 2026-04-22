@@ -315,6 +315,7 @@ export function AppShell() {
         "/inspiration",
         "/chat",
         "/sheng-hui",
+        "/prompts",
         "/login",
         "/forgot-password",
         "/reset-password",

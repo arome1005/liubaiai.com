@@ -1,11 +1,48 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
-import { EditorState } from "@codemirror/state";
-import { EditorView, keymap, placeholder } from "@codemirror/view";
+import { EditorState, StateEffect, StateField, RangeSetBuilder } from "@codemirror/state";
+import { EditorView, keymap, placeholder, Decoration, type DecorationSet } from "@codemirror/view";
 import { defaultKeymap, history, historyKeymap, indentWithTab, redo, selectAll, undo } from "@codemirror/commands";
 import { markdown } from "@codemirror/lang-markdown";
 import { searchKeymap } from "@codemirror/search";
 import { HighlightStyle, bracketMatching, indentOnInput, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
+
+// ── 持久化搜索高亮（P0-E）────────────────────────────────────────────────────
+const setHighlightEffect = StateEffect.define<{ query: string; isRegex: boolean }>();
+const clearHighlightEffect = StateEffect.define<void>();
+
+const highlightField = StateField.define<DecorationSet>({
+  create(): DecorationSet {
+    return Decoration.none;
+  },
+  update(decs: DecorationSet, tr): DecorationSet {
+    decs = decs.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(clearHighlightEffect)) return Decoration.none;
+      if (e.is(setHighlightEffect)) {
+        const { query, isRegex } = e.value;
+        if (!query.trim()) return Decoration.none;
+        const text = tr.state.doc.toString();
+        const builder = new RangeSetBuilder<Decoration>();
+        const mark = Decoration.mark({ class: "cm-search-highlight" });
+        try {
+          const reStr = isRegex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(reStr, "g");
+          let m: RegExpExecArray | null;
+          while ((m = re.exec(text)) !== null) {
+            if (m[0].length === 0) { re.lastIndex++; continue; }
+            builder.add(m.index, m.index + m[0].length, mark);
+          }
+        } catch {
+          return Decoration.none;
+        }
+        return builder.finish();
+      }
+    }
+    return decs;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
 
 export type CodeMirrorEditorHandle = {
   focus: () => void;
@@ -23,6 +60,10 @@ export type CodeMirrorEditorHandle = {
    * @param fromOffset 从该偏移量开始搜索（默认 0）
    */
   scrollToMatch: (query: string, isRegex?: boolean, fromOffset?: number) => void;
+  /** 为所有匹配项添加持久高亮装饰（P0-E） */
+  highlight: (query: string, isRegex: boolean) => void;
+  /** 清除持久高亮装饰 */
+  clearHighlight: () => void;
 };
 
 function normalizeDocNewlines(s: string): string {
@@ -64,6 +105,7 @@ export const CodeMirrorEditor = forwardRef<
   const extensions = useMemo(() => {
     const themeExt = buildThemeExtensions();
     return [
+      highlightField,
       history(),
       indentOnInput(),
       bracketMatching(),
@@ -195,10 +237,19 @@ export const CodeMirrorEditor = forwardRef<
         });
         view.focus();
       },
+      highlight: (query: string, isRegex: boolean) => {
+        const view = viewRef.current;
+        if (!view || !query.trim()) return;
+        view.dispatch({ effects: setHighlightEffect.of({ query, isRegex }) });
+      },
+      clearHighlight: () => {
+        const view = viewRef.current;
+        if (!view) return;
+        view.dispatch({ effects: clearHighlightEffect.of(undefined) });
+      },
     }),
     [],
   );
 
   return <div ref={hostRef} className={className} aria-label={ariaLabel} />;
 });
-

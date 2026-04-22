@@ -1,7 +1,15 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { useNavigate } from "react-router-dom";
 import { exportBibleMarkdown } from "../db/repo";
-import type { BibleGlossaryTerm, ReferenceExcerpt, ReferenceSearchHit, Work, Chapter } from "../db/types";
+import type {
+  BibleCharacter,
+  BibleGlossaryTerm,
+  GlobalPromptTemplate,
+  ReferenceExcerpt,
+  ReferenceSearchHit,
+  Work,
+  Chapter,
+} from "../db/types";
 import { approxRoughTokenCount } from "../ai/approx-tokens";
 import { addSessionApproxTokens, readSessionApproxTokens, resetSessionApproxTokens } from "../ai/sidepanel-session-tokens";
 import { addTodayApproxTokens, readTodayApproxTokens } from "../ai/daily-approx-tokens";
@@ -9,22 +17,23 @@ import {
   buildWritingSidepanelInjectBlocks,
   buildWritingSidepanelMaterialsSummaryLines,
   buildWritingSidepanelMessages,
-  CHAPTER_BIBLE_FIELD_LABELS,
-  defaultChapterBibleInjectMask,
-  validateDrawCardRequest,
   type ChapterBibleFieldKey,
+  validateDrawCardRequest,
   type WritingSidepanelAssembleInput,
   type WritingSkillMode,
   type WritingStyleSampleSlice,
   type WritingGlossaryTermSlice,
+  type WritingStudyCharacterCardSlice,
 } from "../ai/assemble-context";
-import {
-  defaultWorkBibleSectionMask,
-  filterWorkBibleMarkdownBySections,
-  WORK_BIBLE_SECTION_HEADERS,
-} from "../ai/work-bible-sections";
+import { filterWorkBibleMarkdownBySections } from "../ai/work-bible-sections";
 import { generateWithProviderStream, isFirstAiGateCancelledError } from "../ai/client";
-import { getProviderConfig, loadAiSettings, saveAiSettings } from "../ai/storage";
+import {
+  getProviderConfig,
+  getProviderTemperature,
+  loadAiSettings,
+  patchProviderTemperature,
+  saveAiSettings,
+} from "../ai/storage";
 import type { AiChatMessage, AiProviderConfig, AiProviderId, AiSettings } from "../ai/types";
 import { resolveInjectionConfirmPrompt } from "../util/ai-injection-confirm";
 import { CostGateModal, type CostGatePayload } from "./CostGateModal";
@@ -33,27 +42,38 @@ import {
   errorSuggestsContextDegrade,
   type AiRunContextOverrides,
 } from "../util/ai-degrade-retry";
-import { referenceReaderHref } from "../util/readUtf8TextFile";
 import { normalizeWorkTagList, workTagsToProfileText } from "../util/work-tags";
 import { computeToneDriftHints } from "../util/tone-drift-hint";
 import { cosineDistance } from "../util/vector-math";
 import { readEmbeddingCache, writeEmbeddingCache } from "../util/embedding-cache";
 import { embedWithProvider } from "../ai/client";
-import {
-  DEFAULT_WRITING_RAG_SOURCES,
-  isRuntimeRagHit,
-  searchWritingRagMerged,
-  type WritingRagSources,
-} from "../util/work-rag-runtime";
+import { searchWritingRagMerged, type WritingRagSources } from "../util/work-rag-runtime";
 import { AiDraftMergeDialog, type AiDraftMergePayload } from "./AiDraftMergeDialog";
 import { AiInlineErrorNotice } from "./AiInlineErrorNotice";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
-import { PromptPicker, PROMPT_PICKER_WRITING_TYPES, PROMPT_PICKER_WRITER_SLOTS } from "./PromptPicker";
+import { AiPanelWritingPromptsRow } from "./ai-panel/AiPanelWritingPromptsRow";
 import { renderPromptTemplate } from "../util/render-prompt-template";
 import { cn } from "../lib/utils";
 import { listModelPersonas } from "../util/model-personas";
-import { aiPanelDraftStorageKey } from "../util/ai-panel-draft";
+import { aiPanelDraftStorageKey, pushDraftHistory, readDraftHistory, deleteDraftHistoryEntry, type AiDraftHistoryEntry } from "../util/ai-panel-draft";
 import { isLocalAiProvider } from "../ai/local-provider";
+import { doubaoModelDisplayLabel } from "../util/doubao-ui";
+import { AiPanelRagSection, runAiPanelRagPreview } from "./ai-panel/AiPanelRagSection";
+import { AiPanelStudyChapterSection } from "./ai-panel/AiPanelStudyChapterSection";
+import { LINKED_CHAPTERS_UPDATED_EVENT, loadLinkedChapters } from "../util/linked-chapters-storage";
+import {
+  CHAPTER_OUTLINE_PASTE_UPDATED_EVENT,
+  loadChapterOutlinePaste,
+  saveChapterOutlinePaste,
+} from "../util/chapter-outline-paste-storage";
+import { readStudyChapterSelection, writeStudyChapterSelection } from "../util/study-chapter-selection-storage";
+import { buildStudyNeedleText, pickSuggestedCharacterIds, pickSuggestedGlossaryIds } from "../util/study-suggestions";
+import type {
+  AiPanelWorkRagInjectDefaults,
+  AiPanelWorkRagInjectDefaultsPatch,
+  AiPanelWorkWritingVars,
+  AiPanelWorkWritingVarsPatch,
+} from "./ai-panel/types";
 
 function providerLogoImgSrc(p: AiProviderId): string | null {
   switch (p) {
@@ -127,7 +147,8 @@ function AiProviderLogo(props: { provider: AiProviderId }) {
   );
 }
 
-export function AiPanel(props: {
+// eslint-disable-next-line react-refresh/only-export-components
+export const AiPanel = memo(function AiPanelBase(props: {
   onClose: () => void;
   /** 在右侧栏壳层内使用时隐藏标题行（避免重复两行标题） */
   hideHeader?: boolean;
@@ -159,17 +180,69 @@ export function AiPanel(props: {
     characterStateText: string;
   };
   glossaryTerms: BibleGlossaryTerm[];
+  /** 书斋：锦囊「人物卡」同源数据（整书） */
+  bibleCharacters: BibleCharacter[];
   /** §11 步 43：锦囊「笔感」页维护的参考段落 */
   styleSampleSlices: WritingStyleSampleSlice[];
   workStyle: { pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string; sentenceRhythm?: string; punctuationStyle?: string; dialogueDensity?: "low" | "medium" | "high"; emotionStyle?: "cold" | "neutral" | "warm"; narrativeDistance?: "omniscient" | "limited" | "deep_pov" };
   onUpdateWorkStyle: (patch: Partial<{ pov: string; tone: string; bannedPhrases: string; styleAnchor: string; extraRules: string; sentenceRhythm?: string; punctuationStyle?: string; dialogueDensity?: "low" | "medium" | "high"; emotionStyle?: "cold" | "neutral" | "warm"; narrativeDistance?: "omniscient" | "limited" | "deep_pov" }>) => void;
+  workWritingVars: AiPanelWorkWritingVars;
+  onWorkWritingVarsChange: (patch: AiPanelWorkWritingVarsPatch) => void;
+  workRagInjectDefaults: AiPanelWorkRagInjectDefaults;
+  onWorkRagInjectDefaultsChange: (patch: AiPanelWorkRagInjectDefaultsPatch) => void;
   linkedExcerptsForChapter: Array<ReferenceExcerpt & { refTitle: string; tagIds: string[] }>;
   getSelectedText: () => string;
   insertAtCursor: (text: string) => void;
   appendToEnd: (text: string) => void;
   replaceSelection: (text: string) => void;
+  /** 同步「本次生成 · 使用材料（简版）」行，供正文工具栏悬停简报 */
+  onMaterialsSummaryLinesChange?: (lines: string[]) => void;
+  /** 运行模式由侧栏「设定」托管，与 `EditorPage` 状态同步 */
+  writingSkillMode: WritingSkillMode;
+  onWritingSkillModeChange: (m: WritingSkillMode) => void;
 }) {
   const navigate = useNavigate();
+  const {
+    storyBackground,
+    characters,
+    relations,
+    skillPreset,
+    skillText,
+  } = props.workWritingVars;
+
+  const ri = props.workRagInjectDefaults;
+  const includeLinkedExcerpts = ri.includeLinkedExcerpts;
+  const includeRecentSummaries = ri.includeRecentSummaries;
+  const recentN = ri.recentN;
+  const neighborSummaryIncludeById = ri.neighborSummaryIncludeById;
+  const chapterBibleInjectMask = ri.chapterBibleInjectMask;
+  const workBibleSectionMask = ri.workBibleSectionMask;
+  const currentContextMode = ri.currentContextMode;
+  const ragEnabled = ri.ragEnabled;
+  const ragWorkSources = ri.ragWorkSources;
+  const ragK = ri.ragK;
+
+  const patchRagInject = props.onWorkRagInjectDefaultsChange;
+  const setRagWorkSourcesUp = (up: SetStateAction<WritingRagSources>) => {
+    patchRagInject({
+      ragWorkSources: typeof up === "function" ? up(ragWorkSources) : up,
+    });
+  };
+  const setNeighborSummaryIncludeByIdUp = (up: SetStateAction<Record<string, boolean>>) => {
+    patchRagInject({
+      neighborSummaryIncludeById: typeof up === "function" ? up(neighborSummaryIncludeById) : up,
+    });
+  };
+  const setChapterBibleInjectMaskUp = (up: SetStateAction<Record<ChapterBibleFieldKey, boolean>>) => {
+    patchRagInject({
+      chapterBibleInjectMask: typeof up === "function" ? up(chapterBibleInjectMask) : up,
+    });
+  };
+  const setWorkBibleSectionMaskUp = (up: SetStateAction<Record<string, boolean>>) => {
+    patchRagInject({
+      workBibleSectionMask: typeof up === "function" ? up(workBibleSectionMask) : up,
+    });
+  };
 
   const GEMINI_MIND = {
     初见: "gemini-3.1-flash-lite-preview",
@@ -333,34 +406,122 @@ export function AiPanel(props: {
   };
 
   const [settings, setSettings] = useState<AiSettings>(() => loadAiSettings());
-  const [mode, setMode] = useState<WritingSkillMode>("continue");
-  const [userHint, setUserHint] = useState("");
+  const [chapterOutlinePaste, setChapterOutlinePaste] = useState("");
+  const [studyPickedCharacterIds, setStudyPickedCharacterIds] = useState<string[]>([]);
+  const [studyPickedGlossaryIds, setStudyPickedGlossaryIds] = useState<string[]>([]);
+  const [studyCharacterSource, setStudyCharacterSource] = useState<"cards" | "npc">("cards");
+  const [studyNpcText, setStudyNpcText] = useState("");
+  /** 防章节切换瞬间把 localStorage 默认值写覆盖到上一章 */
+  const studySelectionHydratedForChapterRef = useRef<string | null>(null);
+  /** 快捷窗选入的写作风格 / 要求（渲染后的正文），与下方「额外要求」文本框合并后参与组装 */
+  const [writingStyleInject, setWritingStyleInject] = useState("");
+  const [writingReqInject, setWritingReqInject] = useState("");
+  const [selectedStyleTemplateId, setSelectedStyleTemplateId] = useState<string | null>(null);
+  const [selectedReqTemplateId, setSelectedReqTemplateId] = useState<string | null>(null);
+  const [styleTemplateTitle, setStyleTemplateTitle] = useState<string | null>(null);
+  const [reqTemplateTitle, setReqTemplateTitle] = useState<string | null>(null);
+
+  // 书斋：本章勾选（localStorage）；新章节给一套默认推荐（可改）
   useEffect(() => {
-    const p = props.prefillUserHint;
-    if (p == null) return;
-    const t = p.trim();
-    if (!t) {
-      props.onPrefillUserHintConsumed?.();
+    if (!props.workId || !props.chapter) {
+      setStudyPickedCharacterIds([]);
+      setStudyPickedGlossaryIds([]);
+      setStudyCharacterSource("cards");
+      setStudyNpcText("");
+      studySelectionHydratedForChapterRef.current = null;
       return;
     }
-    setUserHint(t);
+    const chapterId = props.chapter.id;
+    studySelectionHydratedForChapterRef.current = null;
+
+    const saved = readStudyChapterSelection(props.workId, chapterId);
+    const charSet = new Set(props.bibleCharacters.map((c) => c.id));
+    const glossSet = new Set(props.glossaryTerms.map((g) => g.id));
+
+    if (saved) {
+      const charIds = saved.characterIds.filter((id) => charSet.has(id));
+      let glossIds = saved.glossaryIds.filter((id) => glossSet.has(id));
+      if (saved.glossaryMode === "full_book") {
+        glossIds = props.glossaryTerms.map((g) => g.id).filter((id) => glossSet.has(id));
+      }
+      setStudyPickedCharacterIds(charIds);
+      setStudyPickedGlossaryIds(glossIds);
+      setStudyCharacterSource(saved.characterSource === "npc" ? "npc" : "cards");
+      setStudyNpcText(saved.npcText ?? "");
+      studySelectionHydratedForChapterRef.current = chapterId;
+      return;
+    }
+
+    const needleEarly = buildStudyNeedleText([
+      props.chapterContent,
+      props.chapter.summary,
+      props.chapterBible.characterStateText,
+    ]);
+    const sugChar = pickSuggestedCharacterIds(props.bibleCharacters, needleEarly);
+    const sugGloss = pickSuggestedGlossaryIds(props.glossaryTerms, needleEarly);
+    setStudyPickedCharacterIds(sugChar);
+    setStudyPickedGlossaryIds(sugGloss);
+    setStudyCharacterSource("cards");
+    setStudyNpcText("");
+    studySelectionHydratedForChapterRef.current = chapterId;
+  }, [
+    props.workId,
+    props.chapter?.id,
+    props.bibleCharacters,
+    props.glossaryTerms,
+    props.chapterContent,
+    props.chapter?.summary,
+    props.chapterBible.characterStateText,
+  ]);
+
+  useEffect(() => {
+    if (!props.workId || !props.chapter) return;
+    if (studySelectionHydratedForChapterRef.current !== props.chapter.id) return;
+    writeStudyChapterSelection(props.workId, props.chapter.id, {
+      v: 2,
+      characterIds: studyPickedCharacterIds,
+      glossaryIds: studyPickedGlossaryIds,
+      glossaryMode: "chapter_pick",
+      characterSource: studyCharacterSource,
+      npcText: studyNpcText,
+    });
+  }, [
+    props.chapter,
+    props.workId,
+    studyCharacterSource,
+    studyNpcText,
+    studyPickedCharacterIds,
+    studyPickedGlossaryIds,
+  ]);
+
+  useEffect(() => {
+    // 兼容旧入口：仍消费一次性 prefill，但不再显示「额外要求」输入框
+    if (props.prefillUserHint == null) return;
     props.onPrefillUserHintConsumed?.();
-    // 仅响应锦囊页注入的一次性 state，不依赖 callback 引用
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onPrefillUserHintConsumed intentionally omitted
   }, [props.prefillUserHint]);
-  const [storyBackground, setStoryBackground] = useState("");
-  const [characters, setCharacters] = useState("");
-  const [relations, setRelations] = useState("");
-  const [skillPreset, setSkillPreset] = useState<"none" | "tight" | "dialogue" | "describe" | "custom">("none");
-  const [skillText, setSkillText] = useState("");
-  const [includeLinkedExcerpts, setIncludeLinkedExcerpts] = useState(true);
-  const [includeRecentSummaries, setIncludeRecentSummaries] = useState(true);
-  const [recentN, setRecentN] = useState(3);
-  /** 邻章概要：章 id → 是否纳入（步 9 勾选子集） */
-  const [neighborSummaryIncludeById, setNeighborSummaryIncludeById] = useState<Record<string, boolean>>({});
-  const [chapterBibleInjectMask, setChapterBibleInjectMask] = useState(() => defaultChapterBibleInjectMask());
-  const [workBibleSectionMask, setWorkBibleSectionMask] = useState(() => defaultWorkBibleSectionMask());
-  const [currentContextMode, setCurrentContextMode] = useState<"full" | "summary" | "selection" | "none">("full");
+
+  // per-chapter outline/plot paste (manual)
+  useEffect(() => {
+    if (!props.workId || !props.chapter) {
+      setChapterOutlinePaste("");
+      return;
+    }
+    setChapterOutlinePaste(loadChapterOutlinePaste(props.workId, props.chapter.id));
+  }, [props.workId, props.chapter?.id]);
+
+  useEffect(() => {
+    const on = (e: Event) => {
+      const ev = e as CustomEvent<{ workId?: string; chapterId?: string }>;
+      if (!props.chapter) return;
+      if (ev.detail?.workId === props.workId && ev.detail?.chapterId === props.chapter.id) {
+        setChapterOutlinePaste(loadChapterOutlinePaste(props.workId, props.chapter.id));
+      }
+    };
+    window.addEventListener(CHAPTER_OUTLINE_PASTE_UPDATED_EVENT, on as EventListener);
+    return () => window.removeEventListener(CHAPTER_OUTLINE_PASTE_UPDATED_EVENT, on as EventListener);
+  }, [props.workId, props.chapter?.id]);
+
   const [sessionBudgetUiTick, setSessionBudgetUiTick] = useState(0);
   /** P1-04：今日用量刷新触发器（发送完成后 +1） */
   const [dailyUsageTick, setDailyUsageTick] = useState(0);
@@ -380,35 +541,55 @@ export function AiPanel(props: {
   }, [dailyUsageTick, busy]);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [draftDialogOpen, setDraftDialogOpen] = useState(false);
+  /** P0-D：草稿元信息（最近一次生成） */
+  const [draftMeta, setDraftMeta] = useState<{
+    provider: string;
+    mode: string;
+    roughTokens: number;
+    generatedAt: number;
+  } | null>(null);
+  /** P0-D：元信息卡是否展开 */
+  const [draftMetaOpen, setDraftMetaOpen] = useState(false);
+  /** P1-C：草稿历史列表 */
+  const [draftHistory, setDraftHistory] = useState<AiDraftHistoryEntry[]>([]);
+  /** P1-C：历史区是否展开 */
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [biblePreview, setBiblePreview] = useState<{ text: string; chars: number } | null>(null);
   const [bibleLoading, setBibleLoading] = useState(false);
-  const [ragEnabled, setRagEnabled] = useState(false);
+  const [linkedChaptersTick, setLinkedChaptersTick] = useState(0);
+
+  useEffect(() => {
+    function onLinked() {
+      setLinkedChaptersTick((x) => x + 1);
+    }
+    window.addEventListener(LINKED_CHAPTERS_UPDATED_EVENT, onLinked as EventListener);
+    return () => window.removeEventListener(LINKED_CHAPTERS_UPDATED_EVENT, onLinked as EventListener);
+  }, []);
   const [ragQuery, setRagQuery] = useState("");
-  const [ragK, setRagK] = useState(6);
   const [ragHits, setRagHits] = useState<ReferenceSearchHit[]>([]);
   const [ragLoading, setRagLoading] = useState(false);
   /** 用户单独取消的命中 chunkId 集合；换 query 时自动清空 */
   const [ragExcluded, setRagExcluded] = useState<ReadonlySet<string>>(new Set());
-  const [ragWorkSources, setRagWorkSources] = useState<WritingRagSources>(() => {
-    try {
-      const raw = localStorage.getItem("liubai:ragWorkSources:v1");
-      if (raw) return { ...DEFAULT_WRITING_RAG_SOURCES, ...(JSON.parse(raw) as Partial<WritingRagSources>) };
-    } catch {
-      /* ignore */
-    }
-    return { ...DEFAULT_WRITING_RAG_SOURCES };
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("liubai:ragWorkSources:v1", JSON.stringify(ragWorkSources));
-    } catch {
-      /* ignore */
-    }
-  }, [ragWorkSources]);
 
   // 换关键词时清空单条排除集合
   useEffect(() => { setRagExcluded(new Set()); }, [ragQuery]);
+
+  const runRagPreview = useCallback(() => {
+    void runAiPanelRagPreview({
+      workId: props.workId,
+      work: props.work,
+      chapters: props.chapters,
+      activeChapterId: props.chapter?.id ?? null,
+      ragQuery,
+      ragK,
+      ragWorkSources,
+      setRagHits,
+      setRagLoading,
+      setError,
+    });
+  }, [props.workId, props.work, props.chapters, props.chapter?.id, ragQuery, ragK, ragWorkSources]);
+
   const abortRef = useRef<AbortController | null>(null);
   const lastReqRef = useRef<{
     provider: AiProviderId;
@@ -426,6 +607,7 @@ export function AiPanel(props: {
   useLayoutEffect(() => {
     if (!draftStorageKey) {
       setDraft("");
+      setDraftHistory([]);
       return;
     }
     skipDraftPersistRef.current = true;
@@ -434,7 +616,8 @@ export function AiPanel(props: {
     } catch {
       setDraft("");
     }
-  }, [draftStorageKey]);
+    setDraftHistory(props.workId && props.chapter ? readDraftHistory(props.workId, props.chapter.id) : []);
+  }, [draftStorageKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!draftStorageKey) return;
@@ -468,11 +651,80 @@ export function AiPanel(props: {
   }, [providerPickerOpen]);
 
   useEffect(() => {
-    if (isLocalAiProvider(pickerActive)) setModelPickerTune(null);
-    else if (pickerActive !== "gemini" && modelPickerTune === "gear") setModelPickerTune(null);
+    if (isLocalAiProvider(pickerActive)) {
+      setModelPickerTune(null);
+      return;
+    }
+
+    // 允许任意云端提供方使用「模型档位」，前提是该提供方存在 >=2 个可用 persona（档位）。
+    // 否则切换 provider 时会把无效的 gear 面板关掉。
+    if (modelPickerTune === "gear") {
+      const personasAll = listModelPersonas(pickerActive).filter((p) => (p.modelId ?? "").trim());
+      if (personasAll.length < 2) setModelPickerTune(null);
+    }
   }, [pickerActive, modelPickerTune]);
 
   const selectedText = useMemo(() => props.getSelectedText(), [props]);
+
+  const promptRenderVars = useMemo(
+    () => ({
+      work_title: props.work.title ?? "",
+      work_tags: (props.work.tags ?? []).join("，"),
+      chapter_title: props.chapter?.title ?? "",
+      chapter_summary: props.chapter?.summary ?? "",
+      chapter_content: props.chapter?.content ?? "",
+    }),
+    [props.work.title, props.work.tags, props.chapter?.title, props.chapter?.summary, props.chapter?.content],
+  );
+
+  const composedUserHint = useMemo(() => {
+    const parts: string[] = [];
+    if (writingStyleInject.trim()) parts.push(`【文风】\n${writingStyleInject.trim()}`);
+    if (writingReqInject.trim()) parts.push(`【要求】\n${writingReqInject.trim()}`);
+    return parts.join("\n\n");
+  }, [writingReqInject, writingStyleInject]);
+
+  const onStyleTemplatePick = useCallback(
+    (t: GlobalPromptTemplate | null) => {
+      setSelectedStyleTemplateId(t?.id ?? null);
+      setStyleTemplateTitle(t?.title ?? null);
+      if (!t) {
+        setWritingStyleInject("");
+        return;
+      }
+      setWritingStyleInject(
+        renderPromptTemplate(t.body, {
+          work_title: promptRenderVars.work_title,
+          work_tags: promptRenderVars.work_tags,
+          chapter_title: promptRenderVars.chapter_title,
+          chapter_summary: promptRenderVars.chapter_summary,
+          chapter_content: promptRenderVars.chapter_content,
+        }),
+      );
+    },
+    [promptRenderVars],
+  );
+
+  const onReqTemplatePick = useCallback(
+    (t: GlobalPromptTemplate | null) => {
+      setSelectedReqTemplateId(t?.id ?? null);
+      setReqTemplateTitle(t?.title ?? null);
+      if (!t) {
+        setWritingReqInject("");
+        return;
+      }
+      setWritingReqInject(
+        renderPromptTemplate(t.body, {
+          work_title: promptRenderVars.work_title,
+          work_tags: promptRenderVars.work_tags,
+          chapter_title: promptRenderVars.chapter_title,
+          chapter_summary: promptRenderVars.chapter_summary,
+          chapter_content: promptRenderVars.chapter_content,
+        }),
+      );
+    },
+    [promptRenderVars],
+  );
 
   const toneDriftHints = useMemo(() => {
     if (!settings.toneDriftHintEnabled) return [];
@@ -591,25 +843,6 @@ export function AiPanel(props: {
       .filter((c) => (c.summary ?? "").trim());
   }, [props.chapter, props.chapters, recentN]);
 
-  useEffect(() => {
-    const ids = new Set(neighborSummaryPoolChapters.map((c) => c.id));
-    setNeighborSummaryIncludeById((prev) => {
-      const next: Record<string, boolean> = {};
-      for (const id of ids) {
-        next[id] = prev[id] !== false;
-      }
-      return next;
-    });
-  }, [neighborSummaryPoolChapters]);
-
-  useEffect(() => {
-    setChapterBibleInjectMask(defaultChapterBibleInjectMask());
-  }, [props.chapter?.id]);
-
-  useEffect(() => {
-    setWorkBibleSectionMask(defaultWorkBibleSectionMask());
-  }, [props.workId]);
-
   const neighborSummaryPoolCount = neighborSummaryPoolChapters.length;
   const neighborSummaryIncludedCount = useMemo(
     () => neighborSummaryPoolChapters.filter((c) => neighborSummaryIncludeById[c.id] !== false).length,
@@ -629,6 +862,33 @@ export function AiPanel(props: {
     }
     return lines.join("\n");
   }, [props.chapter, includeRecentSummaries, neighborSummaryPoolChapters, neighborSummaryIncludeById]);
+
+  const linkedChapters = useMemo(() => {
+    void linkedChaptersTick;
+    if (!props.workId || !props.chapter) return null;
+    return loadLinkedChapters(props.workId, props.chapter.id);
+  }, [props.workId, props.chapter?.id, linkedChaptersTick]);
+
+  const linkedChapterSummaryText = useMemo(() => {
+    if (!props.chapter || !linkedChapters) return "";
+    const ids = new Set(linkedChapters.summaryChapterIds);
+    const curId = props.chapter.id;
+    const picked = props.chapters
+      .filter((c) => c.id !== curId && ids.has(c.id) && (c.summary ?? "").trim())
+      .sort((a, b) => b.order - a.order);
+    return picked.map((c) => `【#${c.order}｜${c.title}】\n${(c.summary ?? "").trim()}`).join("\n\n---\n\n");
+  }, [props.chapter, props.chapters, linkedChapters]);
+
+  const linkedChapterFullText = useMemo(() => {
+    if (!props.chapter || !linkedChapters) return "";
+    const ids = new Set(linkedChapters.fullChapterIds);
+    const curId = props.chapter.id;
+    const picked = props.chapters.filter((c) => c.id !== curId && ids.has(c.id) && (c.content ?? "").trim());
+    picked.sort((a, b) => b.updatedAt - a.updatedAt);
+    return picked
+      .map((c) => `【#${c.order}｜${c.title}】\n${(c.content ?? "").trim()}`)
+      .join("\n\n---\n\n");
+  }, [props.chapter, props.chapters, linkedChapters]);
 
   const skillPresetText = useMemo(() => {
     if (skillPreset === "tight") return "写作技巧：更紧凑、减少解释性文字，多用具体动作与感官细节；避免空泛形容。";
@@ -650,9 +910,40 @@ export function AiPanel(props: {
     }));
   }, [props.glossaryTerms]);
 
+  const studyCharacterCardSlices = useMemo((): WritingStudyCharacterCardSlice[] => {
+    if (studyCharacterSource !== "cards") return [];
+    const byId = new Map(props.bibleCharacters.map((c) => [c.id, c]));
+    const out: WritingStudyCharacterCardSlice[] = [];
+    for (const id of studyPickedCharacterIds) {
+      const c = byId.get(id);
+      if (!c) continue;
+      if (!(c.name ?? "").trim()) continue;
+      out.push({
+        name: c.name,
+        motivation: c.motivation ?? "",
+        relationships: c.relationships ?? "",
+        voiceNotes: c.voiceNotes ?? "",
+        taboos: c.taboos ?? "",
+      });
+    }
+    return out;
+  }, [props.bibleCharacters, studyCharacterSource, studyPickedCharacterIds]);
+
+  const studyGlossarySlices = useMemo((): WritingGlossaryTermSlice[] => {
+    const byId = new Map(props.glossaryTerms.map((g) => [g.id, g]));
+    const out: WritingGlossaryTermSlice[] = [];
+    for (const id of studyPickedGlossaryIds) {
+      const g = byId.get(id);
+      if (!g) continue;
+      if (!(g.term ?? "").trim()) continue;
+      out.push({ term: g.term, category: g.category, note: g.note ?? "" });
+    }
+    return out;
+  }, [props.glossaryTerms, studyPickedGlossaryIds]);
+
   const glossaryTermCountForSummary = useMemo(
-    () => glossarySlices.filter((g) => (g.term ?? "").trim()).length,
-    [glossarySlices],
+    () => studyGlossarySlices.filter((g) => (g.term ?? "").trim()).length,
+    [studyGlossarySlices],
   );
 
   const styleSampleCountForSummary = useMemo(
@@ -687,6 +978,10 @@ export function AiPanel(props: {
       neighborSummaryIncludedCount,
       recentSummaryText,
       includeRecentSummaries,
+      linkedChapterSummaryText,
+      linkedChapterFullText,
+      linkedChapterSummaryCount: linkedChapters?.summaryChapterIds.length ?? 0,
+      linkedChapterFullCount: linkedChapters?.fullChapterIds.length ?? 0,
       ragEnabled,
       ragQuery,
       ragK,
@@ -696,50 +991,56 @@ export function AiPanel(props: {
       chapterSummary: props.chapter.summary,
       selectedText,
       currentContextMode,
-      userHint,
-      mode,
+      userHint: composedUserHint,
+      mode: props.writingSkillMode,
       recentN,
+      chapterOutlinePaste,
       styleSamples: props.styleSampleSlices,
       glossaryTerms: glossarySlices,
+      chapterStudyCharacterCards: studyCharacterCardSlices,
+      chapterStudyNpcNotes: studyCharacterSource === "npc" ? studyNpcText : "",
+      studyGlossaryMode: "chapter_pick",
+      chapterStudyGlossaryTerms: studyGlossarySlices,
     };
   }, [
     props.chapter,
     props.work.title,
     props.chapter?.title,
-    storyBackground,
-    characters,
-    relations,
+    props.bibleCharacters,
+    props.glossaryTerms,
+    props.workWritingVars,
+    props.workRagInjectDefaults,
     props.chapterBible,
     skillPresetText,
-    includeLinkedExcerpts,
     props.linkedExcerptsForChapter,
     settings.maxContextChars,
     settings.privacy,
     settings.includeBible,
     isCloudProvider,
     biblePreview?.text,
-    workBibleSectionMask,
-    chapterBibleInjectMask,
     neighborSummaryIncludedCount,
     recentSummaryText,
-    includeRecentSummaries,
-    ragEnabled,
+    linkedChapterSummaryText,
+    linkedChapterFullText,
+    linkedChapters?.summaryChapterIds.length,
+    linkedChapters?.fullChapterIds.length,
     ragQuery,
-    ragK,
     ragHits,
     ragExcluded,
-    ragWorkSources,
     props.chapterContent,
     props.chapter?.summary,
     selectedText,
-    currentContextMode,
-    userHint,
-    mode,
-    recentN,
+    composedUserHint,
+    props.writingSkillMode,
     props.workStyle,
     tagProfileText,
     props.styleSampleSlices,
     glossarySlices,
+    chapterOutlinePaste,
+    studyCharacterCardSlices,
+    studyCharacterSource,
+    studyGlossarySlices,
+    studyNpcText,
   ]);
 
   const injectBlocks = useMemo(() => {
@@ -775,7 +1076,7 @@ export function AiPanel(props: {
       includeRecentSummaries,
       recentN,
       currentContextMode,
-      skillMode: mode,
+      skillMode: props.writingSkillMode,
       ragEnabled,
       ragQuery,
       ragK,
@@ -784,6 +1085,11 @@ export function AiPanel(props: {
       tagCount,
       styleSampleCount: styleSampleCountForSummary,
       glossaryTermCount: glossaryTermCountForSummary,
+      studyCharacterCardCount: studyCharacterCardSlices.length,
+      studyCharacterSource,
+      studyNpcNoteChars: studyNpcText.trim().length,
+      studyGlossaryMode: "chapter_pick",
+      studyGlossaryPickCount: studyGlossarySlices.filter((g) => (g.term ?? "").trim()).length,
       neighborSummaryPoolCount,
       neighborSummaryIncludedCount,
       chapterBibleInjectMask,
@@ -806,7 +1112,7 @@ export function AiPanel(props: {
     includeRecentSummaries,
     recentN,
     currentContextMode,
-    mode,
+    props.writingSkillMode,
     ragEnabled,
     ragQuery,
     ragK,
@@ -818,11 +1124,19 @@ export function AiPanel(props: {
     tagCount,
     styleSampleCountForSummary,
     glossaryTermCountForSummary,
+    studyCharacterCardSlices.length,
+    studyCharacterSource,
+    studyGlossarySlices,
+    studyNpcText,
     neighborSummaryPoolCount,
     neighborSummaryIncludedCount,
     chapterBibleInjectMask,
     workBibleSectionMask,
   ]);
+
+  useEffect(() => {
+    props.onMaterialsSummaryLinesChange?.(materialsSummaryLines);
+  }, [materialsSummaryLines, props.onMaterialsSummaryLinesChange]);
 
   function updateSettings(patch: Partial<AiSettings>) {
     const next: AiSettings = { ...settings, ...patch };
@@ -853,9 +1167,11 @@ export function AiPanel(props: {
     setBusy(true);
     setError(null);
     setDraft("");
+    setDraftMeta(null);
+    setDraftMetaOpen(false);
     setShowDegradeRetry(false);
     if (!opts?.fromDegrade) degradeAttemptedRef.current = false;
-    const modeForAssemble: WritingSkillMode = opts?.mode ?? mode;
+    const modeForAssemble: WritingSkillMode = opts?.mode ?? props.writingSkillMode;
     try {
       if (!input && modeForAssemble === "draw") {
         const v = validateDrawCardRequest({
@@ -942,6 +1258,8 @@ export function AiPanel(props: {
         const linkedForAssemble = effLinked
           ? props.linkedExcerptsForChapter.map((e) => ({ refTitle: e.refTitle, text: e.text }))
           : [];
+        const linkedChapterSummariesForAssemble = linkedChapterSummaryText;
+        const linkedChapterFullForAssemble = linkedChapterFullText;
 
         const assembleInput: WritingSidepanelAssembleInput = {
           workStyle: props.workStyle,
@@ -964,6 +1282,10 @@ export function AiPanel(props: {
           bibleMarkdown: bibleForPrompt,
           recentSummaryText: recentForAssemble,
           includeRecentSummaries: effRecent,
+          linkedChapterSummaryText: linkedChapterSummariesForAssemble,
+          linkedChapterFullText: linkedChapterFullForAssemble,
+          linkedChapterSummaryCount: linkedChapters?.summaryChapterIds.length ?? 0,
+          linkedChapterFullCount: linkedChapters?.fullChapterIds.length ?? 0,
           neighborSummaryIncludedCount,
           ragEnabled: effRag,
           ragQuery,
@@ -974,11 +1296,16 @@ export function AiPanel(props: {
           chapterSummary: props.chapter.summary,
           selectedText,
           currentContextMode: effCtxMode,
-          userHint,
+          userHint: composedUserHint,
           mode: modeForAssemble,
           recentN,
+          chapterOutlinePaste,
           styleSamples: props.styleSampleSlices,
           glossaryTerms: glossarySlices,
+          chapterStudyCharacterCards: studyCharacterCardSlices,
+          chapterStudyNpcNotes: studyCharacterSource === "npc" ? studyNpcText : "",
+          studyGlossaryMode: "chapter_pick",
+          chapterStudyGlossaryTerms: studyGlossarySlices,
         };
         messages = buildWritingSidepanelMessages(assembleInput);
         usedProvider = settings.provider;
@@ -1062,7 +1389,7 @@ export function AiPanel(props: {
         messages,
         signal: ac.signal,
         onDelta: (d) => setDraft((prev) => prev + d),
-        temperature: !isLocalAiProvider(usedProvider) ? settings.geminiTemperature : undefined,
+        temperature: !isLocalAiProvider(usedProvider) ? getProviderTemperature(settings, usedProvider) : undefined,
       });
       if (!draft.trim() && (r.text ?? "").trim()) {
         setDraft((r.text ?? "").trim());
@@ -1070,6 +1397,16 @@ export function AiPanel(props: {
       const outTok = approxRoughTokenCount((r.text ?? "").trim());
       addSessionApproxTokens(requestTokApprox + Math.max(0, outTok));
       addTodayApproxTokens(requestTokApprox + Math.max(0, outTok));
+      setDraftMeta({
+        provider: usedProvider,
+        mode: modeForAssemble,
+        roughTokens: requestTokApprox + Math.max(0, outTok),
+        generatedAt: Date.now(),
+      });
+      if (props.workId && props.chapter && (r.text ?? "").trim()) {
+        pushDraftHistory(props.workId, props.chapter.id, (r.text ?? "").trim());
+        setDraftHistory(readDraftHistory(props.workId, props.chapter.id));
+      }
       setSessionBudgetUiTick((x) => x + 1);
       setDailyUsageTick((x) => x + 1);
     } catch (e) {
@@ -1114,7 +1451,7 @@ export function AiPanel(props: {
     if (t === 0 || t === consumed || t === continueLocalStartedRef.current) return;
     continueLocalStartedRef.current = t;
     props.onContinueRunConsumed?.(t);
-    setMode("continue");
+    props.onWritingSkillModeChange("continue");
     void runRef.current(undefined, { mode: "continue" });
   }, [props.continueRunTick, props.lastContinueConsumedTick, props.onContinueRunConsumed]);
 
@@ -1125,7 +1462,7 @@ export function AiPanel(props: {
     if (t === 0 || t === consumed || t === drawLocalStartedRef.current) return;
     drawLocalStartedRef.current = t;
     props.onDrawRunConsumed?.(t);
-    setMode("draw");
+    props.onWritingSkillModeChange("draw");
     void runRef.current(undefined, { mode: "draw" });
   }, [props.drawRunTick, props.lastDrawConsumedTick, props.onDrawRunConsumed]);
 
@@ -1141,16 +1478,13 @@ export function AiPanel(props: {
       )}
 
       <div className="ai-panel-body-stack">
-        <section className="ai-panel-section card" aria-labelledby="ai-panel-model-h">
-          <h3 id="ai-panel-model-h" className="ai-panel-section-title">
-            模型
-          </h3>
-          <div className="ai-panel-row ai-panel-row--flush">
-            <label className="small muted">提供方</label>
+        <section className="ai-panel-section ai-panel-section--flat ai-panel-section--model-line" aria-label="AI 模型">
+          <div className="ai-panel-model-line">
+            <span className="ai-panel-model-line__k">AI模型</span>
             <button
               type="button"
-              className="btn ai-panel-model-trigger"
-              title={PROVIDER_UI[settings.provider]?.tip ?? ""}
+              className="ai-panel-model-line__v"
+              title={PROVIDER_UI[settings.provider]?.tip ?? "选择模型与提供方"}
               onClick={() => setProviderPickerOpen(true)}
             >
               <AiProviderLogo provider={settings.provider} />
@@ -1159,14 +1493,20 @@ export function AiPanel(props: {
           </div>
         </section>
 
-      <details className="ai-panel-box ai-panel-box--tier2">
-        <summary>本次使用材料（简版）</summary>
-        <ul className="muted small" style={{ margin: "8px 0 0", paddingLeft: "1.15rem", lineHeight: 1.55 }}>
-          {materialsSummaryLines.map((line, i) => (
-            <li key={i}>{line}</li>
-          ))}
-        </ul>
-      </details>
+        {props.chapter ? (
+          <AiPanelStudyChapterSection
+            characters={props.bibleCharacters}
+            glossaryTerms={props.glossaryTerms}
+            characterSource={studyCharacterSource}
+            onCharacterSourceChange={setStudyCharacterSource}
+            npcText={studyNpcText}
+            onNpcTextChange={setStudyNpcText}
+            pickedCharacterIds={studyPickedCharacterIds}
+            onPickedCharacterIdsChange={setStudyPickedCharacterIds}
+            pickedGlossaryIds={studyPickedGlossaryIds}
+            onPickedGlossaryIdsChange={setStudyPickedGlossaryIds}
+          />
+        ) : null}
 
       <Dialog open={providerPickerOpen} onOpenChange={setProviderPickerOpen}>
         <DialogContent
@@ -1240,102 +1580,116 @@ export function AiPanel(props: {
                 const disabled = isCloud && !(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);
                 return (
                   <div className="model-picker-right" role="tabpanel" aria-label="模型介绍" data-provider={pickerActive}>
-                    <div className="model-picker-right-head">
-                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                        <AiProviderLogo provider={pickerActive} />
-                        <div>
-                          <div style={{ fontWeight: 900, fontSize: 18 }}>
-                            {ui.label}
+                    <div className="model-picker-right-scroll">
+                      <div className="model-picker-right-head">
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <AiProviderLogo provider={pickerActive} />
+                          <div>
+                            <div style={{ fontWeight: 900, fontSize: 18 }}>{ui.label}</div>
+                            <div className="muted small">{ui.subtitle}</div>
                           </div>
-                          <div className="muted small">{ui.subtitle}</div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="model-picker-quote">{ui.quote}</div>
-                    <div className="model-picker-core">{ui.core}</div>
+                      <div className="model-picker-quote">{ui.quote}</div>
+                      <div className="model-picker-core">{ui.core}</div>
 
-                    <div className="model-picker-meters">
-                      <div className="model-meter">
-                        <div className="muted small">文采水平</div>
-                        <Meter value={ui.meters.prose} />
-                      </div>
-                      <div className="model-meter">
-                        <div className="muted small">指令遵从</div>
-                        <Meter value={ui.meters.follow} />
-                      </div>
-                      <div className="model-meter">
-                        <div className="muted small">字数消耗</div>
-                        <Meter
-                          value={
+                      <div className="model-picker-meters">
+                        <div className="model-meter">
+                          <div className="muted small">文采水平</div>
+                          <Meter value={ui.meters.prose} />
+                        </div>
+                        <div className="model-meter">
+                          <div className="muted small">指令遵从</div>
+                          <Meter value={ui.meters.follow} />
+                        </div>
+                        <div className="model-meter">
+                          <div className="muted small">字数消耗</div>
+                          <Meter
+                            value={
                             !isLocalAiProvider(pickerActive)
-                              ? geminiCostStarsFromShensi(settings.geminiTemperature)
+                              ? geminiCostStarsFromShensi(getProviderTemperature(settings, pickerActive))
                               : ui.meters.cost
-                          }
-                        />
-                        {isLocalAiProvider(pickerActive) && ui.meters.costText ? (
-                          <span className="muted small" style={{ marginLeft: 8 }}>
-                            （{ui.meters.costText}）
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-
-                    {(() => {
-                      const cfg = getProviderConfig(settings, pickerActive);
-                      const personas = listModelPersonas(pickerActive).filter((p) => p.modelId);
-                      if (personas.length === 0) return null;
-                      return (
-                        <div className="model-persona">
-                          <div style={{ fontWeight: 800, margin: "14px 0 8px" }}>推荐模型</div>
-                          <div className="model-persona-grid" role="list" aria-label="推荐模型列表">
-                            {personas.map((p) => {
-                              const on = (cfg.model ?? "").trim() === p.modelId;
-                              const stars = p.costStars ?? ui.meters.cost;
-                              return (
-                                <button
-                                  key={p.modelId}
-                                  type="button"
-                                  role="listitem"
-                                  className={"model-persona-card" + (on ? " is-on" : "")}
-                                  title={p.modelId}
-                                  onClick={() => {
-                                    const cur = getProviderConfig(settings, pickerActive);
-                                    updateSettings(
-                                      { [pickerActive]: { ...cur, model: p.modelId } } as Partial<AiSettings>,
-                                    );
-                                  }}
-                                >
-                                  <div className="model-persona-card-head">
-                                    <div className="model-persona-card-title">{p.title}</div>
-                                    <div className="model-persona-card-badges">
-                                      {p.tags?.slice(0, 2).map((t) => (
-                                        <span key={t} className="model-persona-badge muted small">
-                                          {t}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                  <div className="muted small">{p.subtitle}</div>
-                                  <div className="model-persona-card-desc muted small">{p.description}</div>
-                                  <div className="model-persona-card-foot muted small">
-                                    <span className="model-persona-modelid">{p.modelId}</span>
-                                    <span className="model-persona-cost">
-                                      {Array.from({ length: stars }).fill("★").join("")}
-                                    </span>
-                                  </div>
-                                </button>
-                              );
-                            })}
-                          </div>
+                            }
+                          />
+                          {isLocalAiProvider(pickerActive) && ui.meters.costText ? (
+                            <span className="muted small" style={{ marginLeft: 8 }}>
+                              （{ui.meters.costText}）
+                            </span>
+                          ) : null}
                         </div>
-                      );
-                    })()}
+                      </div>
 
-                    <div className="model-picker-note">
-                      <div style={{ fontWeight: 800, marginBottom: 6 }}>注意事项</div>
-                      <div className="muted small" style={{ lineHeight: 1.65 }}>
-                        {ui.note}
+                      {(() => {
+                        const cfg = getProviderConfig(settings, pickerActive);
+                        const personas = listModelPersonas(pickerActive).filter((p) => p.modelId);
+                        if (personas.length === 0) return null;
+                        return (
+                          <div className="model-persona">
+                            <div style={{ fontWeight: 800, margin: "14px 0 8px" }}>推荐模型</div>
+                            <div className="model-persona-grid" role="list" aria-label="推荐模型列表">
+                              {personas.map((p) => {
+                                const on = (cfg.model ?? "").trim() === p.modelId;
+                                const stars = p.costStars ?? ui.meters.cost;
+                                return (
+                                  <button
+                                    key={p.modelId}
+                                    type="button"
+                                    role="listitem"
+                                    className={"model-persona-card" + (on ? " is-on" : "")}
+                                    title={p.modelId}
+                                    onClick={() => {
+                                      const cur = getProviderConfig(settings, pickerActive);
+                                      updateSettings({ [pickerActive]: { ...cur, model: p.modelId } } as Partial<AiSettings>);
+                                    }}
+                                  >
+                                    <div className="model-persona-card-head">
+                                      <div className="model-persona-card-title">{p.title}</div>
+                                      <div className="model-persona-card-badges">
+                                        {p.tags?.slice(0, 2).map((t) => (
+                                          <span key={t} className="model-persona-badge muted small">
+                                            {t}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    <div className="muted small">{p.subtitle}</div>
+                                    <div className="model-persona-card-desc muted small">{p.description}</div>
+                                    <div className="model-persona-card-foot muted small">
+                                      <span className="model-persona-modelid">{p.modelId}</span>
+                                      <span className="model-persona-cost">
+                                        {Array.from({ length: stars }).fill("★").join("")}
+                                      </span>
+                                    </div>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {pickerActive === "doubao" ? (
+                              <p className="muted small" style={{ marginTop: 10, lineHeight: 1.55 }}>
+                                当前展示：<strong>{doubaoModelDisplayLabel(getProviderConfig(settings, "doubao"))}</strong>
+                                {(getProviderConfig(settings, "doubao").modelDisplayName ?? "").trim() ? (
+                                  <>
+                                    <br />
+                                    <span style={{ opacity: 0.88 }}>
+                                      实际 endpoint：
+                                      <code style={{ fontSize: "0.85em" }}>
+                                        {(getProviderConfig(settings, "doubao").model ?? "").trim()}
+                                      </code>
+                                    </span>
+                                  </>
+                                ) : null}
+                              </p>
+                            ) : null}
+                          </div>
+                        );
+                      })()}
+
+                      <div className="model-picker-note">
+                        <div style={{ fontWeight: 800, marginBottom: 6 }}>注意事项</div>
+                        <div className="muted small" style={{ lineHeight: 1.65 }}>
+                          {ui.note}
+                        </div>
                       </div>
                     </div>
 
@@ -1351,90 +1705,110 @@ export function AiPanel(props: {
                               : "云端调参"
                         }
                       >
-                        {pickerActive === "gemini" ? (
-                          <div className="model-picker-dock-anchor">
-                            {modelPickerTune === "gear" ? (
-                              <div className="model-picker-mini-pop model-picker-mini-pop--gear" role="dialog" aria-label="模型档位">
-                                {(() => {
-                                  const gIdx = geminiGearIndex(settings.gemini.model);
-                                  const pct = (gIdx / 2) * 100;
-                                  const invPct = 100 - pct;
-                                  const tubeBg = `linear-gradient(to top,
-                                    rgba(0,0,0,0.78) 0%,
-                                    rgba(0,0,0,0.78) ${pct}%,
-                                    rgba(0,0,0,0.12) ${pct}%,
-                                    rgba(0,0,0,0.12) 100%)`;
-                                  const label = GEMINI_GEAR_KEYS[gIdx] ?? "化境";
-                                  return (
-                                    <div className="temp-wrap model-picker-gear-thermo">
-                                      <div className="temp-float temp-float--mini muted small" style={{ top: `${invPct}%` }}>
-                                        {label}
-                                      </div>
-                                      <div className="temp-vert temp-vert--mini" aria-label="模型档位">
-                                        <div className="temp-tube" aria-hidden="true" style={{ background: tubeBg }} />
-                                        <input
-                                          className="temp-slider temp-slider--vert"
-                                          type="range"
-                                          min={0}
-                                          max={2}
-                                          step={1}
-                                          value={gIdx}
-                                          onChange={(e) => {
-                                            const i = Math.max(0, Math.min(2, Number(e.target.value) || 0));
-                                            const k = GEMINI_GEAR_KEYS[i] ?? "化境";
-                                            updateSettings({ gemini: { ...settings.gemini, model: GEMINI_MIND[k] } });
-                                          }}
-                                        />
-                                      </div>
+                        {(() => {
+                          if (isLocalAiProvider(pickerActive)) return null;
+                          const personasAll = listModelPersonas(pickerActive).filter((p) => (p.modelId ?? "").trim());
+                          const gearPersonas = personasAll;
+                          if (gearPersonas.length < 2) return null;
+
+                          const activeModelId = (getProviderConfig(settings, pickerActive).model ?? "").trim();
+                          const idx = Math.max(
+                            0,
+                            Math.min(
+                              gearPersonas.length - 1,
+                              Math.max(
+                                0,
+                                gearPersonas.findIndex((p) => (p.modelId ?? "").trim() === activeModelId),
+                              ),
+                            ),
+                          );
+                          const pct = gearPersonas.length <= 1 ? 0 : (idx / (gearPersonas.length - 1)) * 100;
+                          const invPct = 100 - pct;
+                          const tubeBg = `linear-gradient(to top,
+                            rgba(0,0,0,0.78) 0%,
+                            rgba(0,0,0,0.78) ${pct}%,
+                            rgba(0,0,0,0.12) ${pct}%,
+                            rgba(0,0,0,0.12) 100%)`;
+                          const label = gearPersonas[idx]?.title ?? "档位";
+
+                          return (
+                            <div className="model-picker-dock-anchor">
+                              {modelPickerTune === "gear" ? (
+                                <div className="model-picker-mini-pop model-picker-mini-pop--gear" role="dialog" aria-label="模型档位">
+                                  <div className="temp-wrap model-picker-gear-thermo">
+                                    <div className="temp-float temp-float--mini muted small" style={{ top: `${invPct}%` }}>
+                                      {label}
                                     </div>
-                                  );
-                                })()}
-                                <div className="model-picker-mini-pop-caret" aria-hidden />
-                              </div>
-                            ) : null}
-                            <button
-                              type="button"
-                              className={"model-picker-dock-btn" + (modelPickerTune === "gear" ? " is-active" : "")}
-                              aria-pressed={modelPickerTune === "gear"}
-                              aria-expanded={modelPickerTune === "gear"}
-                              onClick={() => setModelPickerTune((p) => (p === "gear" ? null : "gear"))}
-                            >
-                              模型档位
-                            </button>
-                          </div>
-                        ) : null}
+                                    <div className="temp-vert temp-vert--mini" aria-label="模型档位">
+                                      <div className="temp-tube" aria-hidden="true" style={{ background: tubeBg }} />
+                                      <input
+                                        className="temp-slider temp-slider--vert"
+                                        type="range"
+                                        min={0}
+                                        max={gearPersonas.length - 1}
+                                        step={1}
+                                        value={idx}
+                                        onChange={(e) => {
+                                          const i = Math.max(0, Math.min(gearPersonas.length - 1, Number(e.target.value) || 0));
+                                          const m = (gearPersonas[i]?.modelId ?? "").trim();
+                                          if (!m) return;
+                                          const cur = getProviderConfig(settings, pickerActive);
+                                          updateSettings({ [pickerActive]: { ...cur, model: m } } as Partial<AiSettings>);
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="model-picker-mini-pop-caret" aria-hidden />
+                                </div>
+                              ) : null}
+                              <button
+                                type="button"
+                                className={"model-picker-dock-btn" + (modelPickerTune === "gear" ? " is-active" : "")}
+                                aria-pressed={modelPickerTune === "gear"}
+                                aria-expanded={modelPickerTune === "gear"}
+                                onClick={() => setModelPickerTune((p) => (p === "gear" ? null : "gear"))}
+                              >
+                                模型档位
+                              </button>
+                            </div>
+                          );
+                        })()}
 
                         {!isLocalAiProvider(pickerActive) ? (
                           <div className="model-picker-dock-anchor">
                             {modelPickerTune === "shensi" ? (
-                              <div className="model-picker-mini-pop model-picker-mini-pop--shensi" role="dialog" aria-label="神思">
+                              <div className="model-picker-mini-pop model-picker-mini-pop--shensi" role="dialog" aria-label="深思">
                                 {(() => {
-                                  const pct = Math.max(0, Math.min(100, ((settings.geminiTemperature - 0.1) / 1.9) * 100));
+                                  const t = getProviderTemperature(settings, pickerActive);
+                                  const pct = Math.max(0, Math.min(100, ((t - 0.1) / 1.9) * 100));
                                   const invPct = 100 - pct;
-                                  const tubeBg = `linear-gradient(to top,
-                                    rgba(0,0,0,0.78) 0%,
-                                    rgba(0,0,0,0.78) ${pct}%,
-                                    rgba(0,0,0,0.12) ${pct}%,
-                                    rgba(0,0,0,0.12) 100%)`;
                                   return (
-                                    <div className="temp-wrap model-picker-shensi-body temp-pop-thermo">
-                                      <div className="temp-float temp-float--mini muted small" style={{ top: `${invPct}%` }}>
-                                        {tempSides(settings.geminiTemperature).center}
-                                      </div>
-                                      <div className="temp-vert temp-vert--mini" aria-label="Temperature">
-                                        <div className="temp-tube" aria-hidden="true" style={{ background: tubeBg }} />
-                                        <input
-                                          className="temp-slider temp-slider--vert"
-                                          type="range"
-                                          min={0.1}
-                                          max={2.0}
-                                          step={0.1}
-                                          value={settings.geminiTemperature}
-                                          onChange={(e) => {
-                                            const v = Math.max(0.1, Math.min(2.0, Number(e.target.value) || 1.2));
-                                            updateSettings({ geminiTemperature: v });
-                                          }}
-                                        />
+                                    <div className="model-picker-shensi-pop">
+                                      <div className="model-picker-shensi-col">
+                                        <div className="temp-wrap model-picker-shensi-body temp-pop-thermo">
+                                          <div className="temp-float temp-float--mini muted small" style={{ top: `${invPct}%` }}>
+                                            {tempSides(t).center}
+                                          </div>
+                                          <div className="temp-vert temp-vert--mini" aria-label="Temperature">
+                                            <div
+                                              className="temp-tube temp-tube--fill"
+                                              aria-hidden="true"
+                                              style={{ ["--fill" as never]: `${pct}%` }}
+                                            />
+                                            <input
+                                              className="temp-slider temp-slider--vert"
+                                              type="range"
+                                              min={0.1}
+                                              max={2.0}
+                                              step={0.1}
+                                              value={t}
+                                              onChange={(e) => {
+                                                const v = Math.max(0.1, Math.min(2.0, Number(e.target.value) || 1.2));
+                                                updateSettings(patchProviderTemperature(settings, pickerActive, v));
+                                              }}
+                                            />
+                                          </div>
+                                        </div>
                                       </div>
                                     </div>
                                   );
@@ -1449,7 +1823,7 @@ export function AiPanel(props: {
                               aria-expanded={modelPickerTune === "shensi"}
                               onClick={() => setModelPickerTune((p) => (p === "shensi" ? null : "shensi"))}
                             >
-                              神思
+                              深思
                             </button>
                           </div>
                         ) : null}
@@ -1480,619 +1854,31 @@ export function AiPanel(props: {
           </div>
         </DialogContent>
       </Dialog>
-
-        <section className="ai-panel-section card" aria-labelledby="ai-panel-mode-h">
-          <h3 id="ai-panel-mode-h" className="ai-panel-section-title">
-            运行模式
-          </h3>
-          <div className="ai-panel-row ai-panel-row--flush">
-            <label className="small muted">模式</label>
-            <select name="aiMode" value={mode} onChange={(e) => setMode(e.target.value as WritingSkillMode)}>
-              <option value="continue">续写</option>
-              <option value="rewrite">改写</option>
-              <option value="outline">大纲</option>
-              <option value="summarize">事实总结</option>
-              <option value="draw">抽卡（无提示词）</option>
-            </select>
-          </div>
-        </section>
       </div>
 
-      <details className="ai-panel-box">
-        <summary>写作变量（显式控制）</summary>
-        <label className="ai-panel-field">
-          <span className="small muted">故事背景（可空）</span>
-          <textarea name="storyBackground" value={storyBackground} onChange={(e) => setStoryBackground(e.target.value)} rows={3} />
-        </label>
-        <label className="ai-panel-field">
-          <span className="small muted">角色（可空）</span>
-          <textarea name="characters" value={characters} onChange={(e) => setCharacters(e.target.value)} rows={3} />
-        </label>
-        <label className="ai-panel-field">
-          <span className="small muted">角色关系（可空）</span>
-          <textarea name="relations" value={relations} onChange={(e) => setRelations(e.target.value)} rows={3} />
-        </label>
-        <div className="ai-panel-row">
-          <label className="small muted">技巧预设</label>
-          <select
-            name="skillPreset"
-            value={skillPreset}
-            onChange={(e) =>
-              setSkillPreset(e.target.value as "none" | "tight" | "dialogue" | "describe" | "custom")
-            }
-          >
-            <option value="none">无</option>
-            <option value="tight">紧凑</option>
-            <option value="dialogue">对话推进</option>
-            <option value="describe">画面氛围</option>
-            <option value="custom">自定义</option>
-          </select>
-        </div>
-        {skillPreset === "custom" ? (
-          <label className="ai-panel-field">
-            <span className="small muted">自定义技巧</span>
-            <textarea name="skillText" value={skillText} onChange={(e) => setSkillText(e.target.value)} rows={3} />
-          </label>
-        ) : null}
-      </details>
-
-      <details className="ai-panel-box">
-        <summary>风格卡 / 调性锁（全书级）</summary>
-        <label className="ai-panel-field">
-          <span className="small muted">叙述视角 / 人称（可空）</span>
-          <textarea
-            name="stylePov"
-            value={props.workStyle.pov}
-            onChange={(e) => props.onUpdateWorkStyle({ pov: e.target.value })}
-            rows={2}
-            placeholder="例如：第三人称有限 · 贴近主角内心；过去时/现在时…"
-          />
-        </label>
-        <label className="ai-panel-field">
-          <span className="small muted">整体调性（可空）</span>
-          <textarea
-            name="styleTone"
-            value={props.workStyle.tone}
-            onChange={(e) => props.onUpdateWorkStyle({ tone: e.target.value })}
-            rows={2}
-            placeholder="例如：克制冷峻、少解释、多动作；偏硬核；节奏快…"
-          />
-        </label>
-        <label className="ai-panel-field">
-          <span className="small muted">禁用词 / 禁用套话（换行分隔，可空）</span>
-          <textarea
-            name="styleBannedPhrases"
-            value={props.workStyle.bannedPhrases}
-            onChange={(e) => props.onUpdateWorkStyle({ bannedPhrases: e.target.value })}
-            rows={3}
-            placeholder="例如：不由得、顿时、旋即、仿佛、不可思议…"
-          />
-        </label>
-        <label className="ai-panel-field">
-          <span className="small muted">文风锚点（短样例，可空）</span>
-          <textarea
-            name="styleAnchor"
-            value={props.workStyle.styleAnchor}
-            onChange={(e) => props.onUpdateWorkStyle({ styleAnchor: e.target.value })}
-            rows={4}
-            placeholder="粘贴一小段你满意的成稿，用来锁句式与节奏。"
-          />
-        </label>
-        <label className="ai-panel-field">
-          <span className="small muted">额外硬约束（可空）</span>
-          <textarea
-            name="styleExtraRules"
-            value={props.workStyle.extraRules}
-            onChange={(e) => props.onUpdateWorkStyle({ extraRules: e.target.value })}
-            rows={3}
-            placeholder="例如：避免上帝视角；不要出现现代网络词；对话不加引号…"
-          />
-        </label>
-
-        <details style={{ marginTop: "0.5rem" }}>
-          <summary className="small muted" style={{ cursor: "pointer", userSelect: "none" }}>高级风格指纹（展开设置）</summary>
-          <div style={{ paddingTop: "0.5rem" }}>
-            <label className="ai-panel-field">
-              <span className="small muted">句节奏（可空）</span>
-              <textarea
-                name="styleSentenceRhythm"
-                value={props.workStyle.sentenceRhythm ?? ""}
-                onChange={(e) => props.onUpdateWorkStyle({ sentenceRhythm: e.target.value || undefined })}
-                rows={2}
-                placeholder="例如：多用短句，节奏急促；长句收尾营造余韵…"
-              />
-            </label>
-            <label className="ai-panel-field">
-              <span className="small muted">标点偏好（可空）</span>
-              <textarea
-                name="stylePunctuationStyle"
-                value={props.workStyle.punctuationStyle ?? ""}
-                onChange={(e) => props.onUpdateWorkStyle({ punctuationStyle: e.target.value || undefined })}
-                rows={2}
-                placeholder="例如：善用破折号表停顿，少用感叹号…"
-              />
-            </label>
-            <label className="ai-panel-field">
-              <span className="small muted">对话密度</span>
-              <select
-                value={props.workStyle.dialogueDensity ?? ""}
-                onChange={(e) => props.onUpdateWorkStyle({ dialogueDensity: (e.target.value as "low" | "medium" | "high") || undefined })}
-              >
-                <option value="">不指定</option>
-                <option value="low">低（叙述/动作为主）</option>
-                <option value="medium">中等</option>
-                <option value="high">高（对话推动情节）</option>
-              </select>
-            </label>
-            <label className="ai-panel-field">
-              <span className="small muted">情绪温度</span>
-              <select
-                value={props.workStyle.emotionStyle ?? ""}
-                onChange={(e) => props.onUpdateWorkStyle({ emotionStyle: (e.target.value as "cold" | "neutral" | "warm") || undefined })}
-              >
-                <option value="">不指定</option>
-                <option value="cold">冷峻克制（情绪内化）</option>
-                <option value="neutral">适中</option>
-                <option value="warm">热烈（意象丰富）</option>
-              </select>
-            </label>
-            <label className="ai-panel-field">
-              <span className="small muted">叙述距离</span>
-              <select
-                value={props.workStyle.narrativeDistance ?? ""}
-                onChange={(e) => props.onUpdateWorkStyle({ narrativeDistance: (e.target.value as "omniscient" | "limited" | "deep_pov") || undefined })}
-              >
-                <option value="">不指定</option>
-                <option value="omniscient">全知叙述</option>
-                <option value="limited">第三人称有限视角</option>
-                <option value="deep_pov">深度视角（贴近意识流）</option>
-              </select>
-            </label>
-          </div>
-        </details>
-      </details>
-
-      <details className="ai-panel-box">
-        <summary>检索增强（RAG：参考库 / 本书）</summary>
-        <label className="ai-panel-check row row--check">
-          <input name="ragEnabled" type="checkbox" checked={ragEnabled} onChange={(e) => setRagEnabled(e.target.checked)} />
-          <span>启用检索片段注入</span>
-        </label>
-        <div className="ai-panel-field">
-          <span className="small muted">检索范围（步 24：本书分块为运行时检索，无单独向量索引）</span>
-          <label className="ai-panel-check row row--check">
-            <input
-              type="checkbox"
-              checked={ragWorkSources.referenceLibrary}
-              disabled={!ragEnabled}
-              onChange={(e) => {
-                const checked = e.target.checked;
-                setRagWorkSources((s) => {
-                  const next = { ...s, referenceLibrary: checked };
-                  if (!next.referenceLibrary && !next.workBibleExport && !next.workManuscript) return s;
-                  return next;
-                });
-              }}
-            />
-            <span>藏经 · 参考库</span>
-          </label>
-          <label className="ai-panel-check row row--check">
-            <input
-              type="checkbox"
-              checked={ragWorkSources.workBibleExport}
-              disabled={!ragEnabled}
-              onChange={(e) => {
-                const checked = e.target.checked;
-                setRagWorkSources((s) => {
-                  const next = { ...s, workBibleExport: checked };
-                  if (!next.referenceLibrary && !next.workBibleExport && !next.workManuscript) return s;
-                  return next;
-                });
-              }}
-            />
-            <span>本书 · 锦囊导出（分块）</span>
-          </label>
-          <label className="ai-panel-check row row--check">
-            <input
-              type="checkbox"
-              checked={ragWorkSources.workManuscript}
-              disabled={!ragEnabled}
-              onChange={(e) => {
-                const checked = e.target.checked;
-                setRagWorkSources((s) => {
-                  const next = { ...s, workManuscript: checked };
-                  if (!next.referenceLibrary && !next.workBibleExport && !next.workManuscript) return s;
-                  return next;
-                });
-              }}
-            />
-            <span>本书 · 章节正文（进度游标之前；不含当前章）</span>
-          </label>
-        </div>
-        <label className="ai-panel-field">
-          <span className="small muted">检索关键词（query）</span>
-          <input
-            className="input"
-            name="ragQuery"
-            value={ragQuery}
-            onChange={(e) => setRagQuery(e.target.value)}
-            placeholder="例如：太初古矿、玉简、主角姓名…"
-          />
-        </label>
-        <div className="ai-panel-row">
-          <label className="small muted">top-k</label>
-          <input
-            type="number"
-            name="ragTopK"
-            min={1}
-            max={20}
-            value={ragK}
-            onChange={(e) => setRagK(Number(e.target.value) || 6)}
-            style={{ width: 72 }}
-          />
-          <button
-            type="button"
-            className="btn small"
-            disabled={!ragEnabled || !ragQuery.trim() || ragLoading || busy}
-            onClick={() => {
-              const q = ragQuery.trim();
-              if (!q) return;
-              setRagLoading(true);
-              void (async () => {
-                try {
-                  let bibleOverride = "";
-                  if (ragWorkSources.workBibleExport) {
-                    try {
-                      bibleOverride = await exportBibleMarkdown(props.workId);
-                    } catch {
-                      bibleOverride = "";
-                    }
-                  }
-                  const hits = await searchWritingRagMerged({
-                    workId: props.workId,
-                    query: q,
-                    limit: Math.max(1, Math.min(20, ragK)),
-                    sources: ragWorkSources,
-                    chapters: props.chapters,
-                    progressCursorChapterId: props.work.progressCursor,
-                    excludeManuscriptChapterId: props.chapter?.id ?? null,
-                    bibleMarkdownOverride: bibleOverride.trim() ? bibleOverride : undefined,
-                  });
-                  setRagHits(hits);
-                } catch (e) {
-                  setError(e instanceof Error ? e.message : "检索失败");
-                } finally {
-                  setRagLoading(false);
-                }
-              })();
-            }}
-          >
-            {ragLoading ? "检索中…" : "检索预览"}
-          </button>
-        </div>
-        {ragEnabled && ragQuery.trim() ? (
-          ragHits.length > 0 ? (
-            <>
-              <p className="muted small" style={{ marginBottom: 6 }}>
-                {ragHits.length} 条命中 · {ragExcluded.size > 0 ? `已取消 ${ragExcluded.size} 条 · ` : ""}注入 {ragHits.filter(h => !ragExcluded.has(h.chunkId)).length} 条
-              </p>
-              <ul className="rr-list" style={{ gap: 6 }}>
-                {ragHits.slice(0, Math.max(0, Math.min(12, ragK))).map((h) => {
-                  const excluded = ragExcluded.has(h.chunkId);
-                  const isRuntime = isRuntimeRagHit(h);
-                  const srcBadge = h.refTitle.startsWith("本书锦囊")
-                    ? "锦囊"
-                    : h.refTitle.startsWith("正文")
-                    ? "正文"
-                    : "藏经";
-                  return (
-                    <li
-                      key={`${h.chunkId}-${h.highlightStart}-${h.highlightEnd}`}
-                      className="rr-list-item"
-                      style={{
-                        flexDirection: "column",
-                        alignItems: "stretch",
-                        border: "1px solid var(--border)",
-                        borderRadius: 6,
-                        padding: "6px 8px",
-                        opacity: excluded ? 0.45 : 1,
-                        background: excluded ? "transparent" : "var(--card)",
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-                        <span
-                          style={{
-                            fontSize: 10,
-                            padding: "1px 5px",
-                            borderRadius: 4,
-                            background: "var(--primary)",
-                            color: "var(--primary-foreground)",
-                            flexShrink: 0,
-                          }}
-                        >
-                          {srcBadge}
-                        </span>
-                        {isRuntime ? (
-                          <span className="rr-link small" title="本书运行时检索命中（无参考库深链）" style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {h.refTitle}
-                          </span>
-                        ) : (
-                          <a
-                            className="rr-link small"
-                            href={referenceReaderHref({
-                              refWorkId: h.refWorkId,
-                              ordinal: h.ordinal,
-                              startOffset: h.highlightStart,
-                              endOffset: h.highlightEnd,
-                            })}
-                            target="_blank"
-                            rel="noreferrer"
-                            title="在参考库打开（新标签页）"
-                            style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                          >
-                            {h.refTitle} · 段 {h.ordinal + 1}
-                          </a>
-                        )}
-                        <button
-                          type="button"
-                          title={excluded ? "重新纳入此条" : "取消注入此条"}
-                          style={{
-                            border: "none",
-                            background: "none",
-                            cursor: "pointer",
-                            padding: "0 2px",
-                            fontSize: 12,
-                            color: excluded ? "var(--primary)" : "var(--muted-foreground)",
-                            flexShrink: 0,
-                          }}
-                          onClick={() =>
-                            setRagExcluded((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(h.chunkId)) next.delete(h.chunkId);
-                              else next.add(h.chunkId);
-                              return next;
-                            })
-                          }
-                        >
-                          {excluded ? "＋" : "×"}
-                        </button>
-                      </div>
-                      <p className="muted small" style={{ margin: 0, lineHeight: 1.5, wordBreak: "break-all" }}>
-                        {h.snippetBefore}
-                        {h.snippetMatch && (
-                          <mark style={{ background: "var(--primary)", color: "var(--primary-foreground)", borderRadius: 2, padding: "0 1px" }}>
-                            {h.snippetMatch}
-                          </mark>
-                        )}
-                        {h.snippetAfter}
-                      </p>
-                    </li>
-                  );
-                })}
-              </ul>
-            </>
-          ) : (
-            <p className="muted small">暂无命中。你可以换关键词，或先去「参考库」确认已导入原著。</p>
-          )
-        ) : (
-          <p className="muted small">提示：这是关键词检索注入（非向量）。用于把"参考原文片段\"带进本次请求。</p>
-        )}
-      </details>
-
-      <details className="ai-panel-box" open>
-        <summary>上下文注入</summary>
-        <label className="ai-panel-check row row--check">
-          <input
-            name="includeBible"
-            type="checkbox"
-            checked={settings.includeBible}
-            onChange={(e) => updateSettings({ includeBible: e.target.checked })}
-          />
-          <span>注入本书锦囊</span>
-        </label>
-        <label className="ai-panel-check row row--check">
-          <input
-            name="includeLinkedExcerpts"
-            type="checkbox"
-            checked={includeLinkedExcerpts}
-            onChange={(e) => setIncludeLinkedExcerpts(e.target.checked)}
-          />
-          <span>注入本章关联摘录</span>
-        </label>
-        <div className="ai-panel-row">
-          <label className="ai-panel-check row row--check" style={{ margin: 0 }}>
-            <input
-              name="includeRecentSummaries"
-              type="checkbox"
-              checked={includeRecentSummaries}
-              onChange={(e) => setIncludeRecentSummaries(e.target.checked)}
-            />
-            <span>注入最近章节概要</span>
-          </label>
-          <input
-            type="number"
-            name="recentN"
-            min={0}
-            max={12}
-            value={recentN}
-            onChange={(e) => setRecentN(Number(e.target.value) || 0)}
-            style={{ width: 72 }}
-            title="最近 N 章"
-          />
-        </div>
-        {includeRecentSummaries && neighborSummaryPoolChapters.length > 0 ? (
-          <div className="ai-panel-subchecks" style={{ marginTop: 8 }}>
-            <div className="muted small" style={{ marginBottom: 6 }}>
-              邻章概要包含章节（仅包含有概要的章；未勾选的章不会注入）
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
-              {neighborSummaryPoolChapters.map((c) => (
-                <label key={c.id} className="ai-panel-check row row--check" style={{ margin: 0 }}>
-                  <input
-                    type="checkbox"
-                    checked={neighborSummaryIncludeById[c.id] !== false}
-                    onChange={(e) =>
-                      setNeighborSummaryIncludeById((prev) => ({ ...prev, [c.id]: e.target.checked }))
-                    }
-                  />
-                  <span className="small">{c.title}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        ) : includeRecentSummaries && props.chapter ? (
-          <p className="muted small" style={{ marginTop: 6 }}>
-            邻章概要：当前窗口内无已填概要的章节（可先为前几章生成概要）。
-          </p>
-        ) : null}
-        <div className="ai-panel-subchecks" style={{ marginTop: 10 }}>
-          <div className="muted small" style={{ marginBottom: 6 }}>
-            本章锦囊字段（user 上下文）— 未勾选的字段不会注入
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, flexWrap: "wrap" as const }}>
-            {(Object.keys(CHAPTER_BIBLE_FIELD_LABELS) as ChapterBibleFieldKey[]).map((k) => (
-              <label key={k} className="ai-panel-check row row--check" style={{ margin: 0 }}>
-                <input
-                  type="checkbox"
-                  checked={chapterBibleInjectMask[k] !== false}
-                  onChange={(e) =>
-                    setChapterBibleInjectMask((prev) => ({ ...prev, [k]: e.target.checked }))
-                  }
-                />
-                <span className="small">{CHAPTER_BIBLE_FIELD_LABELS[k]}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-        {settings.includeBible ? (
-          <div className="ai-panel-subchecks" style={{ marginTop: 10 }}>
-            <div className="muted small" style={{ marginBottom: 6 }}>
-              本书锦囊（全书导出 Markdown）板块 — 未勾选的板块不会注入
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto" }}>
-              {WORK_BIBLE_SECTION_HEADERS.map((h) => (
-                <label key={h} className="ai-panel-check row row--check" style={{ margin: 0 }}>
-                  <input
-                    type="checkbox"
-                    checked={workBibleSectionMask[h] !== false}
-                    onChange={(e) =>
-                      setWorkBibleSectionMask((prev) => ({ ...prev, [h]: e.target.checked }))
-                    }
-                  />
-                  <span className="small">{h}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        ) : null}
-        <div className="ai-panel-row">
-          <label className="small muted">当前章注入</label>
-          <select
-            name="currentContextMode"
-            value={currentContextMode}
-            onChange={(e) =>
-              setCurrentContextMode(e.target.value as "full" | "summary" | "selection" | "none")
-            }
-          >
-            <option value="full">全文</option>
-            <option value="summary">概要</option>
-            <option value="selection">选区</option>
-            <option value="none">不注入</option>
-          </select>
-        </div>
-        <p className="muted small">
-          预计注入：约 {approxInjectChars.toLocaleString()} 字 / ≈ {approxInjectTokens.toLocaleString()} tokens
-          {" / "}
-          {settings.maxContextChars.toLocaleString()}
-        </p>
-        {settings.includeBible ? (
-          <p className="muted small" style={{ marginTop: "-0.25rem" }}>
-            注：锦囊内容在运行时抓取并截断，token/字符估算会偏保守。
-          </p>
-        ) : null}
-      </details>
-
-      <details className="ai-panel-box">
-        <summary>本次注入预览（发送前可查看）</summary>
-        <div className="ai-panel-row" style={{ marginTop: 8 }}>
-          <span className="muted small">
-            预计注入：约 {approxInjectChars.toLocaleString()} 字 / ≈ {approxInjectTokens.toLocaleString()} tokens
-          </span>
-          {settings.includeBible ? (
-            <button
-              type="button"
-              className="btn small"
-              disabled={bibleLoading || busy}
-              onClick={() => {
-                if (!settings.includeBible) return;
-                setBibleLoading(true);
-                void exportBibleMarkdown(props.workId)
-                  .then((t) => setBiblePreview({ text: t, chars: t.length }))
-                  .catch((e) => setError(e instanceof Error ? e.message : "锦囊预览加载失败"))
-                  .finally(() => setBibleLoading(false));
-              }}
-            >
-              {bibleLoading ? "加载锦囊…" : biblePreview?.text ? "刷新锦囊预览" : "加载锦囊预览"}
-            </button>
-          ) : null}
-        </div>
-        {injectBlocks.length === 0 ? (
-          <p className="muted small">请先选择章节。</p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {injectBlocks.map((b) => (
-              <details key={b.id} className="ai-panel-box" style={{ margin: 0 }}>
-                <summary>
-                  {b.title}
-                  <span className="muted small"> · {b.chars.toLocaleString()} 字</span>
-                  {b.note ? <span className="muted small"> · {b.note}</span> : null}
-                </summary>
-                <textarea readOnly value={b.content} rows={6} style={{ width: "100%", resize: "vertical", marginTop: 8 }} />
-              </details>
-            ))}
-          </div>
-        )}
-      </details>
+      <AiPanelWritingPromptsRow
+        selectedStyleTemplateId={selectedStyleTemplateId}
+        selectedReqTemplateId={selectedReqTemplateId}
+        styleTemplateTitle={styleTemplateTitle}
+        reqTemplateTitle={reqTemplateTitle}
+        onStyleTemplatePick={onStyleTemplatePick}
+        onReqTemplatePick={onReqTemplatePick}
+      />
 
       <label className="ai-panel-field">
-        <span className="small muted" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          额外要求（可空）
-          <PromptPicker
-            filterTypes={PROMPT_PICKER_WRITING_TYPES}
-            filterSlots={PROMPT_PICKER_WRITER_SLOTS}
-            onPick={(t) => {
-              if (!t) return;
-              const rendered = renderPromptTemplate(t.body, {
-                work_title:      props.work.title ?? "",
-                work_tags:       (props.work.tags ?? []).join("，"),
-                chapter_title:   props.chapter?.title ?? "",
-                chapter_summary: props.chapter?.summary ?? "",
-                chapter_content: props.chapter?.content ?? "",
-              });
-              setUserHint(rendered);
-            }}
-            trigger={({ open }) => (
-              <button
-                type="button"
-                onClick={open}
-                style={{
-                  fontSize: 11,
-                  padding: "1px 7px",
-                  borderRadius: 999,
-                  border: "1px solid var(--color-border, #e2e8f0)",
-                  background: "transparent",
-                  color: "var(--color-muted-fg, #888)",
-                  cursor: "pointer",
-                  lineHeight: 1.6,
-                }}
-                title="从提示词库选择模板注入额外要求"
-              >
-                + 选模板
-              </button>
-            )}
-          />
-        </span>
-        <textarea name="userHint" value={userHint} onChange={(e) => setUserHint(e.target.value)} rows={3} />
+        <span className="small muted">本章细纲 / 剧情（手动粘贴）</span>
+        <textarea
+          name="chapterOutlinePaste"
+          value={chapterOutlinePaste}
+          onChange={(e) => {
+            const v = e.target.value;
+            setChapterOutlinePaste(v);
+            if (!props.chapter) return;
+            saveChapterOutlinePaste(props.workId, props.chapter.id, v);
+          }}
+          rows={6}
+          placeholder="粘贴细纲/剧情节拍（用于生成正文的主依据）。例如：\n- 场景目标：...\n- 节拍：A→B→转折→钩子\n- 必出现信息：...\n"
+        />
       </label>
 
       <div className="ai-panel-actions" style={{ justifyContent: "flex-start" }}>
@@ -2121,6 +1907,14 @@ export function AiPanel(props: {
         >
           重试
         </button>
+        <button
+          type="button"
+          className="btn"
+          title="打开草稿弹窗"
+          onClick={() => setDraftDialogOpen(true)}
+        >
+          草稿
+        </button>
       </div>
       {error ? <AiInlineErrorNotice message={error} /> : null}
       {showDegradeRetry ? (
@@ -2134,153 +1928,272 @@ export function AiPanel(props: {
         </div>
       ) : null}
 
-      <section className="ai-panel-draft-zone" aria-label="AI 草稿区">
-        <div className="ai-panel-draft-zone-head">
-          <span className="ai-panel-draft-zone-title">AI 草稿</span>
-          <span className="small muted">
-            与正文分离、不自动写入；合并前会弹出对比确认。切换章节草稿按章分别保存在本会话内。
-          </span>
-        </div>
-        <label className="ai-panel-field ai-panel-field--draft">
-          <textarea name="aiDraft" value={draft} onChange={(e) => setDraft(e.target.value)} rows={10} />
-        </label>
-
-        {/* P1-04：今日已用 token 始终显示 */}
-        <p className="muted small ai-panel-session-budget" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-          <span>
-            今日已用（粗估）
-            <strong style={{ marginLeft: 4 }}>{todayTokensUsed.toLocaleString()}</strong>
-            {settings.dailyTokenBudget > 0 && (
-              <span
-                style={{
-                  color: todayTokensUsed >= settings.dailyTokenBudget ? "var(--destructive)" : "inherit",
+      <Dialog open={draftDialogOpen} onOpenChange={setDraftDialogOpen}>
+        <DialogContent
+          overlayClassName="work-form-modal-overlay"
+          showCloseButton={false}
+          aria-describedby={undefined}
+          className={cn(
+            "z-[var(--z-modal-app-content)] max-h-[min(92vh,920px)] w-full max-w-[min(980px,100vw-2rem)] gap-0 overflow-hidden border-border bg-[var(--surface)] p-0 shadow-lg",
+          )}
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-3 sm:px-5">
+            <DialogTitle className="text-left text-lg font-semibold">AI 草稿</DialogTitle>
+            <button type="button" className="icon-btn" title="关闭" onClick={() => setDraftDialogOpen(false)}>
+              ×
+            </button>
+          </div>
+          <div className="p-4 sm:p-5" style={{ overflow: "auto" }}>
+            <div className="muted small" style={{ marginBottom: 10, lineHeight: 1.55 }}>
+              与正文分离、不自动写入；合并前会弹出对比确认。切换章节草稿按章分别保存在本会话内。
+            </div>
+            {draftMeta && (
+              <div className="draft-meta-card">
+                <button
+                  type="button"
+                  className="draft-meta-card__toggle"
+                  onClick={() => setDraftMetaOpen((v) => !v)}
+                  aria-expanded={draftMetaOpen}
+                >
+                  {draftMetaOpen ? "▾" : "▸"}{" "}来源信息
+                </button>
+                {draftMetaOpen && (
+                  <dl className="draft-meta-card__body">
+                    <div className="draft-meta-row">
+                      <dt>模型</dt>
+                      <dd>{draftMeta.provider}</dd>
+                    </div>
+                    <div className="draft-meta-row">
+                      <dt>模式</dt>
+                      <dd>{{
+                        continue: "续写",
+                        outline: "扩写",
+                        summarize: "概要",
+                        rewrite: "改写",
+                        draw: "抽卡",
+                      }[draftMeta.mode] ?? draftMeta.mode}</dd>
+                    </div>
+                    <div className="draft-meta-row">
+                      <dt>粗估消耗</dt>
+                      <dd>~{draftMeta.roughTokens.toLocaleString()} tokens</dd>
+                    </div>
+                    <div className="draft-meta-row">
+                      <dt>生成时间</dt>
+                      <dd>{new Date(draftMeta.generatedAt).toLocaleTimeString()}</dd>
+                    </div>
+                  </dl>
+                )}
+              </div>
+            )}
+            {draftHistory.length > 0 && (
+              <div className="draft-history-section">
+                <button
+                  type="button"
+                  className="draft-history-toggle"
+                  onClick={() => setHistoryOpen((v) => !v)}
+                  aria-expanded={historyOpen}
+                >
+                  {historyOpen ? "▾" : "▸"}{" "}历史草稿（{draftHistory.length}）
+                </button>
+                {historyOpen && (
+                  <ul className="draft-history-list">
+                    {draftHistory.map((entry) => (
+                      <li key={entry.savedAt} className="draft-history-item">
+                        <div className="draft-history-item-head">
+                          <span className="draft-history-item-time muted small">
+                            {new Date(entry.savedAt).toLocaleTimeString()}
+                          </span>
+                          <div className="draft-history-item-actions">
+                            <button
+                              type="button"
+                              className="btn small"
+                              onClick={() => setDraft(entry.content)}
+                              title="恢复此版本到草稿框"
+                            >
+                              恢复
+                            </button>
+                            <button
+                              type="button"
+                              className="btn small secondary"
+                              onClick={() => {
+                                if (!props.workId || !props.chapter) return;
+                                deleteDraftHistoryEntry(props.workId, props.chapter.id, entry.savedAt);
+                                setDraftHistory(readDraftHistory(props.workId, props.chapter.id));
+                              }}
+                              title="删除此条历史"
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </div>
+                        <div className="draft-history-item-preview muted small">{entry.preview}</div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            <label className="ai-panel-field ai-panel-field--draft">
+              <textarea name="aiDraft" value={draft} onChange={(e) => setDraft(e.target.value)} rows={12} />
+            </label>
+            <div className="ai-panel-actions" style={{ justifyContent: "flex-start", marginTop: 10 }}>
+              <button
+                type="button"
+                className="btn"
+                disabled={!draft.trim()}
+                onClick={() => {
+                  const t = draft.trim();
+                  if (!t) return;
+                  setMergePayload({ kind: "insert", payload: t + "\n\n" });
                 }}
               >
-                {" "}/ {settings.dailyTokenBudget.toLocaleString()}
-              </span>
-            )}
-            {" "}tokens
-          </span>
-          {settings.dailyTokenBudget > 0 && (
-            <span
-              style={{
-                display: "inline-block",
-                width: 64,
-                height: 4,
-                borderRadius: 2,
-                background: "var(--border)",
-                overflow: "hidden",
-                verticalAlign: "middle",
-              }}
-            >
-              <span
-                style={{
-                  display: "block",
-                  height: "100%",
-                  width: `${Math.min(100, Math.round((todayTokensUsed / settings.dailyTokenBudget) * 100))}%`,
-                  background: todayTokensUsed >= settings.dailyTokenBudget ? "var(--destructive)" : "var(--primary)",
-                  borderRadius: 2,
+                插入到光标
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={!draft.trim()}
+                onClick={() => {
+                  const t = draft.trim();
+                  if (!t) return;
+                  setMergePayload({ kind: "append", payload: "\n\n" + t + "\n" });
                 }}
-              />
-            </span>
-          )}
-        </p>
-
-        {sessionBudget > 0 ? (
-          <p className="muted small ai-panel-session-budget">
-            本会话侧栏累计（粗估）{sessionTokensUsed.toLocaleString()} / {sessionBudget.toLocaleString()} tokens ·{" "}
-            <button
-              type="button"
-              className="btn small secondary"
-              disabled={busy}
-              onClick={() => {
-                resetSessionApproxTokens();
-                setSessionBudgetUiTick((x) => x + 1);
-              }}
-            >
-              清零本会话累计
-            </button>
-          </p>
-        ) : null}
-
-        {toneDriftHints.length > 0 || toneEmbedHint || toneEmbedErr || toneEmbedBusy ? (
-          <div className="rr-block ai-tone-drift-hint" role="status">
-            <div className="rr-block-title">调性提示（轻量规则 · 仅参考）</div>
-            <ul className="rr-list">
-              {toneDriftHints.map((h, i) => (
-                <li key={i} className="rr-list-item muted small">
-                  {h}
-                </li>
-              ))}
-              {toneEmbedBusy ? <li className="rr-list-item muted small">标杆段距离计算中…</li> : null}
-              {toneEmbedHint ? <li className="rr-list-item muted small">{toneEmbedHint}</li> : null}
-              {toneEmbedErr ? <li className="rr-list-item muted small">标杆段距离不可用：{toneEmbedErr}</li> : null}
-            </ul>
-          </div>
-        ) : null}
-
-        {glossaryHitsInDraft.length > 0 ? (
-          <div className="rr-block">
-            <div className="rr-block-title">一致性提示（来自术语/人名表）</div>
-            <ul className="rr-list">
-              {glossaryHitsInDraft.map((t) => (
-                <li key={t.id} className="rr-list-item">
-                  <span style={{ fontWeight: 700 }}>{t.term}</span>
-                  <span className="muted small">
-                    {t.category === "dead" ? " · 已死（请确认没有复活/误用）" : t.category === "name" ? " · 人名" : " · 术语"}
-                    {t.note.trim() ? ` · ${t.note}` : ""}
+              >
+                追加到章尾
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={!draft.trim() || !selectedText.trim()}
+                title={selectedText.trim() ? "" : "请先选中要替换的文本"}
+                onClick={() => {
+                  const t = draft.trim();
+                  const before = props.getSelectedText().trim();
+                  if (!t || !before) return;
+                  setMergePayload({ kind: "replace", before, after: t });
+                }}
+              >
+                替换选区
+              </button>
+            </div>
+            {/* P1-04：今日已用 token 始终显示 */}
+            <p className="muted small ai-panel-session-budget" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+              <span>
+                今日已用（粗估）
+                <strong style={{ marginLeft: 4 }}>{todayTokensUsed.toLocaleString()}</strong>
+                {settings.dailyTokenBudget > 0 && (
+                  <span
+                    style={{
+                      color: todayTokensUsed >= settings.dailyTokenBudget ? "var(--destructive)" : "inherit",
+                    }}
+                  >
+                    {" "}/ {settings.dailyTokenBudget.toLocaleString()}
                   </span>
-                </li>
-              ))}
-            </ul>
+                )}
+                {" "}tokens
+              </span>
+              {settings.dailyTokenBudget > 0 && (
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 64,
+                    height: 4,
+                    borderRadius: 2,
+                    background: "var(--border)",
+                    overflow: "hidden",
+                    verticalAlign: "middle",
+                  }}
+                >
+                  <span
+                    style={{
+                      display: "block",
+                      height: "100%",
+                      width: `${Math.min(100, Math.round((todayTokensUsed / settings.dailyTokenBudget) * 100))}%`,
+                      background: todayTokensUsed >= settings.dailyTokenBudget ? "var(--destructive)" : "var(--primary)",
+                      borderRadius: 2,
+                    }}
+                  />
+                </span>
+              )}
+            </p>
+            {sessionBudget > 0 ? (
+              <p className="muted small ai-panel-session-budget">
+                本会话侧栏累计（粗估）{sessionTokensUsed.toLocaleString()} / {sessionBudget.toLocaleString()} tokens ·{" "}
+                <button
+                  type="button"
+                  className="btn small secondary"
+                  disabled={busy}
+                  onClick={() => {
+                    resetSessionApproxTokens();
+                    setSessionBudgetUiTick((x) => x + 1);
+                  }}
+                >
+                  清零本会话累计
+                </button>
+              </p>
+            ) : null}
+
+            {toneDriftHints.length > 0 || toneEmbedHint || toneEmbedErr || toneEmbedBusy ? (
+              <div className="rr-block ai-tone-drift-hint" role="status" style={{ marginTop: 12 }}>
+                <div className="rr-block-title">调性提示（轻量规则 · 仅参考）</div>
+                <ul className="rr-list">
+                  {toneDriftHints.map((h, i) => (
+                    <li key={i} className="rr-list-item muted small">
+                      {h}
+                    </li>
+                  ))}
+                  {toneEmbedBusy ? <li className="rr-list-item muted small">标杆段距离计算中…</li> : null}
+                  {toneEmbedHint ? <li className="rr-list-item muted small">{toneEmbedHint}</li> : null}
+                  {toneEmbedErr ? <li className="rr-list-item muted small">标杆段距离不可用：{toneEmbedErr}</li> : null}
+                </ul>
+              </div>
+            ) : null}
+
+            {glossaryHitsInDraft.length > 0 ? (
+              <div className="rr-block" style={{ marginTop: 12 }}>
+                <div className="rr-block-title">一致性提示（来自术语/人名表）</div>
+                <ul className="rr-list">
+                  {glossaryHitsInDraft.map((t) => (
+                    <li key={t.id} className="rr-list-item">
+                      <span style={{ fontWeight: 700 }}>{t.term}</span>
+                      <span className="muted small">
+                        {t.category === "dead"
+                          ? " · 已死（请确认没有复活/误用）"
+                          : t.category === "name"
+                            ? " · 人名"
+                            : " · 术语"}
+                        {t.note.trim() ? ` · ${t.note}` : ""}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
-        ) : null}
+        </DialogContent>
+      </Dialog>
 
-        <div className="ai-panel-actions">
-          <button
-            type="button"
-            className="btn"
-            disabled={!draft.trim()}
-            onClick={() => {
-              const t = draft.trim();
-              if (!t) return;
-              setMergePayload({ kind: "insert", payload: t + "\n\n" });
-            }}
-          >
-            插入到光标
-          </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={!draft.trim()}
-            onClick={() => {
-              const t = draft.trim();
-              if (!t) return;
-              setMergePayload({ kind: "append", payload: "\n\n" + t + "\n" });
-            }}
-          >
-            追加到章尾
-          </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={!draft.trim() || !selectedText.trim()}
-            title={selectedText.trim() ? "" : "请先选中要替换的文本"}
-            onClick={() => {
-              const t = draft.trim();
-              const before = props.getSelectedText().trim();
-              if (!t || !before) return;
-              setMergePayload({ kind: "replace", before, after: t });
-            }}
-          >
-            替换选区
-          </button>
-        </div>
-      </section>
-
-      <p className="muted small">
-        提示：浏览器直连第三方模型可能遇到 CORS/网络限制；Ollama 默认 `http://localhost:11434`。
-      </p>
+      <AiPanelRagSection
+        variant="sessionOnly"
+        workId={props.workId}
+        work={props.work}
+        chapters={props.chapters}
+        activeChapterId={props.chapter?.id ?? null}
+        ragEnabled={ragEnabled}
+        onRagEnabledChange={(v) => patchRagInject({ ragEnabled: v })}
+        ragWorkSources={ragWorkSources}
+        setRagWorkSources={setRagWorkSourcesUp}
+        ragQuery={ragQuery}
+        onRagQueryChange={setRagQuery}
+        ragK={ragK}
+        onRagKChange={(n) => patchRagInject({ ragK: n })}
+        ragHits={ragHits}
+        ragLoading={ragLoading}
+        ragExcluded={ragExcluded}
+        setRagExcluded={setRagExcluded}
+        busy={busy}
+        onRunPreview={runRagPreview}
+      />
 
       <AiDraftMergeDialog
         open={mergePayload !== null}
@@ -2304,5 +2217,5 @@ export function AiPanel(props: {
       )}
     </aside>
   );
-}
+});
 

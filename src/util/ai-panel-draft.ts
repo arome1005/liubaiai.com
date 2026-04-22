@@ -27,3 +27,53 @@ export function readAiPanelDraft(workId: string, chapterId: string): string {
   }
 }
 
+// ── P1-C：草稿历史（最近 5 条）────────────────────────────────────────────────
+
+const DRAFT_HISTORY_MAX = 5;
+
+export type AiDraftHistoryEntry = {
+  content: string;
+  savedAt: number;
+  preview: string; // 前 60 字
+};
+
+function draftHistoryKey(workId: string, chapterId: string): string {
+  return `liubai:aiDraftHistory:v1:${workId}:${chapterId}`;
+}
+
+export function readDraftHistory(workId: string, chapterId: string): AiDraftHistoryEntry[] {
+  try {
+    const raw = sessionStorage.getItem(draftHistoryKey(workId, chapterId));
+    if (!raw) return [];
+    return JSON.parse(raw) as AiDraftHistoryEntry[];
+  } catch {
+    return [];
+  }
+}
+
+/** 将一条新草稿推入历史（最多保留 DRAFT_HISTORY_MAX 条，最旧的被移除） */
+export function pushDraftHistory(workId: string, chapterId: string, content: string): void {
+  if (!content.trim()) return;
+  try {
+    const existing = readDraftHistory(workId, chapterId);
+    const entry: AiDraftHistoryEntry = {
+      content,
+      savedAt: Date.now(),
+      preview: content.trim().slice(0, 60).replace(/\n/g, " "),
+    };
+    const next = [entry, ...existing].slice(0, DRAFT_HISTORY_MAX);
+    sessionStorage.setItem(draftHistoryKey(workId, chapterId), JSON.stringify(next));
+  } catch {
+    /* quota */
+  }
+}
+
+export function deleteDraftHistoryEntry(workId: string, chapterId: string, savedAt: number): void {
+  try {
+    const existing = readDraftHistory(workId, chapterId).filter((e) => e.savedAt !== savedAt);
+    sessionStorage.setItem(draftHistoryKey(workId, chapterId), JSON.stringify(existing));
+  } catch {
+    /* quota */
+  }
+}
+

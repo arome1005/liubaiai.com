@@ -6,6 +6,7 @@
  *
  * - 推演页：filterTypes = ["outline","volume","scene"]（默认）
  * - 写作页：filterTypes = ["continue","opening","style","character","worldbuilding"]
+ * - 章节概要批量：filterTypes = PROMPT_PICKER_ARTICLE_SUMMARY_TYPES（文章概括）
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -49,11 +50,23 @@ export const PROMPT_PICKER_LUOBI_SLOTS: PromptSlot[] = PROMPT_SCOPE_SLOTS["luobi
 // 各场景默认类型
 const TUIYAN_TYPES: PromptType[] = ["outline", "volume", "scene"];
 const WRITING_TYPES: PromptType[] = ["continue", "opening", "style", "character", "worldbuilding"];
+const ARTICLE_SUMMARY_TYPES: PromptType[] = ["article_summary"];
 
 /** 默认 filterTypes（推演页用） */
 export const PROMPT_PICKER_TUIYAN_TYPES = TUIYAN_TYPES;
 /** 写作页 filterTypes */
 export const PROMPT_PICKER_WRITING_TYPES = WRITING_TYPES;
+/** 写作侧栏「文风」快捷选：仅写作风格类 */
+export const PROMPT_PICKER_WRITING_STYLE_TYPES: PromptType[] = ["style"];
+/** 写作侧栏「要求」快捷选：续写/开篇/人设/世界观（不含文风） */
+export const PROMPT_PICKER_WRITING_REQUIREMENT_TYPES: PromptType[] = [
+  "continue",
+  "opening",
+  "character",
+  "worldbuilding",
+];
+/** 章节概要 / 文章概括类提示词（提示词库「文章概括」分类） */
+export const PROMPT_PICKER_ARTICLE_SUMMARY_TYPES = ARTICLE_SUMMARY_TYPES;
 
 // 简化标签（覆盖 PROMPT_TYPE_LABELS 中文过长的情况）
 const TYPE_LABEL: Partial<Record<PromptType, string>> = {
@@ -63,8 +76,9 @@ const TYPE_LABEL: Partial<Record<PromptType, string>> = {
   continue:      "续写",
   opening:       "黄金开篇",
   style:         "写作风格",
-  character:     "人设",
-  worldbuilding: "世界观",
+  character:      "人设",
+  worldbuilding:  "世界观",
+  article_summary: "文章概括",
 };
 
 // ── 对外接口 ──────────────────────────────────────────────────────────────────
@@ -121,7 +135,8 @@ export function PromptPicker({ selectedId, onPick, trigger, filterTypes = TUIYAN
             merged.push(t);
           }
         }
-        const byType = merged.filter((t) => (filterTypes as string[]).includes(t.type));
+        const usable = merged.filter((t) => t.status !== "rejected");
+        const byType = usable.filter((t) => (filterTypes as string[]).includes(t.type));
         // 槽位过滤：无 slots 的模板视为通用，始终保留；有 slots 则需与 filterSlots 有交集
         const bySlot = filterSlots && filterSlots.length > 0
           ? byType.filter((t) =>

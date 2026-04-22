@@ -137,12 +137,14 @@ export async function extractPromptTemplateFromExcerpt(args: {
   excerptNote?: string;
   bookTitle: string;
   type: PromptType;
+  overrideProvider?: import("./types").AiProviderId;
   onDelta?: (delta: string) => void;
   signal?: AbortSignal;
 }): Promise<string> {
   const settings = loadAiSettings();
-  assertCanExtract(settings);
-  const config = getProviderConfig(settings, settings.provider);
+  const provider = args.overrideProvider ?? settings.provider;
+  assertCanExtract({ ...settings, provider });
+  const config = getProviderConfig(settings, provider);
   const { taskDesc, outputRules, label } = TYPE_INSTRUCTIONS[args.type];
 
   const userPrompt = `【参考书目】《${args.bookTitle}》
@@ -164,7 +166,7 @@ ${outputRules}
 
   let result = "";
   await generateWithProviderStream({
-    provider: settings.provider,
+    provider,
     config,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
@@ -188,12 +190,14 @@ export async function extractPromptTemplateFromBook(args: {
   chunkTexts: string[];
   bookTitle: string;
   type: PromptType;
+  overrideProvider?: import("./types").AiProviderId;
   onDelta?: (delta: string) => void;
   signal?: AbortSignal;
 }): Promise<string> {
   const settings = loadAiSettings();
-  assertCanExtract(settings);
-  const config = getProviderConfig(settings, settings.provider);
+  const provider = args.overrideProvider ?? settings.provider;
+  assertCanExtract({ ...settings, provider });
+  const config = getProviderConfig(settings, provider);
   const { taskDesc, outputRules, label } = TYPE_INSTRUCTIONS[args.type];
 
   // 整书：取前 20000 字（避免超上下文）
@@ -222,7 +226,7 @@ ${outputRules}
 
   let result = "";
   await generateWithProviderStream({
-    provider: settings.provider,
+    provider,
     config,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },

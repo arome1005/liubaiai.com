@@ -108,6 +108,15 @@ create index if not exists idx_tuiyan_state_user_work
   on public.tuiyan_state (user_id, work_id);
 
 -- -----------------------------------------------------------------------------
+-- 3.1 章节表：推演细纲推送字段（解决「schema cache 缺列 outline_draft」）
+-- -----------------------------------------------------------------------------
+-- 说明：也可改用单独补丁文件执行：
+--   supabase/patch-2026-04-20-add-chapter-outline-draft-columns.sql
+alter table public.chapter add column if not exists outline_draft     text   null;
+alter table public.chapter add column if not exists outline_node_id   text   null;
+alter table public.chapter add column if not exists outline_pushed_at bigint null;
+
+-- -----------------------------------------------------------------------------
 -- 4. RLS 与策略（与 schema.sql 一致，可重复执行）
 -- -----------------------------------------------------------------------------
 alter table public.inspiration_collection enable row level security;

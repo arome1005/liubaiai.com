@@ -21,6 +21,38 @@ function joinUrl(base: string, path: string) {
   return `${b}/${p}`;
 }
 
+function isOpenRouterBaseUrl(baseUrl: string | undefined | null): boolean {
+  const t = (baseUrl ?? "").trim().toLowerCase();
+  if (!t) return false;
+  return t.includes("openrouter.ai");
+}
+
+/** 直连 Google Gemini 的 API 根（不含路径）；优先 `baseUrlNative`，否则在非网关的 `baseUrl` 上回落，再到官方默认。 */
+export function resolveGeminiNativeApiBaseUrl(cfg: AiProviderConfig): string {
+  const n = (cfg.baseUrlNative ?? "").trim();
+  if (n) return n.replace(/\/+$/, "");
+  const b = (cfg.baseUrl ?? "").trim();
+  if (b && !isOpenRouterBaseUrl(b)) return b.replace(/\/+$/, "");
+  return "https://generativelanguage.googleapis.com";
+}
+
+/** 直连 Anthropic Messages 的 API 根；规则同 {@link resolveGeminiNativeApiBaseUrl}。 */
+export function resolveAnthropicNativeMessagesBaseUrl(cfg: AiProviderConfig): string {
+  const n = (cfg.baseUrlNative ?? "").trim();
+  if (n) return n.replace(/\/+$/, "");
+  const b = (cfg.baseUrl ?? "").trim();
+  if (b && !isOpenRouterBaseUrl(b)) return b.replace(/\/+$/, "");
+  return "https://api.anthropic.com";
+}
+
+/** 是否走 OpenAI 兼容网关（如 OpenRouter）；供高级后端配置 UI 与测试逻辑复用 */
+export function shouldUseRouterProtocol(cfg: AiProviderConfig): boolean {
+  if (cfg.transport === "router") return true;
+  if (cfg.transport === "native") return false;
+  // 兼容旧配置：未设置 transport 时，仍按 baseUrl 推断
+  return isOpenRouterBaseUrl(cfg.baseUrl);
+}
+
 /** 开发环境下：官方 MiMo 域名走 Vite 同源代理，避免 CORS 导致 Failed to fetch */
 function xiaomiBaseUrlForRequest(stored: string): string {
   const t = stored.trim();
@@ -105,7 +137,20 @@ export async function generateWithProvider(args: {
   if (provider === "zhipu") return generateOpenAI(config, messages, args.temperature, args.signal);
   if (provider === "kimi") return generateOpenAI(config, messages, args.temperature, args.signal);
   if (provider === "xiaomi") return generateOpenAI(config, messages, args.temperature, args.signal);
-  if (provider === "anthropic") return generateAnthropic(config, messages, args.temperature, args.signal);
+  if (provider === "anthropic") {
+    // Claude 双协议：
+    // - OpenRouter：走 OpenAI 兼容 /chat/completions（model 需填 anthropic/...）
+    // - 直连：走 Anthropic /v1/messages
+    if (shouldUseRouterProtocol(config)) return generateOpenAI(config, messages, args.temperature, args.signal);
+    return generateAnthropic(config, messages, args.temperature, args.signal);
+  }
+  if (provider === "gemini") {
+    // Gemini 双协议：
+    // - OpenRouter：走 OpenAI 兼容 /chat/completions（model 需填 google/...）
+    // - 直连：走 Google Gemini 原生 /v1beta
+    if (shouldUseRouterProtocol(config)) return generateOpenAI(config, messages, args.temperature, args.signal);
+    return generateGemini(config, messages, args.temperature, args.signal);
+  }
   return generateGemini(config, messages, args.temperature, args.signal);
 }
 
@@ -129,8 +174,14 @@ export async function generateWithProviderStream(args: {
   if (provider === "zhipu") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
   if (provider === "kimi") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
   if (provider === "xiaomi") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
-  if (provider === "anthropic") return generateAnthropicStream(config, messages, onDelta, args.temperature, args.signal);
-  if (provider === "gemini") return generateGeminiStream(config, messages, onDelta, args.temperature, args.signal);
+  if (provider === "anthropic") {
+    if (shouldUseRouterProtocol(config)) return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
+    return generateAnthropicStream(config, messages, onDelta, args.temperature, args.signal);
+  }
+  if (provider === "gemini") {
+    if (shouldUseRouterProtocol(config)) return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
+    return generateGeminiStream(config, messages, onDelta, args.temperature, args.signal);
+  }
   return generateWithProvider({ provider, config, messages, temperature: args.temperature, signal: args.signal });
 }
 
@@ -308,7 +359,7 @@ async function generateAnthropic(
   signal?: AbortSignal,
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
-  const url = joinUrl(cfg.baseUrl ?? "https://api.anthropic.com", "/v1/messages");
+  const url = joinUrl(resolveAnthropicNativeMessagesBaseUrl(cfg), "/v1/messages");
   const { system, user } = anthropicSystemAndUserText(messages);
   const resp = await fetch(url, {
     method: "POST",
@@ -342,7 +393,7 @@ async function generateAnthropicStream(
   signal?: AbortSignal,
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
-  const url = joinUrl(cfg.baseUrl ?? "https://api.anthropic.com", "/v1/messages");
+  const url = joinUrl(resolveAnthropicNativeMessagesBaseUrl(cfg), "/v1/messages");
   const { system, user } = anthropicSystemAndUserText(messages);
   const resp = await fetchOrThrowCorsHint(cfg.label, url, {
     method: "POST",
@@ -438,7 +489,7 @@ async function generateGemini(
   signal?: AbortSignal,
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
-  const base = cfg.baseUrl ?? "https://generativelanguage.googleapis.com";
+  const base = resolveGeminiNativeApiBaseUrl(cfg);
   const url = joinUrl(base, `/v1beta/models/${encodeURIComponent(cfg.model)}:generateContent?key=${encodeURIComponent(key)}`);
   const resp = await fetch(url, {
     method: "POST",
@@ -462,7 +513,7 @@ async function generateGeminiStream(
   signal?: AbortSignal,
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
-  const base = cfg.baseUrl ?? "https://generativelanguage.googleapis.com";
+  const base = resolveGeminiNativeApiBaseUrl(cfg);
   const url = joinUrl(
     base,
     `/v1beta/models/${encodeURIComponent(cfg.model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(key)}`,

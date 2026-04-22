@@ -5,7 +5,7 @@ import type { WritingWorkStyleSlice } from "../ai/assemble-context";
 import { clampContextText } from "../ai/assemble-context";
 import { lineDiffRows } from "../util/text-line-diff";
 import { isLocalAiProvider } from "../ai/local-provider";
-import { getProviderConfig, loadAiSettings } from "../ai/storage";
+import { getProviderConfig, getProviderTemperature, loadAiSettings } from "../ai/storage";
 import { isFirstAiGateCancelledError } from "../ai/client";
 import {
   assertShengHuiPrivacy,
@@ -1305,7 +1305,7 @@ ${text.slice(0, 1500)}`;
               <span className="ml-1 w-4 text-center text-[11px] font-medium text-foreground">{emotionTemperature}</span>
             </label>
             <span className="ml-auto text-[11px] text-muted-foreground/50">
-              温度：{settings.geminiTemperature}
+              温度：{getProviderTemperature(settings, settings.provider)}
               {" · "}
               <Link to="/settings" className="underline">设置</Link>
             </span>

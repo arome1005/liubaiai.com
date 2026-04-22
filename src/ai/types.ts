@@ -17,10 +17,19 @@ export type AiProviderConfig = {
   id: AiProviderId;
   /** 展示名（UI） */
   label: string;
+  /**
+   * OpenRouter 等“路由型”网关：可用 OpenAI 兼容协议；部分提供方也可切回原生协议（若配置了 baseUrlNative）。
+   * 未设置时由 `providers.ts` 按 baseUrl 推断。
+   */
+  transport?: "router" | "native";
+  /** 原生协议 Base URL（例如 Anthropic Messages / Gemini generateContent），仅在 transport=native 时使用 */
+  baseUrlNative?: string;
   /** baseUrl 可覆盖；留空走默认 */
   baseUrl?: string;
   /** model 名称（如 gpt-4.1-mini / claude-3-5-sonnet-latest / gemini-2.0-flash / llama3.1:8b） */
   model: string;
+  /** 豆包等：仅 UI 展示用别名；实际请求仍用 `model`（如 ep-… endpoint id） */
+  modelDisplayName?: string;
   /** embedding model（用于"调性提示"等向量距离；留空表示不启用 embedding 方案） */
   embeddingModel?: string;
   /** API key（本机 localStorage；桌面版可换更安全存储） */
@@ -73,6 +82,11 @@ export type AiSettings = {
   maxContextChars: number;
   /** 云端写作温度 0.1–2.0（各云端 API 的 temperature；观云弹窗内称「神思」） */
   geminiTemperature: number;
+  /**
+   * 各云端提供方独立温度（0.1–2.0）。
+   * 兼容：旧版本仅保存 `geminiTemperature`；加载时会回填到各云端 key。
+   */
+  temperatureByProvider?: Partial<Record<AiProviderId, number>>;
   /**
    * 侧栏预计注入粗估 token 超过该值时可要求确认（0=不按阈值触发「超量」确认）。
    * 与 `injectConfirmOnOversizeTokens` 联用；见 `resolveInjectionConfirmPrompt`。

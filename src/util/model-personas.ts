@@ -1,4 +1,5 @@
 import type { AiProviderId } from "../ai/types";
+import { loadAiSettings } from "../ai/storage";
 
 export type ModelPersona = {
   provider: AiProviderId;
@@ -20,7 +21,7 @@ const PERSONAS: Record<AiProviderId, ModelPersona[]> = {
   openai: [
     {
       provider: "openai",
-      modelId: "gpt-4.1-mini",
+      modelId: "gpt-5.4-mini",
       title: "见山·轻",
       subtitle: "快、稳、性价比高",
       description: "适合日常续写/改写与结构梳理；当你更在乎速度与稳定而非极致推理时优先用它。",
@@ -29,36 +30,36 @@ const PERSONAS: Record<AiProviderId, ModelPersona[]> = {
     },
     {
       provider: "openai",
-      modelId: "gpt-4o-mini",
+      modelId: "gpt-5.4-standard",
       title: "见山·迅",
-      subtitle: "更快的日常款",
-      description: "适合频繁的小迭代（句段润色、措辞替换、轻量扩写）；对长文的耐心略弱。",
+      subtitle: "标准的日常款",
+      description: "适合频繁迭代和一般写作任务，平衡了速度与较强的理解能力。",
       tags: ["快"],
-      costStars: 2,
+      costStars: 3,
     },
     {
       provider: "openai",
-      modelId: "gpt-4o",
+      modelId: "gpt-5.4-pro",
       title: "见山·整篇",
-      subtitle: "更强综合能力",
-      description: "适合长段改写、复杂指令与更一致的全文风格；若输出太「保守」，可略调高神思。",
-      tags: ["更强"],
+      subtitle: "最强综合能力",
+      description: "当前旗舰模型，适合长段改写、复杂指令与更一致的全文风格；若输出太「保守」，可略调高神思。",
+      tags: ["最新", "更强"],
       costStars: 4,
     },
     {
       provider: "openai",
-      modelId: "o3-mini",
+      modelId: "gpt-5.4-thinking",
       title: "见山·推理",
-      subtitle: "更擅长推理/分析",
-      description: "适合推演、设定自洽检查与多约束写作；可能更「理工」，需要更明确的文风锚点。",
+      subtitle: "更擅长深度思考",
+      description: "包含扩展推理过程，适合推演、设定自洽检查与多约束写作；需要更明确的文风锚点。",
       tags: ["推理"],
-      costStars: 4,
+      costStars: 5,
     },
   ],
   anthropic: [
     {
       provider: "anthropic",
-      modelId: "claude-3-5-haiku-latest",
+      modelId: "claude-4.7-haiku",
       title: "听雨·快",
       subtitle: "短促清爽、响应快",
       description: "适合快速润色、对话节奏打磨、轻量续写。若需要更强一致性与长文耐心，换「听雨·稳」。",
@@ -67,20 +68,20 @@ const PERSONAS: Record<AiProviderId, ModelPersona[]> = {
     },
     {
       provider: "anthropic",
-      modelId: "claude-3-5-sonnet-latest",
+      modelId: "claude-4.7-sonnet",
       title: "听雨·稳",
       subtitle: "写作感强、指令遵从高",
-      description: "适合长文续写、风格锚定、设定补全与多轮改写；整体更「文学」。",
+      description: "适合长文续写、风格锚定、设定补全与大多数的多轮改写任务；整体更「文学」。",
       tags: ["推荐", "长文"],
       costStars: 4,
     },
     {
       provider: "anthropic",
-      modelId: "claude-sonnet-4-20250514",
-      title: "听雨·锋",
-      subtitle: "更强的任务型写作",
-      description: "适合复杂改写要求、结构化输出与更强压约束；当你需要「把要求执行到位」时优先。",
-      tags: ["更强"],
+      modelId: "claude-4.7-opus",
+      title: "听雨·极",
+      subtitle: "最新最强旗舰 (4.7)",
+      description: "适合极其复杂的任务、要求高连贯性的全局长文一致性与较高上限的推演；代价更高，建议用于关键段落。",
+      tags: ["最新", "更强"],
       costStars: 5,
     },
   ],
@@ -116,21 +117,21 @@ const PERSONAS: Record<AiProviderId, ModelPersona[]> = {
   doubao: [
     {
       provider: "doubao",
-      modelId: "doubao-seed-1.6",
-      title: "燎原·常用",
-      subtitle: "中文写作稳、性价比好",
-      description: "适合中文长文写作、结构梳理与多轮改写；模型名以火山控制台为准。",
+      modelId: "ep-20260315234645-2h6jf",
+      title: "燎原·旗舰 (Seed-2.0-pro)",
+      subtitle: "更强更聪明的最新接入点",
+      description: "适合中文长文写作、复杂排版与多轮改写；注意：这是你的真实 Endpoint ID，豆包不再使用统一模型名。",
       tags: ["推荐", "中文"],
-      costStars: 3,
+      costStars: 4,
     },
     {
       provider: "doubao",
-      modelId: "doubao-seed-1.6-250615",
-      title: "燎原·新",
-      subtitle: "更新版本（以控制台为准）",
-      description: "适合你想跟进新版本能力时尝试；若出现不兼容，回退到「燎原·常用」。",
-      tags: ["新版本"],
-      costStars: 3,
+      modelId: "ep-填写你的轻量接入点",
+      title: "燎原·轻量",
+      subtitle: "请在控制台创建轻量级 Endpoint",
+      description: "你需要去火山引擎控制台新建接入点，并将形如 ep-xxxx... 的 ID 填入下方的 Model 框进行测试保存。",
+      tags: ["快"],
+      costStars: 2,
     },
   ],
   zhipu: [
@@ -253,7 +254,95 @@ const PERSONAS: Record<AiProviderId, ModelPersona[]> = {
   ],
 };
 
+type ModelVerdict = "ok" | "err";
+type ModelHealth = Record<string, { verdict: ModelVerdict; testedAt: number }>;
+
+const HEALTH_KEY_PREFIX = "liubai:modelHealth:";
+const GEMINI_HEALTH_KEY = "liubai:geminiModelHealth";
+
+function readModelHealth(provider: AiProviderId): ModelHealth {
+  try {
+    const raw = localStorage.getItem(`${HEALTH_KEY_PREFIX}${provider}`);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as ModelHealth) : {};
+  } catch {
+    return {};
+  }
+}
+
+function readGeminiHealth(): ModelHealth {
+  try {
+    const raw = localStorage.getItem(GEMINI_HEALTH_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" ? (parsed as ModelHealth) : {};
+  } catch {
+    return {};
+  }
+}
+
+function uniqKeepOrder(xs: string[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const x of xs) {
+    const v = (x ?? "").trim();
+    if (!v || seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+/**
+ * 单一数据源策略：
+ * - 优先：设置里的当前 model（用户实际在用）
+ * - 其次：高级后端配置里“本 App 可用版本（测试结果）”里判定 ok 的 modelId
+ */
+function listProviderModelIdsFromSettings(provider: AiProviderId): string[] {
+  const s = loadAiSettings();
+  const current = (() => {
+    try {
+      // AiProviderId 与 settings 字段同名
+      const cfg = (s as unknown as Record<string, any>)[provider];
+      const m = (cfg?.model ?? "").trim();
+      return m ? [m] : [];
+    } catch {
+      return [];
+    }
+  })();
+
+  const health = provider === "gemini" ? readGeminiHealth() : readModelHealth(provider);
+  const ok = Object.entries(health)
+    .filter(([, v]) => v?.verdict === "ok")
+    .sort((a, b) => (b[1]?.testedAt ?? 0) - (a[1]?.testedAt ?? 0))
+    .map(([k]) => k);
+
+  // 严格模式：不回退内置 PERSONAS。设置是唯一权威来源。
+  // 为避免列表过长，仅保留最近的若干个（当前 + 最近 ok）。
+  return uniqKeepOrder([...current, ...ok]).slice(0, 8);
+}
+
 export function listModelPersonas(provider: AiProviderId): ModelPersona[] {
-  return PERSONAS[provider] ?? [];
+  const base = PERSONAS[provider] ?? [];
+  const modelIds = listProviderModelIdsFromSettings(provider);
+
+  // 本地模型不做推荐档位（与现有 UI 逻辑保持一致）
+  if (provider === "ollama" || provider === "mlx") return base;
+
+  // 用 base 的文案作为“档位名”，超出则用通用命名。
+  return modelIds.map((modelId, i) => {
+    const b = base[i];
+    if (b) return { ...b, modelId };
+    return {
+      provider,
+      modelId,
+      title: `版本·${i + 1}`,
+      subtitle: "来自高级后端配置",
+      description: "此列表来自你在「设置 → 高级后端配置」中测试通过并保存的模型版本。",
+      tags: i === 0 ? ["推荐"] : undefined,
+      costStars: 3,
+    } satisfies ModelPersona;
+  });
 }
 

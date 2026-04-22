@@ -5,6 +5,10 @@ import { WritingStoreIndexedDB } from "./writing-store-indexeddb";
 let store: WritingStore | null = null;
 
 function createDefaultStore(): WritingStore {
+  /** Playwright 等本地烟测：避免未登录时 Hybrid 走云端 `createWork` 报「请先登录」 */
+  if (import.meta.env.VITE_E2E === "1") {
+    return new WritingStoreIndexedDB();
+  }
   const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim();
   const key = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim();
   if (url && key) {

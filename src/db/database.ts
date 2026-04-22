@@ -873,6 +873,39 @@ export class LiubaiDB extends Dexie {
       // Sprint 1 新增：全局提示词库
       globalPromptTemplates: "id, type, status, createdAt, updatedAt, [type+status]",
     });
+    // v30：globalPromptTemplates 需为 sortOrder 建索引（orderBy("sortOrder")）
+    this.version(30).stores({
+      works: "id, updatedAt",
+      chapters: "id, workId, order, volumeId",
+      volumes: "id, workId, order",
+      meta: "key",
+      chapterSnapshots: "id, chapterId, createdAt",
+      referenceLibrary: "id, updatedAt, category",
+      referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+      referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+      referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+      referenceTags: "id, name, createdAt",
+      referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+      referenceChapterHeads: "id, refWorkId, chunkId, ordinal, startOffset, [refWorkId+ordinal]",
+      bibleCharacters: "id, workId, sortOrder, name, [workId+sortOrder]",
+      bibleWorldEntries: "id, workId, entryKind, sortOrder, [workId+sortOrder]",
+      bibleForeshadowing: "id, workId, status, chapterId, sortOrder, [workId+status]",
+      bibleTimelineEvents: "id, workId, chapterId, sortOrder, [workId+sortOrder]",
+      bibleChapterTemplates: "id, workId, name, [workId+name]",
+      writingPromptTemplates: "id, workId, category, sortOrder, [workId+sortOrder], [workId+category]",
+      writingStyleSamples: "id, workId, sortOrder, [workId+sortOrder]",
+      chapterBible: "id, chapterId, workId, [chapterId+workId]",
+      bibleGlossaryTerms: "id, workId, term, category, [workId+term]",
+      workStyleCards: "id, workId, updatedAt",
+      inspirationCollections: "id, sortOrder, createdAt",
+      inspirationFragments:
+        "id, workId, collectionId, createdAt, [workId+createdAt], [collectionId+createdAt]",
+      logicPlaceNodes: "id, workId, updatedAt, [workId+updatedAt]",
+      logicPlaceEvents: "id, workId, placeId, updatedAt, [workId+updatedAt], [placeId+updatedAt]",
+      tuiyanStates: "id, workId, updatedAt, [workId+updatedAt]",
+      referenceExtracts: "id, refWorkId, type, createdAt, [refWorkId+type]",
+      globalPromptTemplates: "id, type, status, sortOrder, createdAt, updatedAt, [type+status]",
+    });
   }
 }
 

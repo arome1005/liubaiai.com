@@ -33,7 +33,6 @@ import { readLastWorkId } from "../util/lastWorkId";
 import type { AiChatMessage } from "../ai/types";
 import {
   addBibleCharacter,
-  addBibleForeshadow,
   addBibleGlossaryTerm,
   addBibleTimelineEvent,
   addBibleWorldEntry,
@@ -52,13 +51,7 @@ import { Input } from "../components/ui/input";
 import { Badge } from "../components/ui/badge";
 import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../components/ui/select";
+
 import { cn } from "../lib/utils";
 import {
   MessageSquare,
@@ -66,7 +59,6 @@ import {
   Plus,
   Search,
   MoreHorizontal,
-  Sparkles,
   Clock,
   ChevronRight,
   Lightbulb,
@@ -109,8 +101,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../components/ui/dialog";
-import { AIModelSelector, AI_MODELS } from "../components/ai-model-selector";
+import { AI_MODELS } from "../components/ai-model-selector";
+import { UnifiedAIModelSelector as AIModelSelector } from "../components/ai-model-selector-unified";
 import { aiModelIdToProvider, aiProviderToModelId } from "../util/ai-ui-model-map";
+import { LiubaiLogo } from "../components/LiubaiLogo";
 
 // 运行时消息类型（带时间戳，展示用）
 interface Message {
@@ -275,15 +269,6 @@ const initialTechniqueCards: TechniqueCardMock[] = [
   },
 ];
 
-type BibleEntryType = "character" | "world" | "glossary" | "timeline" | "foreshadow";
-const BIBLE_ENTRY_TYPES: { value: BibleEntryType; label: string }[] = [
-  { value: "character", label: "人物" },
-  { value: "world", label: "世界观条目" },
-  { value: "glossary", label: "术语" },
-  { value: "timeline", label: "时间线事件" },
-  { value: "foreshadow", label: "伏笔" },
-];
-
 // v0 风格「快捷问题」
 const quickQuestions = [
   { icon: Brain, label: "分析人物动机", prompt: "请帮我分析主角在这个情节中的行为动机是否合理，以及如何让读者更容易共情？" },
@@ -357,17 +342,6 @@ export function ChatPage() {
   const [bookmarkedTechniqueIds, setBookmarkedTechniqueIds] = useState<Set<string>>(
     () => new Set(["tc-1", "tc-2"]),
   );
-
-  // 写入锦囊对话框状态
-  const [bibleDialog, setBibleDialog] = useState<{ open: boolean; msgId: string; content: string }>({
-    open: false, msgId: "", content: "",
-  });
-  const [bibleDialogWorks, setBibleDialogWorks] = useState<Work[]>([]);
-  const [bibleDialogWorkId, setBibleDialogWorkId] = useState("");
-  const [bibleDialogType, setBibleDialogType] = useState<BibleEntryType>("character");
-  const [bibleDialogTitle, setBibleDialogTitle] = useState("");
-  const [bibleDialogNote, setBibleDialogNote] = useState("");
-  const [bibleDialogSubmitting, setBibleDialogSubmitting] = useState(false);
 
   // ── 问策上下文装配（关联作品 + 设定索引） ────────────────────────────────
   const [worksList, setWorksList] = useState<Work[]>([]);
@@ -1003,7 +977,7 @@ export function ChatPage() {
                   variant="outline"
                   className="h-auto max-w-[min(14rem,40vw)] gap-1 py-0.5 pl-1.5 pr-2 text-[10px]"
                 >
-                  <Sparkles className="h-3 w-3 shrink-0" />
+                  <LiubaiLogo className="h-3 w-3 shrink-0 text-foreground" />
                   <span className="min-w-0 truncate font-medium">{selectedAiModel.name}</span>
                   {selectedAiModel.id.startsWith("qianlong") ? (
                     <span className="shrink-0 text-muted-foreground">· {selectedAiModel.subtitle}</span>
@@ -1065,14 +1039,14 @@ export function ChatPage() {
                   {/* 头像 */}
                   <div
                     className={cn(
-                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
+                      "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border/40 shadow-sm",
                       message.role === "assistant"
-                        ? "bg-primary/10"
+                        ? "bg-card"
                         : "bg-muted"
                     )}
                   >
                     {message.role === "assistant" ? (
-                      <Sparkles className="h-4 w-4 text-primary" />
+                      <LiubaiLogo className="h-4 w-4 text-foreground" />
                     ) : (
                       <span className="text-xs">我</span>
                     )}
@@ -1135,8 +1109,8 @@ export function ChatPage() {
 
               {isLoading && (
                 <div className="flex gap-3">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                    <Sparkles className="h-4 w-4 text-primary" />
+                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border/40 bg-card shadow-sm">
+                    <LiubaiLogo className="h-4 w-4 text-foreground animate-pulse" />
                   </div>
                   <div className="max-w-[80%] bg-muted/50 rounded-2xl px-4 py-2.5 text-sm text-foreground">
                     {streamingContent ? (

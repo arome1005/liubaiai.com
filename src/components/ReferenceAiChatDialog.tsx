@@ -1,15 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Check, ChevronDown, Loader2, Send, Sparkles, Square, X } from "lucide-react";
+import { Check, ChevronDown, Loader2, Send, Sparkles, Square, X } from "lucide-react";
 import { cn } from "../lib/utils";
 import { Dialog, DialogContent } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
-import { AIModelSelector, AI_MODELS } from "./ai-model-selector";
+import { AI_MODELS } from "./ai-model-selector";
+import { UnifiedAIModelSelector as AIModelSelector } from "./ai-model-selector-unified";
 import { aiModelIdToProvider, aiProviderToModelId } from "../util/ai-ui-model-map";
 import { generateWithProviderStream } from "../ai/client";
 import { getProviderConfig, loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiChatMessage, AiProviderId, AiSettings } from "../ai/types";
 import { isLocalAiProvider } from "../ai/local-provider";
+import { LiubaiLogo } from "./LiubaiLogo";
 import { addGlobalPromptTemplate, listReferenceLibrary } from "../db/repo";
 import type { GlobalPromptTemplate, PromptType } from "../db/types";
 import { getDB } from "../db/database";
@@ -94,7 +96,7 @@ export function ReferenceAiChatDialog(props: {
 }) {
   const { open, onClose, bookTitle, bookChunks, refWorkId } = props;
 
-  const [settings, setSettings] = useState<AiSettings>(() => loadAiSettings());
+  const [, setSettings] = useState<AiSettings>(() => loadAiSettings());
   const [selectedModelId, setSelectedModelId] = useState(() => aiProviderToModelId(loadAiSettings().provider));
   const [showModelSelector, setShowModelSelector] = useState(false);
 
@@ -290,7 +292,7 @@ export function ReferenceAiChatDialog(props: {
           {/* 第一行：标题 + 关闭 */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Bot className="h-4 w-4 text-primary" />
+              <LiubaiLogo className="h-4 w-4 text-foreground" />
               <span className="text-sm font-semibold text-foreground">
                 藏经 AI
                 {selectedBookTitle?.trim() ? (
@@ -314,7 +316,7 @@ export function ReferenceAiChatDialog(props: {
               onClick={() => setShowModelSelector(true)}
               className="flex h-7 items-center gap-1.5 rounded-full border border-border/60 bg-background px-2.5 text-xs text-foreground transition-colors hover:border-primary/50 hover:bg-muted/60"
             >
-              <Sparkles className="h-3 w-3 text-primary" />
+              <LiubaiLogo className="h-3 w-3 text-foreground" />
               <span className="font-medium">{selectedAiModel.name}</span>
               <span className="text-muted-foreground">{selectedAiModel.provider}</span>
               <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -364,8 +366,8 @@ export function ReferenceAiChatDialog(props: {
               return (
                 <div key={m.id} className={cn("flex w-full gap-2", isUser ? "justify-end" : "justify-start")}>
                   {!isUser && (
-                    <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10">
-                      <Bot className="h-3.5 w-3.5 text-primary" />
+                    <div className="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-border/40 bg-card shadow-sm">
+                      <LiubaiLogo className="h-3.5 w-3.5 text-foreground" />
                     </div>
                   )}
                   <div

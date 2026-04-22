@@ -4,12 +4,10 @@ import {
   MessageSquare,
   Send,
   ChevronDown,
-  ChevronRight,
   RefreshCw,
   Copy,
   Check,
   BookOpen,
-  Sparkles,
   Brain,
   Users,
   Swords,
@@ -24,32 +22,24 @@ import {
   Edit3,
   Plus,
   Clock,
-  Star,
-  Zap,
   Settings2,
   PanelLeftClose,
   PanelLeft,
   Loader2,
-  Bot,
   User,
   ThumbsUp,
   ThumbsDown,
   Bookmark,
   Search,
-  Filter,
   ArrowRight,
   History,
-  Wand2,
   Network,
-  Quote,
-  AlertCircle,
   CheckCircle2,
   Circle,
   BookMarked,
   Layers,
   MessageCircle,
   HelpCircle,
-  PenTool,
 } from "lucide-react"
 import { cn } from "../lib/utils"
 import { Button } from "../components/ui/button"
@@ -57,6 +47,7 @@ import { Badge } from "../components/ui/badge"
 import { Textarea } from "../components/ui/textarea"
 import { Input } from "../components/ui/input"
 import { ScrollArea } from "../components/ui/scroll-area"
+import { LiubaiLogo } from "../components/LiubaiLogo"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -70,8 +61,11 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "../components/ui/tooltip"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
-import { AIModelSelector, AI_MODELS } from "../components/ai-model-selector"
+import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs"
+import { AI_MODELS } from "../components/ai-model-selector"
+import { UnifiedAIModelSelector as AIModelSelector } from "../components/ai-model-selector-unified"
+import { loadAiSettings, saveAiSettings } from "../ai/storage"
+import { aiModelIdToProvider, aiProviderToModelId } from "../util/ai-ui-model-map"
 
 // 策略类型定义
 type StrategyType = "plot" | "character" | "worldbuilding" | "pacing" | "conflict" | "foreshadow"
@@ -239,8 +233,9 @@ const mockAnalysisCards: AnalysisCard[] = [
 ]
 
 export function WenCeModule() {
+  const [conversations, setConversations] = useState<Conversation[]>(mockConversations)
   const [activeTab, setActiveTab] = useState<"chat" | "analysis" | "history">("chat")
-  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(mockConversations[0])
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(conversations[0])
   const [messages, setMessages] = useState<Message[]>(mockMessages)
   const [inputValue, setInputValue] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
@@ -248,7 +243,7 @@ export function WenCeModule() {
   const [searchQuery, setSearchQuery] = useState("")
   const [activeStrategyFilter, setActiveStrategyFilter] = useState<StrategyType | null>(null)
   const [copiedId, setCopiedId] = useState<string | null>(null)
-  const [selectedModelId, setSelectedModelId] = useState("jianshan")
+  const [selectedModelId, setSelectedModelId] = useState(() => aiProviderToModelId(loadAiSettings().provider))
   const [showModelSelector, setShowModelSelector] = useState(false)
   const selectedModel = AI_MODELS.find(m => m.id === selectedModelId) || AI_MODELS[0]
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -257,6 +252,15 @@ export function WenCeModule() {
     navigator.clipboard.writeText(content)
     setCopiedId(id)
     setTimeout(() => setCopiedId(null), 2000)
+  }
+
+  const handleDeleteConversation = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation()
+    const next = conversations.filter((c) => c.id !== id)
+    setConversations(next)
+    if (selectedConversation?.id === id) {
+      setSelectedConversation(next.length > 0 ? next[0] : null)
+    }
   }
 
   const handleSend = () => {
@@ -292,7 +296,7 @@ export function WenCeModule() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
-  const filteredConversations = mockConversations.filter((conv) => {
+  const filteredConversations = conversations.filter((conv) => {
     const matchesSearch = !searchQuery || 
       conv.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       conv.lastMessage.toLowerCase().includes(searchQuery.toLowerCase())
@@ -424,7 +428,7 @@ export function WenCeModule() {
                               重命名
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem className="text-destructive">
+                            <DropdownMenuItem className="text-destructive" onClick={(e) => handleDeleteConversation(conv.id, e)}>
                               <Trash2 className="mr-2 h-4 w-4" />
                               删除
                             </DropdownMenuItem>
@@ -466,12 +470,12 @@ export function WenCeModule() {
             <div className="border-t border-border/40 p-4">
               <div className="grid grid-cols-3 gap-2 text-center">
                 <div className="rounded-lg bg-muted/30 p-2">
-                  <p className="text-lg font-semibold text-foreground">{mockConversations.length}</p>
+                  <p className="text-lg font-semibold text-foreground">{conversations.length}</p>
                   <p className="text-[10px] text-muted-foreground">对话</p>
                 </div>
                 <div className="rounded-lg bg-muted/30 p-2">
                   <p className="text-lg font-semibold text-foreground">
-                    {mockConversations.reduce((acc, c) => acc + c.messageCount, 0)}
+                    {conversations.reduce((acc, c) => acc + c.messageCount, 0)}
                   </p>
                   <p className="text-[10px] text-muted-foreground">消息</p>
                 </div>
@@ -581,7 +585,7 @@ export function WenCeModule() {
                   {isGenerating && (
                     <div className="flex gap-3">
                       <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/20">
-                        <Bot className="h-4 w-4 text-primary" />
+                        <LiubaiLogo className="h-4 w-4 text-primary" />
                       </div>
                       <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-4 py-3">
                         <Loader2 className="h-4 w-4 animate-spin text-primary" />
@@ -655,7 +659,12 @@ export function WenCeModule() {
                   open={showModelSelector}
                   onOpenChange={setShowModelSelector}
                   selectedModelId={selectedModelId}
-                  onSelectModel={setSelectedModelId}
+                  onSelectModel={(modelId) => {
+                    const provider = aiModelIdToProvider(modelId)
+                    const s = loadAiSettings()
+                    saveAiSettings({ ...s, provider })
+                    setSelectedModelId(modelId)
+                  }}
                   title="选择模型"
                 />
               </div>
@@ -725,7 +734,7 @@ export function WenCeModule() {
               <div className="mx-auto max-w-3xl">
                 <h2 className="mb-6 text-lg font-semibold text-foreground">历史记录</h2>
                 <div className="space-y-4">
-                  {mockConversations.map((conv) => {
+                  {conversations.map((conv) => {
                     const config = strategyConfig[conv.type]
                     return (
                       <div
@@ -790,7 +799,7 @@ function ChatMessage({
     <div className={cn("flex gap-3", isUser && "justify-end")}>
       {!isUser && (
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/20">
-          <Bot className="h-4 w-4 text-primary" />
+          <LiubaiLogo className="h-4 w-4 text-primary" />
         </div>
       )}
       <div className={cn("max-w-[85%]", isUser && "order-first")}>

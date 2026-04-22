@@ -1,22 +1,16 @@
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef } from "react"
 import {
-  GitBranch,
   ChevronRight,
   ChevronDown,
   Plus,
   MoreHorizontal,
   Search,
-  Filter,
   BookOpen,
   Network,
   FileText,
-  MessageSquare,
   History,
   CheckCircle2,
-  Clock,
-  AlertCircle,
-  Sparkles,
   Send,
   Pencil,
   Trash2,
@@ -29,46 +23,35 @@ import {
   Users,
   MapPin,
   Swords,
-  Crown,
   Heart,
   Flame,
-  Star,
-  Eye,
-  EyeOff,
   Lock,
-  Unlock,
   RefreshCw,
   Download,
-  Upload,
   Settings,
   Layers,
   GitMerge,
   Milestone,
-  Calendar,
-  TrendingUp,
   BarChart3,
   PanelLeftClose,
   PanelLeft,
-  GripVertical,
   Bot,
   User,
   ThumbsUp,
   ThumbsDown,
-  Bookmark,
   Pin,
   PinOff,
   CircleDot,
   Circle,
   CheckCircle,
-  XCircle,
   Lightbulb,
   Wand2,
-  LayoutGrid,
   List,
   Maximize2,
-  Minimize2,
+  Sparkles,
 } from "lucide-react"
 import { cn } from "../lib/utils"
+import { LiubaiLogo } from "../components/LiubaiLogo"
 import { Button } from "../components/ui/button"
 import { Input } from "../components/ui/input"
 import { Badge } from "../components/ui/badge"
@@ -91,15 +74,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "../components/ui/tooltip"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "../components/ui/dialog"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 
 // ============ Types ============
 interface OutlineNode {
@@ -616,7 +590,7 @@ function OutlineTreeNode({
 function MindMapNode({
   node,
   isCenter = false,
-  position,
+  position: _position,
 }: {
   node: OutlineNode
   isCenter?: boolean
@@ -800,14 +774,14 @@ function ChatMessageBubble({
       {/* Avatar */}
       <div
         className={cn(
-          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-          isUser ? "bg-primary/20" : "bg-muted"
+          "flex h-8 w-8 shrink-0 items-center justify-center rounded-full shadow-sm",
+          isUser ? "bg-primary/20" : "bg-card border border-border/40"
         )}
       >
         {isUser ? (
           <User className="h-4 w-4 text-primary" />
         ) : (
-          <Bot className="h-4 w-4 text-muted-foreground" />
+          <LiubaiLogo className="h-4 w-4 text-foreground" />
         )}
       </div>
 
@@ -893,8 +867,8 @@ export function TuiYanModule() {
   const [activeTab, setActiveTab] = useState<"outline" | "mindmap" | "wence">("outline")
   const [rightPanelTab, setRightPanelTab] = useState<"detail" | "chat" | "reference">("detail")
   const [showLeftPanel, setShowLeftPanel] = useState(true)
-  const [showRightPanel, setShowRightPanel] = useState(true)
-  const [outlineViewMode, setOutlineViewMode] = useState<"tree" | "kanban">("tree")
+  const [showRightPanel] = useState(true)
+  const [, setOutlineViewMode] = useState<"tree" | "kanban">("tree")
   const [isGenerating, setIsGenerating] = useState(false)
   const chatScrollRef = useRef<HTMLDivElement>(null)
 

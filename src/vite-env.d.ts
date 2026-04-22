@@ -11,4 +11,6 @@ interface ImportMetaEnv {
    * 生产部署时请在部署平台的环境变量中设置同名变量。
    */
   readonly VITE_ADMIN_KEY?: string;
+  /** Playwright 等 E2E：为 `1` 时在启动后注册 `window.__LIUBAI_PW_SEED` */
+  readonly VITE_E2E?: string;
 }

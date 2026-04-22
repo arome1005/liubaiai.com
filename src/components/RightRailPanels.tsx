@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 import { Link } from "react-router-dom";
 import type { Chapter, ReferenceExcerpt, Work } from "../db/types";
-import { isFirstAiGateCancelledError } from "../ai/client";
-import { generateChapterSummaryWithRetry } from "../ai/chapter-summary-generate";
-import { loadAiSettings } from "../ai/storage";
 import { exportBibleMarkdown, isChapterSaveConflictError, updateChapter } from "../db/repo";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
-import { formatSummaryScope, formatSummaryUpdatedAt } from "../util/summary-meta";
 import type { AutoSummaryStatus } from "../ai/chapter-summary-auto";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
+import {
+  LINKED_CHAPTERS_UPDATED_EVENT,
+  loadLinkedChapters,
+  saveLinkedChapters,
+  type LinkedChaptersState,
+} from "../util/linked-chapters-storage";
+import { approxRoughTokenCount } from "../ai/approx-tokens";
+import { cn } from "../lib/utils";
 
-export function SummaryRightPanel(props: {
+export function KnowledgeBaseRightPanel(props: {
   workId: string;
   work: Work;
   chapter: Chapter | null;
@@ -22,161 +26,219 @@ export function SummaryRightPanel(props: {
   /** 概要保存成功后合并进父级 `chapters`，以同步 `updatedAt`（步 25 乐观锁） */
   onChapterPatch?: (chapterId: string, patch: Partial<Chapter>) => void;
 }) {
-  const [saving, setSaving] = useState(false);
-  const [summaryAiBusy, setSummaryAiBusy] = useState(false);
-  const [draft, setDraft] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [linkedTick, setLinkedTick] = useState(0);
 
-  const curId = props.chapter?.id ?? "";
   useEffect(() => {
-    setDraft(props.chapter?.summary ?? "");
-  }, [curId, props.chapter?.summary]);
+    const on = (e: Event) => {
+      const ev = e as CustomEvent<{ workId?: string; chapterId?: string }>;
+      const wid = ev.detail?.workId;
+      const cid = ev.detail?.chapterId;
+      if (!props.chapter) return;
+      if (wid === props.workId && cid === props.chapter.id) setLinkedTick((x) => x + 1);
+    };
+    window.addEventListener(LINKED_CHAPTERS_UPDATED_EVENT, on as EventListener);
+    return () => window.removeEventListener(LINKED_CHAPTERS_UPDATED_EVENT, on as EventListener);
+  }, [props.workId, props.chapter?.id]);
 
-  const recent = useMemo(() => {
+  const state: LinkedChaptersState = useMemo(() => {
+    void linkedTick;
+    if (!props.chapter) return { fullChapterIds: [], summaryChapterIds: [] };
+    return loadLinkedChapters(props.workId, props.chapter.id);
+  }, [props.workId, props.chapter?.id, linkedTick]);
+
+  const canPick = useMemo(() => {
     if (!props.chapter) return [];
-    const curOrder = props.chapter.order;
-    return [...props.chapters]
-      .filter((c) => c.order <= curOrder)
-      .sort((a, b) => b.order - a.order)
-      .slice(0, 8);
+    const curId = props.chapter.id;
+    const pool = [...props.chapters].filter((c) => c.id !== curId);
+    // 若 order 可用则按 order 倒序；否则按 updatedAt 倒序（更贴近“最近写完”）
+    return pool.sort((a, b) => {
+      const ao = typeof a.order === "number" ? a.order : null;
+      const bo = typeof b.order === "number" ? b.order : null;
+      if (ao != null && bo != null) return bo - ao;
+      const au = typeof a.updatedAt === "number" ? a.updatedAt : 0;
+      const bu = typeof b.updatedAt === "number" ? b.updatedAt : 0;
+      return bu - au;
+    });
   }, [props.chapter, props.chapters]);
 
-  const autoHint = useMemo(() => {
-    const s = props.autoSummaryStatus;
-    const id = props.chapter?.id;
-    if (!s || !id) return null;
-    if ("chapterId" in s && s.chapterId !== id) return null;
-    if (s.kind === "queued") return "自动概要：排队中…";
-    if (s.kind === "running") return "自动概要：生成中…";
-    if (s.kind === "skipped") return `自动概要：已跳过（${s.reason}）`;
-    if (s.kind === "error") return `自动概要：失败（${s.message}）`;
-    if (s.kind === "ok") return `自动概要：已更新（${formatSummaryUpdatedAt(s.at) || "刚刚"}）`;
-    return null;
-  }, [props.autoSummaryStatus, props.chapter?.id]);
+  const approxTokens = useMemo(() => {
+    if (!props.chapter) return { full: 0, sum: 0 };
+    const fullSet = new Set(state.fullChapterIds);
+    const sumSet = new Set(state.summaryChapterIds);
+    const fullText = canPick
+      .filter((c) => fullSet.has(c.id))
+      .map((c) => (c.content ?? "").trim())
+      .join("\n");
+    const sumText = canPick
+      .filter((c) => sumSet.has(c.id))
+      .map((c) => (c.summary ?? "").trim())
+      .join("\n");
+    return { full: approxRoughTokenCount(fullText), sum: approxRoughTokenCount(sumText) };
+  }, [props.chapter, canPick, state.fullChapterIds, state.summaryChapterIds]);
+
+  const selectedChapterIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const id of state.fullChapterIds) s.add(id);
+    for (const id of state.summaryChapterIds) s.add(id);
+    return s;
+  }, [state.fullChapterIds, state.summaryChapterIds]);
+
+  const selectedCount = selectedChapterIds.size;
+  const INLINE_CAP = 5;
+
+  const selectedRows = useMemo(() => {
+    const byId = new Map<string, Chapter>();
+    for (const c of canPick) byId.set(c.id, c);
+    const ids = [...selectedChapterIds].filter((id) => byId.has(id));
+    const orderOf = (id: string) => byId.get(id)?.order ?? -1;
+    ids.sort((a, b) => orderOf(b) - orderOf(a));
+    return ids.map((id) => {
+      const c = byId.get(id)!;
+      return {
+        id,
+        title: c.title,
+        order: c.order,
+        hasFull: state.fullChapterIds.includes(id),
+        hasSum: state.summaryChapterIds.includes(id),
+      };
+    });
+  }, [canPick, selectedChapterIds, state.fullChapterIds, state.summaryChapterIds]);
+
+  function saveNext(next: LinkedChaptersState, opts?: { autoOpenPickerIfOverflow?: boolean }) {
+    if (!props.chapter) return;
+    saveLinkedChapters(props.workId, props.chapter.id, next);
+    const overflow =
+      new Set<string>([...next.fullChapterIds, ...next.summaryChapterIds]).size > INLINE_CAP;
+    if (opts?.autoOpenPickerIfOverflow && overflow) {
+      setPickerOpen(true);
+    }
+  }
+
+  function toggleOne(id: string, mode: "full" | "summary") {
+    const cur = state;
+    if (mode === "summary") {
+      const c = canPick.find((x) => x.id === id);
+      if (!c || !(c.summary ?? "").trim()) return; // 严格：概要必须存在
+    }
+    const full = new Set(cur.fullChapterIds);
+    const sum = new Set(cur.summaryChapterIds);
+    if (mode === "full") {
+      if (full.has(id)) full.delete(id);
+      else full.add(id);
+    } else {
+      if (sum.has(id)) sum.delete(id);
+      else sum.add(id);
+    }
+    saveNext({ fullChapterIds: [...full], summaryChapterIds: [...sum] }, { autoOpenPickerIfOverflow: true });
+  }
+
+  function addRecent(n: number, mode: "full" | "summary") {
+    const cur = state;
+    const picked =
+      mode === "full"
+        ? canPick.filter((c) => (c.content ?? "").trim()).slice(0, n).map((c) => c.id)
+        : canPick.filter((c) => (c.summary ?? "").trim()).slice(0, n).map((c) => c.id);
+    const full = new Set(cur.fullChapterIds);
+    const sum = new Set(cur.summaryChapterIds);
+    for (const id of picked) {
+      if (mode === "full") full.add(id);
+      else sum.add(id);
+    }
+    saveNext({ fullChapterIds: [...full], summaryChapterIds: [...sum] }, { autoOpenPickerIfOverflow: true });
+  }
 
   return (
     <div className="rr-panel">
-      <div className="rr-panel-actions">
-        <Link className="btn small" to={`/work/${props.workId}/summary`}>
-          打开总览
-        </Link>
-      </div>
-
       <div className="rr-block">
-        <div className="rr-block-title">当前章节概要</div>
+        <div className="rr-block-title">关联知识库</div>
         {props.chapter ? (
           <>
-            <div className="muted small" style={{ marginBottom: 6 }}>
-              {props.chapter.title}
+            <div className="muted small" style={{ marginBottom: 8, lineHeight: 1.6 }}>
+              用「已完成章节」来约束本章生成：可混搭 <strong>全文</strong> 与 <strong>概要</strong>，概要更省 tokens。
             </div>
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              rows={8}
-              placeholder="用要点写事实与推进（可空）"
-              style={{ width: "100%", resize: "vertical" }}
-              onBlur={() => {
-                if (!props.chapter) return;
-                const next = draft;
-                const exp = props.chapter.updatedAt;
-                setSaving(true);
-                void (async () => {
-                  try {
-                    const t = Date.now();
-                    await updateChapter(
-                      props.chapter!.id,
-                      {
-                        summary: next,
-                        summaryUpdatedAt: t,
-                        summaryScopeFromOrder: props.chapter!.summaryScopeFromOrder ?? props.chapter!.order,
-                        summaryScopeToOrder: props.chapter!.summaryScopeToOrder ?? props.chapter!.order,
-                      },
-                      { expectedUpdatedAt: exp },
-                    );
-                    props.onChapterPatch?.(props.chapter!.id, {
-                      summary: next,
-                      updatedAt: t,
-                      summaryUpdatedAt: t,
-                      summaryScopeFromOrder: props.chapter!.summaryScopeFromOrder ?? props.chapter!.order,
-                      summaryScopeToOrder: props.chapter!.summaryScopeToOrder ?? props.chapter!.order,
-                    });
-                  } catch (e) {
-                    if (isChapterSaveConflictError(e)) {
-                      toast.error("概要保存冲突：本章已在其它窗口更新。请打开章节概要总览或切换章节后重试。");
-                    }
-                  } finally {
-                    setSaving(false);
-                  }
-                })();
-              }}
-            />
-            <div className="rr-panel-row" style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {/* 五章内：直接在面板里管理；超过后再进弹窗批量管理 */}
+            <div className="rounded-md border border-border/50 bg-background/40 p-2">
+              {selectedCount === 0 ? (
+                <div className="muted small" style={{ padding: "10px 8px", textAlign: "center" }}>
+                  未选择任何章节
+                </div>
+              ) : (
+                <>
+                  {(selectedCount > INLINE_CAP ? selectedRows.slice(0, INLINE_CAP) : selectedRows).map((r) => (
+                    <div
+                      key={r.id}
+                      className="flex items-center justify-between gap-2 rounded-md px-2 py-2 hover:bg-muted/30"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate">
+                          <span className="muted small">#{r.order}</span> {r.title}
+                        </div>
+                        <div className="muted small">
+                          {r.hasFull ? "（正文）" : ""}
+                          {r.hasFull && r.hasSum ? " · " : ""}
+                          {r.hasSum ? "（概要）" : ""}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="icon-btn"
+                        title="移除该章关联"
+                        onClick={() => {
+                          const next: LinkedChaptersState = {
+                            fullChapterIds: state.fullChapterIds.filter((x) => x !== r.id),
+                            summaryChapterIds: state.summaryChapterIds.filter((x) => x !== r.id),
+                          };
+                          saveNext(next);
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                  {selectedCount > INLINE_CAP ? (
+                    <div className="muted small" style={{ padding: "6px 8px" }}>
+                      已关联 {selectedCount} 章，更多请点「更多」。
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+
+            <div className="rr-panel-row" style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
               <button
                 type="button"
                 className="btn small"
-                disabled={summaryAiBusy || saving}
                 onClick={() => {
                   if (!props.chapter) return;
-                  const body = (props.chapterEditorContent ?? props.chapter.content ?? "").trim();
-                  if (!body) {
-                    toast.info("本章暂无正文，请先撰写后再生成概要。");
-                    return;
-                  }
-                  void (async () => {
-                    setSummaryAiBusy(true);
-                    try {
-                      const text = await generateChapterSummaryWithRetry({
-                        workTitle: props.work.title,
-                        chapterTitle: props.chapter!.title,
-                        chapterContent: body,
-                        settings: loadAiSettings(),
-                      });
-                      const t = Date.now();
-                      const exp = props.chapter!.updatedAt;
-                      await updateChapter(
-                        props.chapter!.id,
-                        {
-                          summary: text,
-                          summaryUpdatedAt: t,
-                          summaryScopeFromOrder: props.chapter!.order,
-                          summaryScopeToOrder: props.chapter!.order,
-                        },
-                        { expectedUpdatedAt: exp },
-                      );
-                      setDraft(text);
-                      props.onChapterPatch?.(props.chapter!.id, {
-                        summary: text,
-                        updatedAt: t,
-                        summaryUpdatedAt: t,
-                        summaryScopeFromOrder: props.chapter!.order,
-                        summaryScopeToOrder: props.chapter!.order,
-                      });
-                    } catch (e) {
-                      if (isFirstAiGateCancelledError(e)) return;
-                      toast.error(e instanceof Error ? e.message : "生成失败");
-                    } finally {
-                      setSummaryAiBusy(false);
-                    }
-                  })();
+                  saveLinkedChapters(props.workId, props.chapter.id, { fullChapterIds: [], summaryChapterIds: [] });
                 }}
+                disabled={state.fullChapterIds.length === 0 && state.summaryChapterIds.length === 0}
               >
-                {summaryAiBusy ? "生成中…" : "AI 生成概要"}
+                清除
+              </button>
+              <button type="button" className="btn small" onClick={() => addRecent(3, "full")}>
+                最近3章全文
+              </button>
+              <button type="button" className="btn small" onClick={() => addRecent(5, "summary")}>
+                最近5章概要
+              </button>
+              <button
+                type="button"
+                className="btn small"
+                onClick={() => {
+                  setPickerOpen(true);
+                }}
+                disabled={canPick.length === 0}
+                title={canPick.length === 0 ? "暂无可关联章节" : "打开关联章节弹窗"}
+              >
+                更多
               </button>
             </div>
-            <div className="muted small" style={{ marginTop: 6 }}>
-              {saving ? "保存中…" : "失焦自动保存"}
-              {autoHint ? (
-                <span style={{ display: "block", marginTop: 4 }}>{autoHint}</span>
-              ) : null}
-              {formatSummaryScope(props.chapter.summaryScopeFromOrder, props.chapter.summaryScopeToOrder) ? (
-                <span style={{ display: "block", marginTop: 4 }}>
-                  {formatSummaryScope(props.chapter.summaryScopeFromOrder, props.chapter.summaryScopeToOrder)}
-                </span>
-              ) : null}
-              {formatSummaryUpdatedAt(props.chapter.summaryUpdatedAt) ? (
-                <span style={{ display: "block", marginTop: 4 }}>
-                  概要更新：{formatSummaryUpdatedAt(props.chapter.summaryUpdatedAt)}
-                </span>
-              ) : null}
+
+            <div className="muted small" style={{ marginTop: 10, lineHeight: 1.6 }}>
+              已选：全文 {state.fullChapterIds.length} 章（≈{approxTokens.full.toLocaleString()} tokens） · 概要{" "}
+              {state.summaryChapterIds.length} 章（≈{approxTokens.sum.toLocaleString()} tokens）
             </div>
           </>
         ) : (
@@ -184,24 +246,200 @@ export function SummaryRightPanel(props: {
         )}
       </div>
 
-      <div className="rr-block">
-        <div className="rr-block-title">最近章节（点标题跳转）</div>
-        <ul className="rr-list">
-          {recent.map((c) => (
-            <li key={c.id} className="rr-list-item">
-              <button type="button" className="rr-link" onClick={() => props.onJumpToChapter(c.id)}>
-                {c.title}
-              </button>
-              <div className="muted small">{(c.summary ?? "").trim() ? "有概要" : "无概要"}</div>
-            </li>
-          ))}
-        </ul>
+      <Dialog
+        open={pickerOpen}
+        onOpenChange={(v) => {
+          setPickerOpen(v);
+        }}
+      >
+        <DialogContent
+          overlayClassName="work-form-modal-overlay"
+          showCloseButton={false}
+          aria-describedby={undefined}
+          className={cn(
+            "z-[var(--z-modal-app-content)] max-h-[min(92vh,880px)] w-full max-w-[min(980px,100vw-2rem)] gap-0 overflow-hidden border-border bg-[var(--surface)] p-0 shadow-lg",
+          )}
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-3 sm:px-5">
+            <DialogTitle className="text-left text-lg font-semibold">选择关联章节</DialogTitle>
+            <button type="button" className="icon-btn" title="关闭" onClick={() => setPickerOpen(false)}>
+              ×
+            </button>
+          </div>
+          <ChapterLinkPicker
+            workId={props.workId}
+            chapter={props.chapter}
+            chapters={canPick}
+            value={state}
+            onChange={(v) => {
+              if (!props.chapter) return;
+              saveLinkedChapters(props.workId, props.chapter.id, v);
+            }}
+            onClose={() => setPickerOpen(false)}
+          />
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+function ChapterLinkPicker(props: {
+  workId: string;
+  chapter: Chapter | null;
+  chapters: Chapter[];
+  value: LinkedChaptersState;
+  onChange: (v: LinkedChaptersState) => void;
+  onClose: () => void;
+}) {
+  const [q, setQ] = useState("");
+  const [selected, setSelected] = useState<LinkedChaptersState>(() => props.value);
+
+  useEffect(() => setSelected(props.value), [props.value.fullChapterIds.join(","), props.value.summaryChapterIds.join(",")]);
+
+  const filtered = useMemo(() => {
+    const key = q.trim();
+    if (!key) return props.chapters;
+    return props.chapters.filter((c) => (c.title ?? "").includes(key));
+  }, [props.chapters, q]);
+
+  function toggle(id: string, mode: "full" | "summary") {
+    setSelected((prev) => {
+      const full = new Set(prev.fullChapterIds);
+      const sum = new Set(prev.summaryChapterIds);
+      if (mode === "full") {
+        if (full.has(id)) full.delete(id);
+        else full.add(id);
+      } else {
+        if (sum.has(id)) sum.delete(id);
+        else sum.add(id);
+      }
+      return { fullChapterIds: [...full], summaryChapterIds: [...sum] };
+    });
+  }
+
+  function setRecent(n: number, mode: "full" | "summary") {
+    const ids = filtered
+      .filter((c) => {
+        const hasBody = (c.content ?? "").trim().length > 0;
+        const hasSum = (c.summary ?? "").trim().length > 0;
+        return mode === "full" ? hasBody : hasSum;
+      })
+      .slice(0, Math.max(0, n))
+      .map((c) => c.id);
+    setSelected((prev) => {
+      const full = new Set(prev.fullChapterIds);
+      const sum = new Set(prev.summaryChapterIds);
+      for (const id of ids) {
+        if (mode === "full") full.add(id);
+        else sum.add(id);
+      }
+      return { fullChapterIds: [...full], summaryChapterIds: [...sum] };
+    });
+  }
+
+  const fullSet = useMemo(() => new Set(selected.fullChapterIds), [selected.fullChapterIds]);
+  const sumSet = useMemo(() => new Set(selected.summaryChapterIds), [selected.summaryChapterIds]);
+
+  return (
+    <div className="p-4 sm:p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="rr-input"
+          placeholder="搜索章节标题…"
+          style={{ flex: "1 1 320px" }}
+        />
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className="btn small" onClick={() => setRecent(3, "full")}>
+            最近3章全文
+          </button>
+          <button type="button" className="btn small" onClick={() => setRecent(5, "summary")}>
+            最近5章概要
+          </button>
+          <button
+            type="button"
+            className="btn small"
+            onClick={() => setSelected({ fullChapterIds: [], summaryChapterIds: [] })}
+          >
+            清空
+          </button>
+        </div>
+      </div>
+
+      <div className="muted small" style={{ marginTop: 10 }}>
+        可自由组合：例如「3 章全文 + 5 章概要」。
+      </div>
+
+      <div className="mt-3 max-h-[58vh] overflow-auto rounded-md border border-border/50 bg-background/40 p-2 text-sm">
+        {filtered.map((c) => {
+          const hasBody = !!(c.content ?? "").trim();
+          const hasSum = !!(c.summary ?? "").trim();
+          const bodyCount = (c.content ?? "").trim().length;
+          return (
+            <div key={c.id} className="flex items-center justify-between gap-3 rounded-md px-2 py-2 hover:bg-muted/30">
+              <div className="min-w-0">
+                <div className="truncate">
+                  <span className="muted small">#{c.order}</span> {c.title}
+                </div>
+                <div className="muted small">
+                  {bodyCount ? `${Math.round(bodyCount / 2)} 字` : "无正文"} · {hasSum ? "有概要" : "无概要"}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  className={"btn small" + (fullSet.has(c.id) ? " primary" : "")}
+                  disabled={!hasBody}
+                  title={!hasBody ? "该章无正文" : "关联全文"}
+                  onClick={() => toggle(c.id, "full")}
+                >
+                  正文
+                </button>
+                <button
+                  type="button"
+                  className={"btn small" + (sumSet.has(c.id) ? " primary" : "")}
+                  disabled={!hasSum}
+                  title={!hasSum ? "该章无概要" : "关联概要"}
+                  onClick={() => toggle(c.id, "summary")}
+                >
+                  概要
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        {filtered.length === 0 ? <div className="muted small p-2">无匹配章节。</div> : null}
+      </div>
+
+      <div className="mt-4 flex items-center justify-end gap-2">
+        <button type="button" className="btn" onClick={props.onClose}>
+          取消
+        </button>
+        <button
+          type="button"
+          className="btn primary"
+          onClick={() => {
+            // 严格模式：概要关联必须章节真的有概要（避免历史残留把“无概要章”写进 summaryChapterIds）
+            const allowedSum = new Set(props.chapters.filter((c) => (c.summary ?? "").trim()).map((c) => c.id));
+            const allowedFull = new Set(props.chapters.filter((c) => (c.content ?? "").trim()).map((c) => c.id));
+            const next: LinkedChaptersState = {
+              fullChapterIds: selected.fullChapterIds.filter((id) => allowedFull.has(id)),
+              summaryChapterIds: selected.summaryChapterIds.filter((id) => allowedSum.has(id)),
+            };
+            props.onChange(next);
+            props.onClose();
+          }}
+        >
+          确认选择
+        </button>
       </div>
     </div>
   );
 }
 
-export function BibleRightPanel(props: { workId: string }) {
+/** 锦囊 Markdown 加载/搜索/预览（无外层 `rr-panel`，供组合进「设定」等面板） */
+export function BibleMarkdownPreview(props: { workId: string }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [md, setMd] = useState<string>("");
@@ -221,7 +459,7 @@ export function BibleRightPanel(props: { workId: string }) {
   }
 
   return (
-    <div className="rr-panel">
+    <>
       <div className="rr-panel-actions">
         <Link className="btn small" to={`/work/${props.workId}/bible`}>
           打开锦囊页
@@ -230,6 +468,13 @@ export function BibleRightPanel(props: { workId: string }) {
           {busy ? "加载中…" : md ? "刷新" : "加载"}
         </button>
       </div>
+      {busy && !md && (
+        <div className="rr-skeleton-list" aria-busy="true" aria-label="加载中">
+          {[60, 80, 45].map((w, i) => (
+            <div key={i} className="rr-skeleton-line" style={{ width: `${w}%` }} />
+          ))}
+        </div>
+      )}
       {err ? <p className="muted small" style={{ color: "#b91c1c" }}>{err}</p> : null}
       {md ? (
         <input
@@ -256,6 +501,14 @@ export function BibleRightPanel(props: { workId: string }) {
       ) : (
         <p className="muted small">点击"加载"把本书锦囊导出为 Markdown 预览（会根据上下文上限截断）。</p>
       )}
+    </>
+  );
+}
+
+export function BibleRightPanel(props: { workId: string }) {
+  return (
+    <div className="rr-panel">
+      <BibleMarkdownPreview workId={props.workId} />
     </div>
   );
 }
@@ -263,6 +516,7 @@ export function BibleRightPanel(props: { workId: string }) {
 export function RefRightPanel(props: {
   linked: Array<ReferenceExcerpt & { refTitle: string; tagIds: string[] }>;
   onInsert: (text: string) => void;
+  loading?: boolean;
 }) {
   const [q, setQ] = useState("");
   const shown = useMemo(() => {
@@ -276,7 +530,13 @@ export function RefRightPanel(props: {
     <div className="rr-panel">
       <div className="rr-block">
         <div className="rr-block-title">本章关联参考（摘录）</div>
-        {props.linked.length === 0 ? (
+        {props.loading ? (
+          <div className="rr-skeleton-list" aria-busy="true" aria-label="加载中">
+            {[75, 55, 90].map((w, i) => (
+              <div key={i} className="rr-skeleton-line" style={{ width: `${w}%` }} />
+            ))}
+          </div>
+        ) : props.linked.length === 0 ? (
           <p className="muted small">暂无。本章可在"参考库"阅读器划选保存并关联。</p>
         ) : (
           <>

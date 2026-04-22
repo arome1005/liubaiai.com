@@ -8,6 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.npm-cache-e2e
 .npm-cache
 dist
 dist-ssr
@@ -26,3 +27,7 @@ backend/.env
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright
+playwright-report/
+test-results/

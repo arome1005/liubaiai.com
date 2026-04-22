@@ -1,9 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "../lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import type { AiProviderId, AiProviderConfig, AiSettings } from "../ai/types";
 import { getProviderConfig, patchProviderConfig } from "../ai/storage";
 import { resolveOpenAiCompatibleBaseUrl } from "../ai/client";
+import {
+  resolveAnthropicNativeMessagesBaseUrl,
+  resolveGeminiNativeApiBaseUrl,
+  shouldUseRouterProtocol,
+} from "../ai/providers";
 import { listModelPersonas } from "../util/model-personas";
 import { geminiGenerateTextFromJson, messageFromApiJsonBody } from "../util/parse-api-json";
 
@@ -13,7 +18,8 @@ type ProviderTestState =
   | { status: "ok"; message: string }
   | { status: "err"; message: string };
 
-type NavId = "privacy" | "defaults" | AiProviderId;
+/** 潜龙（Ollama/MLX）合并为单独导航 `qianlong`，页内再切换具体后端 */
+type NavId = "privacy" | "defaults" | "qianlong" | Exclude<AiProviderId, "ollama" | "mlx">;
 
 type GeminiModelVerdict = "ok" | "err";
 type GeminiModelHealth = Record<string, { verdict: GeminiModelVerdict; testedAt: number }>;
@@ -73,7 +79,7 @@ function saveGeminiModelHealth(next: GeminiModelHealth) {
 }
 
 async function testGeminiModel(args: { cfg: AiProviderConfig; modelOverride?: string }): Promise<string> {
-  const baseUrl = (args.cfg.baseUrl ?? "").trim() || "https://generativelanguage.googleapis.com";
+  const baseUrl = resolveGeminiNativeApiBaseUrl(args.cfg);
   const key = (args.cfg.apiKey ?? "").trim();
   if (!key) throw new Error("请先填写 API Key");
   const model = (args.modelOverride ?? args.cfg.model ?? "").trim();
@@ -125,7 +131,7 @@ async function testOpenAICompatibleModel(args: { cfg: AiProviderConfig; model: s
 }
 
 async function testAnthropicModel(args: { cfg: AiProviderConfig; model: string }): Promise<void> {
-  const baseUrl = (args.cfg.baseUrl ?? "").trim() || "https://api.anthropic.com";
+  const baseUrl = resolveAnthropicNativeMessagesBaseUrl(args.cfg);
   const key = (args.cfg.apiKey ?? "").trim();
   if (!key) throw new Error("请先填写 API Key");
   const url = joinUrl(baseUrl, "/v1/messages");
@@ -192,6 +198,13 @@ export function BackendModelConfigModal(props: {
 }) {
   const { open, settings, onChange } = props;
   const [nav, setNav] = useState<NavId>("privacy");
+  const [localProvider, setLocalProvider] = useState<"ollama" | "mlx">("ollama");
+
+  useEffect(() => {
+    if (!open) return;
+    const p = settings.provider;
+    if (p === "ollama" || p === "mlx") setLocalProvider(p);
+  }, [open, settings.provider]);
   const [geminiHealth, setGeminiHealth] = useState<GeminiModelHealth>(() => loadGeminiModelHealth());
   const [geminiHealthDirty, setGeminiHealthDirty] = useState(false);
   const [geminiBatch, setGeminiBatch] = useState<{ running: boolean; idx: number; total: number }>({
@@ -269,9 +282,7 @@ export function BackendModelConfigModal(props: {
       { id: "zhipu" as const, label: "智谱", navSub: "zhipu", title: "智谱 GLM" },
       { id: "kimi" as const, label: "Kimi", navSub: "kimi", title: "Kimi（Moonshot）" },
       { id: "xiaomi" as const, label: "小米", navSub: "xiaomi", title: "小米 MiMo" },
-      { id: "ollama" as const, label: "潜龙", navSub: "本地·Ollama", title: "Ollama（潜龙）" },
-      { id: "mlx" as const, label: "潜龙", navSub: "本地·MLX", title: "MLX（潜龙）" },
-    ] satisfies Array<{ id: AiProviderId; label: string; navSub: string; title: string }>;
+    ] satisfies Array<{ id: Exclude<AiProviderId, "ollama" | "mlx">; label: string; navSub: string; title: string }>;
   }, []);
 
   const geminiPresetModels = useMemo(
@@ -279,17 +290,24 @@ export function BackendModelConfigModal(props: {
     [],
   );
 
-  /** 见山：常用 OpenAI 模型 ID（可手动覆盖） */
-  const openaiPresetModels = useMemo(() => ["gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3-mini"], []);
+  /** 见山：常用 OpenAI 模型 ID（涵盖原生直连 5.4 系列与 OpenRouter 中转） */
+  const openaiPresetModels = useMemo(() => [
+    "gpt-5.4-mini", "gpt-5.4-standard", "gpt-5.4-pro", "gpt-5.4-thinking",
+    "openai/gpt-5.4-mini", "openai/gpt-5.4-pro", "openai/gpt-5.4-thinking"
+  ], []);
 
-  /** 听雨：常用 Claude 模型 ID */
+  /** 听雨：常用 Claude 模型 ID（涵盖原生直连 4.7 系列与 OpenRouter 中转） */
   const anthropicPresetModels = useMemo(
-    () => ["claude-3-5-sonnet-latest", "claude-3-5-haiku-latest", "claude-sonnet-4-20250514"],
+    () => [
+      "claude-4.7-haiku", "claude-4.7-sonnet", "claude-4.7-opus",
+      "anthropic/claude-4.7-sonnet", "anthropic/claude-4.7-opus"
+    ],
     [],
   );
 
   /** 燎原：豆包 Ark 常用（以控制台为准） */
-  const doubaoPresetModels = useMemo(() => ["doubao-seed-1.6", "doubao-seed-1.6-250615"], []);
+  // 提供给 UI 下拉框的一个示例占位符，但在批量测试时（下方的 presetModelIdsForProvider）会跳过它
+  const doubaoPresetModels = useMemo(() => ["ep-20260315234645-2h6jf"], []);
 
   /** Kimi：Moonshot 常用 */
   const kimiPresetModels = useMemo(
@@ -320,7 +338,7 @@ export function BackendModelConfigModal(props: {
       case "anthropic":
         return [...anthropicPresetModels];
       case "doubao":
-        return [...doubaoPresetModels];
+        return null;
       case "zhipu":
         return zhipuPresetModels.map((x) => x.id);
       case "kimi":
@@ -429,6 +447,14 @@ export function BackendModelConfigModal(props: {
                 <span className="backend-nav-sub muted small">{p.navSub}</span>
               </button>
             ))}
+            <button
+              type="button"
+              className={"backend-nav-item" + (nav === "qianlong" ? " active" : "")}
+              onClick={() => setNav("qianlong")}
+            >
+              <span className="backend-nav-title">潜龙</span>
+              <span className="backend-nav-sub muted small">本地 · Ollama / MLX</span>
+            </button>
           </aside>
 
           <main className="backend-main" aria-label="高级后端配置内容">
@@ -631,9 +657,9 @@ export function BackendModelConfigModal(props: {
               </section>
             ) : null}
 
-            {providers.some((p) => p.id === nav) ? (
+            {nav === "qianlong" || providers.some((p) => p.id === nav) ? (
               (() => {
-                const id = nav as AiProviderId;
+                const id: AiProviderId = nav === "qianlong" ? localProvider : (nav as AiProviderId);
                 const cfg = getProviderConfig(settings, id);
                 const s = testState[id];
                 const keyShown = showKey[id];
@@ -646,17 +672,52 @@ export function BackendModelConfigModal(props: {
                       : [cfg.model].filter(Boolean)
                     : id === "mlx"
                       ? [cfg.model].filter(Boolean)
-                      : presetModelIdsForProvider(id) ?? [cfg.model].filter(Boolean);
+                      : id === "anthropic" && shouldUseRouterProtocol(cfg)
+                        ? (cfg.model ?? "").trim()
+                          ? [(cfg.model ?? "").trim()]
+                          : []
+                        : presetModelIdsForProvider(id) ?? [cfg.model].filter(Boolean);
                 return (
                   <section className="backend-panel">
                     <div className="backend-panel-head">
                       <div>
-                        <h3 style={{ margin: 0 }}>{providers.find((p) => p.id === id)?.title ?? id}</h3>
-                        <div className="muted small" style={{ marginTop: 4 }}>
-                          {id === "ollama" || id === "mlx"
-                            ? "本机模型（默认不需要 API Key）"
-                            : "云端模型（需 API Key；可能遇到 CORS）"}
-                        </div>
+                        {nav === "qianlong" ? (
+                          <>
+                            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                              <h3 style={{ margin: 0 }}>
+                                {localProvider === "ollama" ? "Ollama（潜龙）" : "MLX（潜龙）"}
+                              </h3>
+                              <div role="group" aria-label="本地后端" style={{ display: "inline-flex", gap: 6 }}>
+                                <button
+                                  type="button"
+                                  className={"btn small" + (localProvider === "ollama" ? " primary" : "")}
+                                  onClick={() => setLocalProvider("ollama")}
+                                >
+                                  Ollama
+                                </button>
+                                <button
+                                  type="button"
+                                  className={"btn small" + (localProvider === "mlx" ? " primary" : "")}
+                                  onClick={() => setLocalProvider("mlx")}
+                                >
+                                  MLX
+                                </button>
+                              </div>
+                            </div>
+                            <div className="muted small" style={{ marginTop: 4 }}>
+                              本机模型（默认不需要 API Key）
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <h3 style={{ margin: 0 }}>{providers.find((p) => p.id === id)?.title ?? id}</h3>
+                            <div className="muted small" style={{ marginTop: 4 }}>
+                              {id === "ollama" || id === "mlx"
+                                ? "本机模型（默认不需要 API Key）"
+                                : "云端模型（需 API Key；可能遇到 CORS）"}
+                            </div>
+                          </>
+                        )}
                       </div>
                       <div className="backend-provider-actions">
                         <button
@@ -666,6 +727,19 @@ export function BackendModelConfigModal(props: {
                           onClick={() => {
                             if (!isGemini) {
                               const models = list;
+                              if (models.length === 0) {
+                                setTestState((prev) => ({
+                                  ...prev,
+                                  [id]: {
+                                    status: "err",
+                                    message:
+                                      id === "anthropic" && shouldUseRouterProtocol(cfg)
+                                        ? "中转模式请先在 Model 填写网关兼容的模型 ID，再一键测试"
+                                        : "没有可测试的模型",
+                                  },
+                                }));
+                                return;
+                              }
                               setModelBatch((m) => ({ ...m, [id]: { running: true, idx: 0, total: models.length } }));
                               setTestState((prev) => ({ ...prev, [id]: { status: "testing" } }));
                               void (async () => {
@@ -684,7 +758,11 @@ export function BackendModelConfigModal(props: {
                                     ) {
                                       await testOpenAICompatibleModel({ cfg: baseCfg, model });
                                     } else if (id === "anthropic") {
-                                      await testAnthropicModel({ cfg: baseCfg, model });
+                                      if (shouldUseRouterProtocol(baseCfg)) {
+                                        await testOpenAICompatibleModel({ cfg: baseCfg, model });
+                                      } else {
+                                        await testAnthropicModel({ cfg: baseCfg, model });
+                                      }
                                     } else {
                                       await testOllamaModel({ cfg: baseCfg, model });
                                     }
@@ -707,25 +785,53 @@ export function BackendModelConfigModal(props: {
                               return;
                             }
 
-                            // Gemini：一键测试预置版本
-                            setGeminiBatch({ running: true, idx: 0, total: geminiPresetModels.length });
-                            setTestState((prev) => ({ ...prev, gemini: { status: "testing" } }));
-                            void (async () => {
+                            // Gemini：原生走预置版本；中转仅测当前 Model（网关 model id 与原生 id 不同）
+                            void (() => {
                               const baseCfg = getProviderConfig(settings, "gemini");
-                              for (let i = 0; i < geminiPresetModels.length; i++) {
-                                const m = geminiPresetModels[i]!;
-                                setGeminiBatch({ running: true, idx: i + 1, total: geminiPresetModels.length });
-                                try {
-                                  await testGeminiModel({ cfg: baseCfg, modelOverride: m });
-                                  setGeminiHealth((h) => ({ ...h, [m]: { verdict: "ok", testedAt: Date.now() } }));
-                                } catch {
-                                  setGeminiHealth((h) => ({ ...h, [m]: { verdict: "err", testedAt: Date.now() } }));
-                                } finally {
-                                  setGeminiHealthDirty(true);
-                                }
+                              const geminiBatchModels = shouldUseRouterProtocol(baseCfg)
+                                ? (baseCfg.model ?? "").trim()
+                                  ? [(baseCfg.model ?? "").trim()]
+                                  : []
+                                : [...geminiPresetModels];
+                              if (geminiBatchModels.length === 0) {
+                                setTestState((prev) => ({
+                                  ...prev,
+                                  gemini: {
+                                    status: "err",
+                                    message: "中转模式请先在 Model 填写网关兼容的模型 ID（如 google/gemini-2.0-flash-001），再一键测试",
+                                  },
+                                }));
+                                return;
                               }
-                              setGeminiBatch({ running: false, idx: 0, total: 0 });
-                              setTestState((prev) => ({ ...prev, gemini: { status: "ok", message: "批量测试完成" } }));
+                              setGeminiBatch({ running: true, idx: 0, total: geminiBatchModels.length });
+                              setTestState((prev) => ({ ...prev, gemini: { status: "testing" } }));
+                              void (async () => {
+                                for (let i = 0; i < geminiBatchModels.length; i++) {
+                                  const m = geminiBatchModels[i]!;
+                                  setGeminiBatch({
+                                    running: true,
+                                    idx: i + 1,
+                                    total: geminiBatchModels.length,
+                                  });
+                                  try {
+                                    if (shouldUseRouterProtocol(baseCfg)) {
+                                      await testOpenAICompatibleModel({ cfg: baseCfg, model: m });
+                                    } else {
+                                      await testGeminiModel({ cfg: baseCfg, modelOverride: m });
+                                    }
+                                    setGeminiHealth((h) => ({ ...h, [m]: { verdict: "ok", testedAt: Date.now() } }));
+                                  } catch {
+                                    setGeminiHealth((h) => ({ ...h, [m]: { verdict: "err", testedAt: Date.now() } }));
+                                  } finally {
+                                    setGeminiHealthDirty(true);
+                                  }
+                                }
+                                setGeminiBatch({ running: false, idx: 0, total: 0 });
+                                setTestState((prev) => ({
+                                  ...prev,
+                                  gemini: { status: "ok", message: "批量测试完成" },
+                                }));
+                              })();
                             })();
                           }}
                         >
@@ -774,6 +880,88 @@ export function BackendModelConfigModal(props: {
                           }
                         />
                       </label>
+
+                      {id === "gemini" || id === "anthropic" ? (
+                        <div className="backend-field">
+                          <div className="backend-label muted small">接入方式</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                            <button
+                              type="button"
+                              className={"btn small" + (!shouldUseRouterProtocol(cfg) ? " primary" : "")}
+                              onClick={() => onChange(patchProviderConfig(settings, id, { 
+                                transport: "native",
+                                baseUrl: id === "anthropic" ? "https://api.anthropic.com" : "https://generativelanguage.googleapis.com"
+                              }))}
+                            >
+                              原生（官方 API）
+                            </button>
+                            <button
+                              type="button"
+                              className={"btn small" + (shouldUseRouterProtocol(cfg) ? " primary" : "")}
+                              onClick={() => onChange(patchProviderConfig(settings, id, { 
+                                transport: "router",
+                                baseUrl: "https://openrouter.ai/api/v1"
+                              }))}
+                            >
+                              中转（OpenAI 兼容）
+                            </button>
+                            <button
+                              type="button"
+                              className="btn small ghost"
+                              onClick={() =>
+                                onChange(patchProviderConfig(settings, id, { transport: undefined }))
+                              }
+                              title="清除显式选择后，仍可按 Base URL 是否含 openrouter.ai 自动判断"
+                            >
+                              按 Base URL 自动
+                            </button>
+                          </div>
+                          <p className="muted small" style={{ marginTop: 6, marginBottom: 0, lineHeight: 1.55 }}>
+                            {id === "gemini" ? (
+                              <>
+                                <strong>原生</strong>：请求走 Google{" "}
+                                <code style={{ fontSize: "0.85em" }}>generateContent</code>
+                                （当前 Base 一般为 generativelanguage）。
+                                <strong> 中转</strong>：同一密钥下走网关的{" "}
+                                <code style={{ fontSize: "0.85em" }}>/v1/chat/completions</code>
+                                （如 OpenRouter），模型名常为 <code style={{ fontSize: "0.85em" }}>google/…</code> 形式。
+                              </>
+                            ) : (
+                              <>
+                                <strong>原生</strong>：走 Anthropic{" "}
+                                <code style={{ fontSize: "0.85em" }}>/v1/messages</code>。
+                                <strong> 中转</strong>：走网关的{" "}
+                                <code style={{ fontSize: "0.85em" }}>/v1/chat/completions</code>
+                                ，模型名常为 <code style={{ fontSize: "0.85em" }}>anthropic/…</code> 前缀。
+                              </>
+                            )}
+                          </p>
+                        </div>
+                      ) : null}
+
+                      {id === "gemini" || id === "anthropic" ? (
+                        <label className="backend-field">
+                          <div className="backend-label muted small">原生 API Base（可选）</div>
+                          <input
+                            value={cfg.baseUrlNative ?? ""}
+                            onChange={(e) =>
+                              onChange(
+                                patchProviderConfig(settings, id, {
+                                  baseUrlNative: e.target.value.trim() || undefined,
+                                }),
+                              )
+                            }
+                            placeholder={
+                              id === "gemini"
+                                ? "例如：https://generativelanguage.googleapis.com"
+                                : "例如：https://api.anthropic.com"
+                            }
+                          />
+                          <p className="muted small" style={{ marginTop: 6, marginBottom: 0, lineHeight: 1.55 }}>
+                            直连官方协议时优先用此地址；未填时，若上方 Base URL 不是网关域名，则退回上方；否则用官方默认。
+                          </p>
+                        </label>
+                      ) : null}
 
                       <label className="backend-field">
                         <div className="backend-label muted small">API Key</div>
@@ -827,7 +1015,17 @@ export function BackendModelConfigModal(props: {
                                   setTestState((prev) => ({ ...prev, gemini: { status: "testing" } }));
                                   void (async () => {
                                     try {
-                                      const msg = await testGeminiModel({ cfg: getProviderConfig(settings, "gemini") });
+                                      const gCfg = getProviderConfig(settings, "gemini");
+                                      let msg: string;
+                                      if (shouldUseRouterProtocol(gCfg)) {
+                                        await testOpenAICompatibleModel({
+                                          cfg: gCfg,
+                                          model: gCfg.model.trim() || geminiPresetModels[0]!,
+                                        });
+                                        msg = "连接成功（OpenAI 兼容路径）";
+                                      } else {
+                                        msg = await testGeminiModel({ cfg: gCfg });
+                                      }
                                       setTestState((prev) => ({ ...prev, gemini: { status: "ok", message: msg } }));
                                       setGeminiHealth((h) => ({
                                         ...h,
@@ -1335,6 +1533,19 @@ export function BackendModelConfigModal(props: {
                             const inPreset = cloudPresets.includes(cfg.model);
                             return (
                               <div style={{ display: "grid", gap: 8 }}>
+                                {id === "doubao" ? (
+                                  <label className="backend-field" style={{ margin: 0 }}>
+                                    <div className="backend-label muted small">界面显示名（可选）</div>
+                                    <input
+                                      value={cfg.modelDisplayName ?? ""}
+                                      onChange={(e) => {
+                                        const v = e.target.value.trim();
+                                        onChange(patchProviderConfig(settings, id, { modelDisplayName: v || undefined }));
+                                      }}
+                                      placeholder="仅 UI 展示；请求仍用下方 Model（如 ep-…）"
+                                    />
+                                  </label>
+                                ) : null}
                                 <select
                                   value={cfg.model}
                                   onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}
@@ -1356,14 +1567,16 @@ export function BackendModelConfigModal(props: {
                                       void (async () => {
                                         const model = cfg.model.trim() || cloudPresets[0]!;
                                         try {
+                                          const cloudCfg = getProviderConfig(settings, id);
                                           if (id === "anthropic") {
-                                            await testAnthropicModel({
-                                              cfg: getProviderConfig(settings, id),
-                                              model,
-                                            });
+                                            if (shouldUseRouterProtocol(cloudCfg)) {
+                                              await testOpenAICompatibleModel({ cfg: cloudCfg, model });
+                                            } else {
+                                              await testAnthropicModel({ cfg: cloudCfg, model });
+                                            }
                                           } else {
                                             await testOpenAICompatibleModel({
-                                              cfg: getProviderConfig(settings, id),
+                                              cfg: cloudCfg,
                                               model,
                                             });
                                           }

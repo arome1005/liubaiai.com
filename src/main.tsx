@@ -59,6 +59,10 @@ async function boot() {
         "[留白写作 dev] 已加载最新壳层：顶栏无「更多」；新建作品弹窗应含作品简介/状态/chip（DOM: [data-shell=liubai-v2] / [data-work-form=v2]）",
       );
     }
+    if (import.meta.env.VITE_E2E === "1") {
+      const { registerPlaywrightE2eHooks } = await import("./e2e/playwright-hooks");
+      registerPlaywrightE2eHooks();
+    }
     reactRoot.render(
       <StrictMode>
         <BrowserRouter>

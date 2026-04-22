@@ -383,7 +383,25 @@ export class WritingStoreSupabase implements WritingStore {
     const sb = getSupabase();
     const { data, error } = await sb
       .from("chapter")
-      .select("*")
+      .select(
+        [
+          "id",
+          "work_id",
+          "volume_id",
+          "title",
+          "content",
+          "summary",
+          "summary_updated_at",
+          "summary_scope_from",
+          "summary_scope_to",
+          "outline_draft",
+          "outline_node_id",
+          "outline_pushed_at",
+          "order",
+          "updated_at",
+          "word_count_cache",
+        ].join(","),
+      )
       .eq("work_id", workId)
       .order("order", { ascending: true })
       .limit(100_000);
@@ -404,7 +422,7 @@ export class WritingStoreSupabase implements WritingStore {
       id,
       workId,
       volumeId: vid,
-      title: title?.trim() || `第 ${existing.length + 1} 章`,
+      title: title?.trim() || `第 ${maxOrder + 2} 章`,
       content: "",
       summary: "",
       order: maxOrder + 1,
@@ -1727,7 +1745,7 @@ export class WritingStoreSupabase implements WritingStore {
       type: input.type,
       tags: input.tags ?? [],
       body: input.body ?? "",
-      status: input.status ?? "draft",
+      status: input.status ?? "approved",
       sortOrder,
       createdAt: t,
       updatedAt: t,

@@ -91,7 +91,10 @@ import {
   DialogTitle,
 } from "../components/ui/dialog"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
-import { AIModelSelector, AI_MODELS } from "../components/ai-model-selector"
+import { AI_MODELS } from "../components/ai-model-selector"
+import { UnifiedAIModelSelector as AIModelSelector } from "../components/ai-model-selector-unified"
+import { loadAiSettings, saveAiSettings } from "../ai/storage"
+import { aiModelIdToProvider, aiProviderToModelId } from "../util/ai-ui-model-map"
 
 // 类型定义
 interface Message {
@@ -261,7 +264,7 @@ export function ShengHuiModule() {
   const [inputValue, setInputValue] = useState("")
   const [isContextExpanded, setIsContextExpanded] = useState(true)
   const [isPanelOpen, setIsPanelOpen] = useState(true)
-  const [selectedModelId, setSelectedModelId] = useState("tingyu")
+  const [selectedModelId, setSelectedModelId] = useState(() => aiProviderToModelId(loadAiSettings().provider))
   const [showModelSelector, setShowModelSelector] = useState(false)
   const selectedModel = AI_MODELS.find(m => m.id === selectedModelId) || AI_MODELS[0]
   const [temperature, setTemperature] = useState([0.7])
@@ -676,7 +679,12 @@ export function ShengHuiModule() {
                   open={showModelSelector}
                   onOpenChange={setShowModelSelector}
                   selectedModelId={selectedModelId}
-                  onSelectModel={setSelectedModelId}
+                  onSelectModel={(modelId) => {
+                    const provider = aiModelIdToProvider(modelId)
+                    const s = loadAiSettings()
+                    saveAiSettings({ ...s, provider })
+                    setSelectedModelId(modelId)
+                  }}
                   title="选择模型"
                 />
               </div>

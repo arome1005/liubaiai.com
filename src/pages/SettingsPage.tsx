@@ -32,7 +32,7 @@ import {
 } from "../ai/sidepanel-session-tokens";
 import { listRecentDailyApproxTokens, readTodayApproxTokens, resetTodayApproxTokens } from "../ai/daily-approx-tokens";
 import { loadAiSettings, saveAiSettings } from "../ai/storage";
-import type { AiSettings } from "../ai/types";
+import type { AiProviderConfig, AiSettings } from "../ai/types";
 import { BackendModelConfigModal } from "../components/BackendModelConfigModal";
 import { persistThemePreference, readThemePreference, type ThemePreference } from "../theme";
 import {
@@ -936,6 +936,7 @@ export function SettingsPage() {
           `http://localhost:11434` 通常可用。
         </p>
 
+        {/* ── Token 用量统计卡片 ── */}
         <div className="settings-ai-usage" role="region" aria-label="AI 粗估用量">
           <h3 className="settings-ai-usage-title">AI · 粗估 token（本地）</h3>
           <p className="muted small" style={{ marginTop: 4 }}>
@@ -943,128 +944,178 @@ export function SettingsPage() {
             <strong>不会上传</strong>。详见
             <Link to="/privacy">隐私政策</Link> 中云端 AI 与提示词相关说明。
           </p>
-          <ul className="settings-ai-usage-list muted small" style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem" }}>
-            <li>
-              本会话（当前标签页）：约{" "}
-              <strong>{sessionApproxDisplay.toLocaleString()}</strong> tokens
-            </li>
-            <li>
-              今日累计（本机）：约 <strong>{todayApproxDisplay.toLocaleString()}</strong> tokens
-            </li>
-            <li>
-              本机累计（此浏览器）：约{" "}
-              <strong>{lifetimeApproxDisplay.toLocaleString()}</strong> tokens
-            </li>
-          </ul>
+          <div className="ai-stat-cards">
+            <div className="ai-stat-card">
+              <span className="ai-stat-card__label">本会话（当前标签页）</span>
+              <span className="ai-stat-card__value">{sessionApproxDisplay.toLocaleString()}</span>
+              <span className="ai-stat-card__unit">tokens</span>
+              <button
+                type="button"
+                className="ai-stat-card__clear-btn"
+                onClick={() => {
+                  resetSessionApproxTokens();
+                  setSidepanelUsageTick((n) => n + 1);
+                }}
+              >
+                清零
+              </button>
+            </div>
+            <div className="ai-stat-card ai-stat-card--highlight">
+              <span className="ai-stat-card__label">今日累计（本机）</span>
+              <span className="ai-stat-card__value">{todayApproxDisplay.toLocaleString()}</span>
+              <span className="ai-stat-card__unit">tokens</span>
+              <button
+                type="button"
+                className="ai-stat-card__clear-btn"
+                onClick={() => {
+                  resetTodayApproxTokens();
+                  setSidepanelUsageTick((n) => n + 1);
+                }}
+              >
+                清零
+              </button>
+            </div>
+            <div className="ai-stat-card">
+              <span className="ai-stat-card__label">本机累计（此浏览器）</span>
+              <span className="ai-stat-card__value">{lifetimeApproxDisplay.toLocaleString()}</span>
+              <span className="ai-stat-card__unit">tokens</span>
+              <button
+                type="button"
+                className="ai-stat-card__clear-btn"
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      "将清零「本机累计」粗估 tokens（仅本机显示，不影响作品数据）。确定？",
+                    )
+                  ) {
+                    return;
+                  }
+                  resetLifetimeApproxTokens();
+                  setSidepanelUsageTick((n) => n + 1);
+                }}
+              >
+                清零
+              </button>
+            </div>
+          </div>
           <p className="muted small" style={{ marginTop: 6, fontSize: "0.72rem" }}>
             刷新：切换回页签或等待数秒。关闭标签页后「本会话」清零；「本机累计」保留直至清除站点数据或手动清零。
           </p>
-          <div className="row gap" style={{ marginTop: 10, flexWrap: "wrap" }}>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                resetSessionApproxTokens();
-                setSidepanelUsageTick((n) => n + 1);
-              }}
-            >
-              清零本会话累计
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                resetTodayApproxTokens();
-                setSidepanelUsageTick((n) => n + 1);
-              }}
-            >
-              清零今日累计
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                if (
-                  !window.confirm(
-                    "将清零「本机累计」粗估 tokens（仅本机显示，不影响作品数据）。确定？",
-                  )
-                ) {
-                  return;
-                }
-                resetLifetimeApproxTokens();
-                setSidepanelUsageTick((n) => n + 1);
-              }}
-            >
-              清零本机累计
-            </Button>
-          </div>
         </div>
 
-        <div className="row gap" style={{ marginTop: 8 }}>
-          <Button type="button" variant="outline" onClick={() => setBackendOpen(true)}>
-            后端模型配置
-          </Button>
-        </div>
+        {/* ── 后端模型配置行 ── */}
+        {(() => {
+          const pCfg = (aiSettings as Record<string, AiProviderConfig>)[aiSettings.provider];
+          const pLabel = pCfg?.label ?? aiSettings.provider;
+          const pModel = pCfg?.model?.trim();
+          return (
+            <div className="ai-backend-row">
+              <div className="ai-backend-row__info">
+                <span className="ai-backend-row__name">当前模型</span>
+                <span className="ai-backend-row__model">
+                  {pLabel}{pModel ? ` · ${pModel}` : " · 未配置"}
+                </span>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={() => setBackendOpen(true)}>
+                后端模型配置
+              </Button>
+            </div>
+          );
+        })()}
 
-        {/* P1-04：成本预算 */}
+        {/* ── 成本预算 ── */}
         <div className="settings-ai-usage" role="region" aria-label="成本预算" style={{ marginTop: 14 }}>
           <h3 className="settings-ai-usage-title">成本预算 · 门控阈值</h3>
           <p className="muted small" style={{ marginTop: 4 }}>
             以粗估 token 数为单位设置预警阈值。超出后在写作侧栏弹出确认弹窗（可强行继续，非硬性拦截）。数值仅本机记录，不上传。
           </p>
 
-          <label className="settings-label" style={{ display: "block", marginTop: 12 }}>
-            <span className="small" style={{ display: "block", marginBottom: 4 }}>
-              日预算（tokens）<span className="muted small" style={{ marginLeft: 6 }}>0 = 不限制</span>
+          {/* 日预算 */}
+          <div className="ai-budget-field" style={{ marginTop: 12 }}>
+            <span className="small ai-budget-field__label">
+              日预算<span className="muted small" style={{ marginLeft: 6 }}>0 = 不限制</span>
             </span>
-            <input
-              type="number"
-              className="input"
-              min={0}
-              max={10_000_000}
-              step={10_000}
-              value={aiSettings.dailyTokenBudget}
-              style={{ width: 160 }}
-              onChange={(e) => {
-                const v = Math.max(0, Math.min(10_000_000, Math.floor(Number(e.target.value) || 0)));
-                const next = { ...aiSettings, dailyTokenBudget: v };
-                setAiSettings(next);
-                try { saveAiSettings(next); setMsg("已保存 AI 设置。"); } catch { setMsg("保存失败。"); }
-              }}
-            />
-          </label>
+            <div className="ai-budget-input-group">
+              <input
+                type="number"
+                className="input ai-budget-input"
+                min={0}
+                max={10_000_000}
+                step={10_000}
+                value={aiSettings.dailyTokenBudget}
+                onChange={(e) => {
+                  const v = Math.max(0, Math.min(10_000_000, Math.floor(Number(e.target.value) || 0)));
+                  const next = { ...aiSettings, dailyTokenBudget: v };
+                  setAiSettings(next);
+                  try { saveAiSettings(next); setMsg("已保存 AI 设置。"); } catch { setMsg("保存失败。"); }
+                }}
+              />
+              <span className="ai-budget-input-suffix">tokens</span>
+            </div>
+            <div className="ai-budget-presets">
+              {([0, 50_000, 100_000, 500_000] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  className={cn("ai-budget-preset", aiSettings.dailyTokenBudget === v && "ai-budget-preset--active")}
+                  onClick={() => {
+                    const next = { ...aiSettings, dailyTokenBudget: v };
+                    setAiSettings(next);
+                    try { saveAiSettings(next); setMsg("已保存 AI 设置。"); } catch { setMsg("保存失败。"); }
+                  }}
+                >
+                  {v === 0 ? "不限制" : v >= 10_000 ? `${v / 10_000}万` : String(v)}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          <label className="settings-label" style={{ display: "block", marginTop: 10 }}>
-            <span className="small" style={{ display: "block", marginBottom: 4 }}>
-              单次调用预警（tokens）<span className="muted small" style={{ marginLeft: 6 }}>0 = 不预警</span>
+          {/* 单次调用预警 */}
+          <div className="ai-budget-field" style={{ marginTop: 10 }}>
+            <span className="small ai-budget-field__label">
+              单次调用预警<span className="muted small" style={{ marginLeft: 6 }}>0 = 不预警</span>
             </span>
-            <input
-              type="number"
-              className="input"
-              min={0}
-              max={500_000}
-              step={1_000}
-              value={aiSettings.singleCallWarnTokens}
-              style={{ width: 160 }}
-              onChange={(e) => {
-                const v = Math.max(0, Math.min(500_000, Math.floor(Number(e.target.value) || 0)));
-                const next = { ...aiSettings, singleCallWarnTokens: v };
-                setAiSettings(next);
-                try { saveAiSettings(next); setMsg("已保存 AI 设置。"); } catch { setMsg("保存失败。"); }
-              }}
-            />
-          </label>
+            <div className="ai-budget-input-group">
+              <input
+                type="number"
+                className="input ai-budget-input"
+                min={0}
+                max={500_000}
+                step={1_000}
+                value={aiSettings.singleCallWarnTokens}
+                onChange={(e) => {
+                  const v = Math.max(0, Math.min(500_000, Math.floor(Number(e.target.value) || 0)));
+                  const next = { ...aiSettings, singleCallWarnTokens: v };
+                  setAiSettings(next);
+                  try { saveAiSettings(next); setMsg("已保存 AI 设置。"); } catch { setMsg("保存失败。"); }
+                }}
+              />
+              <span className="ai-budget-input-suffix">tokens</span>
+            </div>
+            <div className="ai-budget-presets">
+              {([0, 5_000, 20_000, 100_000] as const).map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  className={cn("ai-budget-preset", aiSettings.singleCallWarnTokens === v && "ai-budget-preset--active")}
+                  onClick={() => {
+                    const next = { ...aiSettings, singleCallWarnTokens: v };
+                    setAiSettings(next);
+                    try { saveAiSettings(next); setMsg("已保存 AI 设置。"); } catch { setMsg("保存失败。"); }
+                  }}
+                >
+                  {v === 0 ? "不预警" : v >= 10_000 ? `${v / 10_000}万` : `${v / 1_000}k`}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <p className="muted small" style={{ marginTop: 8, fontSize: "0.74rem" }}>
-            写作侧栏底部始终显示「今日已用 N tokens」，方便实时感知消耗。
-            粗估仅供参考，非厂商计费凭证。
+            写作侧栏底部始终显示「今日已用 N tokens」，方便实时感知消耗。粗估仅供参考，非厂商计费凭证。
           </p>
         </div>
 
-        {/* P2-1：预算预警 + 趋势统计（轻量可视化） */}
+        {/* ── 预算与趋势 ── */}
         <div className="settings-ai-usage" role="region" aria-label="预算与趋势" style={{ marginTop: 14 }}>
           <h3 className="settings-ai-usage-title">预算与趋势（最近 7 天）</h3>
           <p className="muted small" style={{ marginTop: 4 }}>
@@ -1111,43 +1162,59 @@ export function SettingsPage() {
             <div className="muted small" style={{ marginBottom: 6 }}>
               最近 7 天（日累计）
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, alignItems: "end" }}>
-              {recentDailyApprox.map((d) => {
-                const h = Math.max(2, Math.round((d.tokens / recentDailyMax) * 52));
-                const isToday = d.date === recentDailyApprox[recentDailyApprox.length - 1]!.date;
-                return (
-                  <div key={d.date} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <div
-                      title={`${d.date}：${d.tokens.toLocaleString()} tokens`}
-                      style={{
-                        height: 56,
-                        borderRadius: 8,
-                        border: "1px solid color-mix(in oklab, var(--border) 70%, transparent)",
-                        background: "color-mix(in oklab, var(--card) 55%, transparent)",
-                        display: "flex",
-                        alignItems: "flex-end",
-                        overflow: "hidden",
-                      }}
-                    >
+            <div style={{ position: "relative" }}>
+              {dailyBudget > 0 && recentDailyMax > 0 && (
+                <div
+                  className="ai-bar-budget-line"
+                  style={{
+                    bottom: `calc(1.4rem + ${Math.min(52, Math.round((dailyBudget / recentDailyMax) * 52))}px)`,
+                  }}
+                />
+              )}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8, alignItems: "end" }}>
+                {recentDailyApprox.map((d) => {
+                  const h = Math.max(2, Math.round((d.tokens / recentDailyMax) * 52));
+                  const isToday = d.date === recentDailyApprox[recentDailyApprox.length - 1]!.date;
+                  const isOver = dailyBudget > 0 && d.tokens > dailyBudget;
+                  return (
+                    <div key={d.date} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
                       <div
+                        title={`${d.date}：${d.tokens.toLocaleString()} tokens`}
                         style={{
-                          height: h,
-                          width: "100%",
-                          background: isToday ? "var(--primary)" : "color-mix(in oklab, var(--muted-foreground) 22%, transparent)",
-                          opacity: isToday ? 0.9 : 0.8,
+                          height: 56,
+                          borderRadius: 8,
+                          border: "1px solid color-mix(in oklab, var(--border) 70%, transparent)",
+                          background: "color-mix(in oklab, var(--card) 55%, transparent)",
+                          display: "flex",
+                          alignItems: "flex-end",
+                          overflow: "hidden",
                         }}
-                      />
+                      >
+                        <div
+                          style={{
+                            height: h,
+                            width: "100%",
+                            background: isOver
+                              ? "var(--destructive)"
+                              : isToday
+                              ? "var(--primary)"
+                              : "color-mix(in oklab, var(--muted-foreground) 22%, transparent)",
+                            opacity: isToday || isOver ? 0.9 : 0.8,
+                          }}
+                        />
+                      </div>
+                      <div className="muted small" style={{ fontSize: "0.68rem", textAlign: "center" }}>
+                        {d.date.slice(5)}
+                      </div>
                     </div>
-                    <div className="muted small" style={{ fontSize: "0.68rem", textAlign: "center" }}>
-                      {d.date.slice(5)}
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
           </div>
         </div>
 
+        {/* ── 高危操作始终确认 ── */}
         <div className="settings-ai-usage" role="region" aria-label="高危操作始终确认" style={{ marginTop: 14 }}>
           <h3 className="settings-ai-usage-title">高危操作 · 始终确认（步 48）</h3>
           <p className="muted small" style={{ marginTop: 4 }}>
