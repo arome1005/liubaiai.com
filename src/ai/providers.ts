@@ -1,3 +1,4 @@
+import { apiUrl } from "../api/base";
 import type { AiChatMessage, AiGenerateResult, AiProviderConfig, AiProviderId } from "./types";
 import {
   anthropicMessageTextFromJson,
@@ -69,14 +70,45 @@ function xiaomiBaseUrlForRequest(stored: string): string {
   return "https://api.mimo-v2.com/v1";
 }
 
+const DOUBAO_ARK_DEFAULT = "https://ark.cn-beijing.volces.com/api/v3";
+
+/** 豆包/火山 Ark：与小米类似，官方域名常不返回可跨域的 CORS；经同源 /__proxy 或 /api 转发。 */
+function isDoubaoVolcesArkBaseUrlForProxy(u: string): boolean {
+  const s = u.trim();
+  if (!s) return true;
+  try {
+    const x = new URL(s);
+    return /^ark\.[a-z0-9.-]+\.volces\.com$/i.test(x.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function doubaoBaseUrlForRequest(stored: string): string {
+  const t = (stored || "").trim() || DOUBAO_ARK_DEFAULT;
+  if (typeof window === "undefined") return t;
+  if (!isDoubaoVolcesArkBaseUrlForProxy(t)) return t;
+  const path = new URL(t).pathname.replace(/\/+$/, "") || "/api/v3";
+  if (import.meta.env.DEV) {
+    return `${window.location.origin}/__proxy/doubao-ark${path}`;
+  }
+  return apiUrl(`/api/proxy/doubao-ark${path}`);
+}
+
 async function fetchOrThrowCorsHint(label: string, url: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch (e) {
     if (e instanceof TypeError) {
-      throw new Error(
-        `${label} 网络请求失败（${e.message}）。纯前端跨域常被浏览器拦截；请本地使用 npm run dev（已对小米启用同源代理），线上部署需后端转发 API。`,
-      );
+      const isDoubao =
+        label.includes("豆包") ||
+        label.includes("燎原") ||
+        url.includes("doubao-ark") ||
+        (url.includes("volces.com") && url.includes("/api/"));
+      const hint = isDoubao
+        ? `${label} 网络请求失败（${e.message}）。豆包/火山 API 在浏览器中常被 CORS 拦截。本地请用 npm run dev（已走 Vite 代理）；生产请把 Nginx/网关将 /api 反代到本项目的 backend 服务，使 /api/proxy/doubao-ark 可访问。若 Base URL 改为 OpenRouter 等非火山域名，则按该域名的 CORS/访问规则。`
+        : `${label} 网络请求失败（${e.message}）。纯前端跨域常被浏览器拦截；请本地使用 npm run dev（已对小米/豆包等启用同源代理），线上需后端转发 /api 代理（含豆包 Volc 转发）后再由浏览器只访问同源。`;
+      throw new Error(hint);
     }
     throw e;
   }
@@ -91,6 +123,9 @@ export function resolveOpenAiCompatibleBaseUrl(cfg: AiProviderConfig): string {
   if (cfg.id === "mlx") {
     if (t) return t;
     return "http://127.0.0.1:8080/v1";
+  }
+  if (cfg.id === "doubao") {
+    return doubaoBaseUrlForRequest(t);
   }
   if (t) return t;
   if (cfg.id === "openai") return "https://api.openai.com/v1";

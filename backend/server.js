@@ -1,5 +1,6 @@
 import "./load-env.js";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import Fastify from "fastify";
 import cors from "@fastify/cors";
@@ -178,6 +179,57 @@ export async function buildServer() {
   });
 
   app.get("/api/health", async () => ({ ok: true }));
+
+  // ===== 豆包 / 火山 Ark 转发：浏览器无法直连（无 CORS）时，经本站 fetch 再回传；与前端 /api/proxy/doubao-ark 对应 =====
+  const DOUBAO_VOLC_ARK = "https://ark.cn-beijing.volces.com";
+  async function proxyDoubaoArkToVolc(req, reply) {
+    const u = new URL(req.raw.url, "http://127.0.0.1");
+    const sub = u.pathname.replace(/^\/api\/proxy\/doubao-ark/, "") || "/";
+    if (!sub.startsWith("/api/")) {
+      return reply.code(400).send({ error: "BAD_PROXY_PATH" });
+    }
+    const target = `${DOUBAO_VOLC_ARK}${sub}${u.search}`;
+    const method = req.method;
+    const headers = {
+      authorization: req.headers.authorization ?? "",
+    };
+    const ct = req.headers["content-type"];
+    if (ct) headers["content-type"] = ct;
+    const init = { method, headers };
+    if (method !== "GET" && method !== "HEAD" && method !== "OPTIONS") {
+      init.body = JSON.stringify(req.body ?? {});
+    }
+    let r;
+    try {
+      r = await fetch(target, init);
+    } catch (e) {
+      req.log.error(e, "doubao ark proxy fetch failed");
+      return reply.code(502).send({ error: "UPSTREAM_FETCH_FAILED", message: String(e?.message ?? e) });
+    }
+    reply.status(r.status);
+    const outCt = r.headers.get("content-type");
+    if (outCt) reply.header("content-type", outCt);
+    const cc = r.headers.get("cache-control");
+    if (cc) reply.header("cache-control", cc);
+    if (!r.body) return reply.send();
+    try {
+      return reply.send(Readable.fromWeb(r.body));
+    } catch (e) {
+      req.log.warn(e, "doubao ark proxy fromWeb; buffering");
+      const buf = await r.arrayBuffer();
+      return reply.send(Buffer.from(buf));
+    }
+  }
+  app.post(
+    "/api/proxy/doubao-ark/api/v3/chat/completions",
+    { bodyLimit: 32 * 1024 * 1024 },
+    proxyDoubaoArkToVolc,
+  );
+  app.post(
+    "/api/proxy/doubao-ark/api/v3/embeddings",
+    { bodyLimit: 8 * 1024 * 1024 },
+    proxyDoubaoArkToVolc,
+  );
 
   // ===== URL 预览（流光书签）=====
   // 目标：不依赖浏览器 CORS，后端抓取 meta 信息；带简易缓存与超时，避免被滥用

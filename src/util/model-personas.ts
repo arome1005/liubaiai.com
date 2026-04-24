@@ -330,9 +330,10 @@ export function listModelPersonas(provider: AiProviderId): ModelPersona[] {
   // 本地模型不做推荐档位（与现有 UI 逻辑保持一致）
   if (provider === "ollama" || provider === "mlx") return base;
 
-  // 用 base 的文案作为“档位名”，超出则用通用命名。
+  // 必须按 modelId 匹配人设：禁止用下标与「当前设置里的 model 顺序」拉链，否则会出现
+  // 「当前选中 pro 却显示 初见 卡面」的错配。
   return modelIds.map((modelId, i) => {
-    const b = base[i];
+    const b = base.find((p) => p.modelId === modelId);
     if (b) return { ...b, modelId };
     return {
       provider,
@@ -344,5 +345,15 @@ export function listModelPersonas(provider: AiProviderId): ModelPersona[] {
       costStars: 3,
     } satisfies ModelPersona;
   });
+}
+
+/**
+ * 按 `PERSONAS` 表内顺序，筛选出在 `catalogModelIds` 中声明的预置卡（用于高级后端配置「推荐模型」等，
+ * 与当前选中的 default model 无关，避免顺序/数量随设置变化）。
+ */
+export function listCatalogPersonas(provider: AiProviderId, catalogModelIds: readonly string[]): ModelPersona[] {
+  const allow = new Set(catalogModelIds);
+  const base = PERSONAS[provider] ?? [];
+  return base.filter((p) => allow.has(p.modelId));
 }
 

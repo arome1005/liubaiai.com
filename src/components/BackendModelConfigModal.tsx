@@ -9,7 +9,7 @@ import {
   resolveGeminiNativeApiBaseUrl,
   shouldUseRouterProtocol,
 } from "../ai/providers";
-import { listModelPersonas } from "../util/model-personas";
+import { listCatalogPersonas } from "../util/model-personas";
 import { geminiGenerateTextFromJson, messageFromApiJsonBody } from "../util/parse-api-json";
 
 type ProviderTestState =
@@ -285,8 +285,9 @@ export function BackendModelConfigModal(props: {
     ] satisfies Array<{ id: Exclude<AiProviderId, "ollama" | "mlx">; label: string; navSub: string; title: string }>;
   }, []);
 
+  /** 顺序与 `model-personas` 中观云档位一致：初见（轻）→ 入微 → 化境（强） */
   const geminiPresetModels = useMemo(
-    () => ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview"],
+    () => ["gemini-3.1-flash-lite-preview", "gemini-3-flash-preview", "gemini-3.1-pro-preview"],
     [],
   );
 
@@ -1064,9 +1065,7 @@ export function BackendModelConfigModal(props: {
                                 推荐模型（卡面仅用于快捷填入真实 modelId）
                               </div>
                               <div className="model-persona-grid">
-                                {listModelPersonas(id)
-                                  .filter((p) => geminiPresetModels.includes(p.modelId))
-                                  .map((p) => (
+                                {listCatalogPersonas(id, geminiPresetModels).map((p) => (
                                     <button
                                       key={p.modelId}
                                       type="button"
@@ -1621,9 +1620,7 @@ export function BackendModelConfigModal(props: {
                                     推荐模型
                                   </div>
                                   <div className="model-persona-grid">
-                                    {listModelPersonas(id)
-                                      .filter((p) => cloudPresets.includes(p.modelId))
-                                      .map((p) => (
+                                    {listCatalogPersonas(id, cloudPresets).map((p) => (
                                         <button
                                           key={p.modelId}
                                           type="button"

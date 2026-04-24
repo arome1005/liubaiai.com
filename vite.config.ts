@@ -20,6 +20,16 @@ const mimoProxy = {
   },
 } as const
 
+/** 豆包/火山 Ark：与小米类似，浏览器直连常无 CORS，开发时走同源再转发到 volces */
+const doubaoArkProxy = {
+  '/__proxy/doubao-ark': {
+    target: 'https://ark.cn-beijing.volces.com',
+    changeOrigin: true,
+    secure: true,
+    rewrite: (path: string) => path.replace(/^\/__proxy\/doubao-ark/, ''),
+  },
+} as const
+
 // https://vite.dev/config/
 // 与后端共用 backend/.env，避免 VITE_SUPABASE_* 只写在 backend 时前端读不到
 export default defineConfig({
@@ -45,6 +55,7 @@ export default defineConfig({
     proxy: {
       ...apiProxy,
       ...mimoProxy,
+      ...doubaoArkProxy,
     },
   },
   /** 与 dev 一致；否则 `npm run build && npm run preview` 时 /api 无代理 → 405 */
@@ -55,6 +66,7 @@ export default defineConfig({
     proxy: {
       ...apiProxy,
       ...mimoProxy,
+      ...doubaoArkProxy,
     },
   },
 })
