@@ -11,6 +11,7 @@ import { LuobiHubPage } from "./pages/LuobiHubPage";
 import { LuobiGeneratorPage } from "./pages/LuobiGeneratorPage";
 import { PromptsPage } from "./pages/PromptsPage";
 import { EditorPage } from "./pages/EditorPage";
+import { ReshapePage } from "./pages/ReshapePage";
 import { SummaryOverviewPage } from "./pages/SummaryOverviewPage";
 import { ReferenceLibraryPage } from "./pages/ReferenceLibraryPage";
 import { SettingsPage } from "./pages/SettingsPage";
@@ -81,6 +82,7 @@ export default function App() {
       <Routes>
         <Route element={<EditorShell />}>
           <Route path="/work/:workId" element={<EditorPage />} />
+          <Route path="/work/:workId/reshape" element={<ReshapePage />} />
         </Route>
         <Route element={<AppShell />}>
           <Route

@@ -37,12 +37,18 @@ export function parseWorkRow(r: Json): Work {
     const t = tg.filter((x): x is string => typeof x === "string");
     tags = normalizeWorkTagList(t);
   }
+  const bn = r.book_no;
   return {
     id: r.id as string,
     title: r.title as string,
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
     progressCursor: (r.progress_cursor as string | null) ?? null,
+    ...(typeof bn === "number" && Number.isFinite(bn) && bn > 0
+      ? { bookNo: bn }
+      : typeof bn === "string" && /^\d+$/.test(bn)
+        ? { bookNo: Number(bn) }
+        : {}),
     description: typeof desc === "string" && desc.trim().length ? desc : undefined,
     status:
       status === "serializing" || status === "completed" || status === "archived"
@@ -363,6 +369,7 @@ export function toWorkInsert(uid: string, w: Work): Json {
     progress_cursor: w.progressCursor,
     cover_image: w.coverImage && w.coverImage.length > 0 ? w.coverImage : null,
     tags: tagRow,
+    ...(w.bookNo != null && Number.isFinite(w.bookNo) && w.bookNo > 0 ? { book_no: w.bookNo } : {}),
   };
 }
 

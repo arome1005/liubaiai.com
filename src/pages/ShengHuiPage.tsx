@@ -39,6 +39,7 @@ import {
 } from "../db/repo";
 import type { Chapter, ChapterBible, ReferenceSearchHit, Work, WorkStyleCard } from "../db/types";
 import { resolveDefaultChapterId } from "../util/resolve-default-chapter";
+import { workPathSegment } from "../util/work-url";
 import { formatRelativeUpdateMs } from "../util/relativeTime";
 import {
   appendShengHuiSnapshot,
@@ -867,7 +868,7 @@ ${text.slice(0, 1500)}`;
         <div className="ml-auto flex items-center gap-1.5">
           {workId ? (
             <Button variant="ghost" size="sm" asChild>
-              <Link to={`/work/${workId}`}>写作页</Link>
+              <Link to={workId ? `/work/${work ? workPathSegment(work) : workId}` : "/library"}>写作页</Link>
             </Button>
           ) : null}
           <Button variant="ghost" size="sm" asChild>

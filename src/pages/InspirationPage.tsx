@@ -10,6 +10,7 @@ import {
   updateInspirationFragment,
   importAllDataMerge,
   listWorks,
+  getWork,
   listChapters,
   deleteInspirationCollection,
   updateInspirationCollection,
@@ -32,6 +33,7 @@ import {
   type InspirationTransferMode,
 } from "../util/inspiration-transfer-handoff";
 import { fetchUrlPreview, hostnameFromUrl } from "../util/url-preview";
+import { workPathSegment } from "../util/work-url";
 import { createSpeechRecognizer } from "../util/speech-recognition";
 import { readInspirationReturnState, clearInspirationReturnState, writeInspirationReturnState } from "../util/inspiration-return";
 import { generateInspirationFiveExpansions, InspirationExpandError } from "../ai/inspiration-expand";
@@ -1216,39 +1218,43 @@ export function InspirationPage() {
       toast.info("请选择作品与章节");
       return;
     }
-    const title = f.title?.trim();
-    const head = title ? `【流光】${title}\n` : "【流光】\n";
-    const text = `${head}${(f.body ?? "").trim()}\n\n`;
-    const r = writeInspirationTransferHandoff({
-      workId: transferWorkId,
-      chapterId: transferChapterId,
-      mode: transferMode,
-      text,
-      createdAt: Date.now(),
-      sourceId: f.id,
-    });
-    if (!r.ok) {
-      toast.error(r.error);
-      return;
-    }
-    writeInspirationReturnState({
-      searchQuery,
-      selectedType,
-      selectedCollection,
-      selectedTag,
-      showFavoritesOnly,
-      viewMode,
-      density,
-      createdAt: Date.now(),
-    });
-    const qp =
-      transferMode === "insertCursor"
-        ? "?liuguangInsert=1"
-        : transferMode === "appendEnd"
-          ? "?liuguangAppend=1"
-          : "?liuguangDraft=1";
-    navigate(`/work/${transferWorkId}${qp}&chapter=${transferChapterId}`);
-  }, [navigate, transferChapterId, transferMode, transferTarget, transferWorkId]);
+    void (async () => {
+      const title = f.title?.trim();
+      const head = title ? `【流光】${title}\n` : "【流光】\n";
+      const text = `${head}${(f.body ?? "").trim()}\n\n`;
+      const r = writeInspirationTransferHandoff({
+        workId: transferWorkId,
+        chapterId: transferChapterId,
+        mode: transferMode,
+        text,
+        createdAt: Date.now(),
+        sourceId: f.id,
+      });
+      if (!r.ok) {
+        toast.error(r.error);
+        return;
+      }
+      writeInspirationReturnState({
+        searchQuery,
+        selectedType,
+        selectedCollection,
+        selectedTag,
+        showFavoritesOnly,
+        viewMode,
+        density,
+        createdAt: Date.now(),
+      });
+      const qp =
+        transferMode === "insertCursor"
+          ? "?liuguangInsert=1"
+          : transferMode === "appendEnd"
+            ? "?liuguangAppend=1"
+            : "?liuguangDraft=1";
+      const w = await getWork(transferWorkId);
+      const seg = w ? workPathSegment(w) : transferWorkId;
+      navigate(`/work/${seg}${qp}&chapter=${transferChapterId}`);
+    })();
+  }, [navigate, transferChapterId, transferMode, transferTarget, transferWorkId, searchQuery, selectedType, selectedCollection, selectedTag, showFavoritesOnly, viewMode, density]);
 
   const saveEdit = useCallback(async () => {
     const t = editTarget;

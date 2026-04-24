@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Link, useParams } from "react-router-dom";
+import { Link, Navigate } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { cn } from "../lib/utils";
 import { getWork, isChapterSaveConflictError, listChapters, updateChapter } from "../db/repo";
+import { useResolvedWorkFromRoute } from "../hooks/useResolvedWorkFromRoute";
+import { workPathSegment } from "../util/work-url";
 import type { Chapter, Work } from "../db/types";
 import { formatSummaryScope, formatSummaryUpdatedAt, isSummaryStale } from "../util/summary-meta";
 import { generateChapterSummaryWithRetry, ChapterSummaryGenerationError } from "../ai/chapter-summary-generate";
@@ -61,7 +63,8 @@ function pushSummaryHistory(workId: string, chapterId: string, item: SummaryHist
 }
 
 export function SummaryOverviewPage() {
-  const { workId } = useParams<{ workId: string }>();
+  const { resolvedWorkId, phase } = useResolvedWorkFromRoute();
+  const workId = phase === "ok" && resolvedWorkId ? resolvedWorkId : null;
   const [work, setWork] = useState<Work | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [q, setQ] = useState("");
@@ -82,7 +85,8 @@ export function SummaryOverviewPage() {
   const [historyByChapterId, setHistoryByChapterId] = useState<Record<string, SummaryHistoryItem[]>>({});
 
   useEffect(() => {
-    if (!workId) return;
+    if (phase === "notfound") return;
+    if (phase === "loading" || !workId) return;
     void (async () => {
       setLoading(true);
       try {
@@ -95,7 +99,7 @@ export function SummaryOverviewPage() {
         setLoading(false);
       }
     })();
-  }, [workId]);
+  }, [workId, phase]);
 
   const filtered = useMemo(() => {
     const s = q.trim();
@@ -304,14 +308,14 @@ export function SummaryOverviewPage() {
     }
   };
 
-  if (!workId) {
+  if (phase === "notfound") {
+    return <Navigate to="/library" replace />;
+  }
+  if (phase === "loading" || !workId) {
     return (
       <div className={cn("page summary-overview-page flex flex-col gap-4")}>
-        <div className="rounded-xl border border-border/40 bg-card/30 px-4 py-6 shadow-sm sm:px-6">
-          <p className="muted">无效地址。</p>
-          <Button variant="link" className="h-auto p-0" asChild>
-            <Link to="/library">返回作品库</Link>
-          </Button>
+        <div className="rounded-xl border border-border/40 bg-card/30 px-4 py-8 text-center shadow-sm sm:px-6">
+          <p className="muted">加载中…</p>
         </div>
       </div>
     );
@@ -348,7 +352,7 @@ export function SummaryOverviewPage() {
         )}
       >
         <div className="summary-overview-header-text">
-          <Link to={`/work/${workId}`} className="back-link summary-overview-back">
+          <Link to={`/work/${workPathSegment(work)}`} className="back-link summary-overview-back">
             ← 返回写作
           </Link>
           <h1 className="text-xl font-semibold tracking-tight text-foreground">概要总览</h1>
@@ -367,7 +371,7 @@ export function SummaryOverviewPage() {
         </div>
         <div className="header-actions flex flex-wrap gap-2">
           <Button variant="outline" size="sm" asChild>
-            <Link to={`/work/${workId}/bible`}>锦囊</Link>
+            <Link to={`/work/${workPathSegment(work)}/bible`}>锦囊</Link>
           </Button>
           <Button variant="outline" size="sm" asChild>
             <Link to="/library">作品库</Link>
@@ -516,7 +520,7 @@ export function SummaryOverviewPage() {
             return (
               <li key={c.id} className="summary-overview-item">
                 <div className="summary-overview-head">
-                  <Link to={`/work/${workId}?chapter=${c.id}`} className="summary-overview-title">
+                  <Link to={`/work/${workPathSegment(work)}?chapter=${c.id}`} className="summary-overview-title">
                     {c.title}
                   </Link>
                   <div className="summary-overview-meta">

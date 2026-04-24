@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import type { Chapter, ReferenceExcerpt, Work } from "../db/types";
 import { exportBibleMarkdown, isChapterSaveConflictError, updateChapter } from "../db/repo";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
+import { workPathSegment } from "../util/work-url";
 import type { AutoSummaryStatus } from "../ai/chapter-summary-auto";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import {
@@ -439,7 +440,7 @@ function ChapterLinkPicker(props: {
 }
 
 /** 锦囊 Markdown 加载/搜索/预览（无外层 `rr-panel`，供组合进「设定」等面板） */
-export function BibleMarkdownPreview(props: { workId: string }) {
+export function BibleMarkdownPreview(props: { workId: string; linkWork?: Pick<Work, "id" | "bookNo"> | null }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [md, setMd] = useState<string>("");
@@ -461,7 +462,10 @@ export function BibleMarkdownPreview(props: { workId: string }) {
   return (
     <>
       <div className="rr-panel-actions">
-        <Link className="btn small" to={`/work/${props.workId}/bible`}>
+        <Link
+          className="btn small"
+          to={`/work/${props.linkWork ? workPathSegment(props.linkWork) : props.workId}/bible`}
+        >
           打开锦囊页
         </Link>
         <button type="button" className="btn small" onClick={() => void load()} disabled={busy}>
@@ -505,10 +509,10 @@ export function BibleMarkdownPreview(props: { workId: string }) {
   );
 }
 
-export function BibleRightPanel(props: { workId: string }) {
+export function BibleRightPanel(props: { workId: string; linkWork?: Pick<Work, "id" | "bookNo"> | null }) {
   return (
     <div className="rr-panel">
-      <BibleMarkdownPreview workId={props.workId} />
+      <BibleMarkdownPreview workId={props.workId} linkWork={props.linkWork} />
     </div>
   );
 }

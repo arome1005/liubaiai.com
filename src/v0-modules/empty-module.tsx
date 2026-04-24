@@ -168,12 +168,12 @@ const moduleConfig: Record<
     icon: MessageSquare,
     title: "问策",
     subtitle: "策略对话",
-    description: "开放式 AI 对话辅助创作决策，拆书分析与情节咨询",
+    description: "开放式 AI 对话辅助创作决策，重塑分析与情节咨询",
     gradient: "from-purple-500/20 via-primary/10 to-transparent",
     features: [
       {
         icon: BookOpen,
-        title: "拆书分析",
+        title: "重塑分析",
         description: "AI 辅助分析参考书籍的写作技法",
         status: "planned",
       },

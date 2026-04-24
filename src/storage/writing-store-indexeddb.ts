@@ -257,12 +257,14 @@ export class WritingStoreIndexedDB implements WritingStore {
     const tags = normalizeWorkTagList(opts?.tags);
     const desc = (opts?.description ?? "").trim();
     const status = opts?.status ?? "serializing";
+    const bookNo = await this.allocateNextBookNo();
     const work: Work = {
       id,
       title: title.trim() || "未命名作品",
       createdAt: t,
       updatedAt: t,
       progressCursor: null,
+      bookNo,
       ...(desc ? { description: desc } : {}),
       ...(status ? { status } : {}),
       ...(tags?.length ? { tags } : {}),
@@ -280,14 +282,35 @@ export class WritingStoreIndexedDB implements WritingStore {
     return work;
   }
 
+  private async allocateNextBookNo(): Promise<number> {
+    const db = getDB();
+    const all = await db.works.toArray();
+    let m = 0;
+    for (const w of all) {
+      if (typeof w.bookNo === "number" && w.bookNo > m) m = w.bookNo;
+    }
+    return m + 1;
+  }
+
+  async getWorkIdByBookNo(bookNo: number): Promise<string | undefined> {
+    if (!Number.isFinite(bookNo) || bookNo <= 0) return undefined;
+    const db = getDB();
+    const w = await db.works.where("bookNo").equals(bookNo).first();
+    return w?.id;
+  }
+
   async updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status" | "bookNo">>,
   ): Promise<void> {
     const db = getDB();
     const cur = await db.works.get(id);
     if (!cur) return;
     const next: Work = { ...cur, ...patch, updatedAt: now() };
+    if (patch.bookNo !== undefined) {
+      if (typeof patch.bookNo === "number" && patch.bookNo > 0) next.bookNo = patch.bookNo;
+      else delete next.bookNo;
+    }
     if (patch.tags !== undefined) {
       const n = normalizeWorkTagList(patch.tags);
       if (n?.length) next.tags = n;
@@ -419,10 +442,10 @@ export class WritingStoreIndexedDB implements WritingStore {
       >
     >,
     options?: UpdateChapterOptions,
-  ): Promise<void> {
+  ): Promise<number | undefined> {
     const db = getDB();
     const row = await db.chapters.get(id);
-    if (!row) return;
+    if (!row) return undefined;
     if (
       options?.expectedUpdatedAt !== undefined &&
       row.updatedAt !== options.expectedUpdatedAt
@@ -438,6 +461,7 @@ export class WritingStoreIndexedDB implements WritingStore {
       merged.summaryUpdatedAt = t;
     }
     await db.chapters.update(id, merged);
+    return t;
   }
 
   async deleteChapter(id: string): Promise<void> {

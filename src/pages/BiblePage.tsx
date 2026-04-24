@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { cn } from "../lib/utils";
 import {
@@ -44,6 +44,8 @@ import {
   updateWritingPromptTemplate,
   updateWritingStyleSample,
 } from "../db/repo";
+import { useResolvedWorkFromRoute } from "../hooks/useResolvedWorkFromRoute";
+import { workPathSegment } from "../util/work-url";
 import type {
   BibleChapterTemplate,
   BibleCharacter,
@@ -96,7 +98,8 @@ function swapOrderIds<T extends { id: string }>(list: T[], id: string, dir: -1 |
 }
 
 export function BiblePage() {
-  const { workId } = useParams<{ workId: string }>();
+  const { resolvedWorkId, phase } = useResolvedWorkFromRoute();
+  const workId = phase === "ok" && resolvedWorkId ? resolvedWorkId : null;
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [highlightEntryId, setHighlightEntryId] = useState<string | null>(null);
@@ -255,7 +258,8 @@ export function BiblePage() {
   }, [workId]);
 
   useEffect(() => {
-    if (!workId) return;
+    if (phase === "notfound") return;
+    if (phase === "loading" || !workId) return;
     void (async () => {
       setLoading(true);
       try {
@@ -264,7 +268,7 @@ export function BiblePage() {
         setLoading(false);
       }
     })();
-  }, [workId, refresh]);
+  }, [workId, phase, refresh]);
 
   // P1-1：条目级深链定位（tab + entry）—— 滚动定位 + 高亮
   useEffect(() => {
@@ -304,12 +308,14 @@ export function BiblePage() {
   }, []);
 
 
-  if (!workId) {
+  if (phase === "notfound") {
+    return <Navigate to="/library" replace />;
+  }
+  if (phase === "loading" || !workId) {
     return (
       <div className="page bible-page flex flex-col gap-4">
-        <div className="rounded-xl border border-border/40 bg-card/30 px-4 py-6 shadow-sm sm:px-6">
-          <p>无效地址。</p>
-          <Link to="/library">返回</Link>
+        <div className="rounded-xl border border-border/40 bg-card/30 px-4 py-8 text-center shadow-sm sm:px-6">
+          <p>加载中…</p>
         </div>
       </div>
     );
@@ -1624,7 +1630,7 @@ export function BiblePage() {
                       type="button"
                       size="sm"
                       onClick={() =>
-                        navigate(`/work/${workId}`, { state: { applyUserHint: p.body } })
+                        navigate(`/work/${workPathSegment(work)}`, { state: { applyUserHint: p.body } })
                       }
                     >
                       去写作装配

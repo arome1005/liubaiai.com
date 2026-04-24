@@ -25,6 +25,11 @@ export type Work = {
   tags?: string[];
   /** 目标总字数（可选；作品库进度条用，未设置时进度按 0% 展示） */
   targetWordCount?: number;
+  /**
+   * 书号：同一用户下唯一递增编号，用于短路径 `/work/{bookNo}/…`；内部主键仍是 `id`（UUID）。
+   * 老数据可能在回填前缺失；UI 不单独展示，仅作为链接友好片段。
+   */
+  bookNo?: number;
 };
 
 /** 全书级风格卡 / 调性锁（5.3），每部作品一份 */
@@ -178,7 +183,7 @@ export type BookSearchHit = {
 export type BookSearchScope = "full" | "beforeProgress";
 
 export const DB_NAME = "liubai-writing";
-export const SCHEMA_VERSION = 30;
+export const SCHEMA_VERSION = 31;
 
 export type InspirationLink = {
   id: string;
@@ -299,6 +304,8 @@ export const PROMPT_TYPES = [
   "opening",        // 黄金开篇
   "character",      // 人设
   "worldbuilding",  // 世界观
+  "book_split",     // 重塑
+  "universal_entry", // 万能词条（书斋词条 / 非人设定用语等）
   "article_summary", // 文章概括（章节概要 / 省 token 向压缩）
 ] as const;
 
@@ -313,6 +320,8 @@ export const PROMPT_TYPE_LABELS: Record<PromptType, string> = {
   opening:        "黄金开篇",
   character:      "人设",
   worldbuilding:  "世界观",
+  book_split:     "重塑",
+  universal_entry: "万能词条",
   article_summary: "文章概括",
 };
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { toast } from "sonner";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import {
   DropdownMenu,
@@ -112,6 +112,8 @@ import type {
 } from "../components/ai-panel/types";
 import { useTopbar } from "../components/TopbarContext";
 import { EDITOR_TYPOGRAPHY_EVENT, loadEditorTypography, type EditorPaperTint } from "../util/editor-typography";
+import { useResolvedWorkFromRoute } from "../hooks/useResolvedWorkFromRoute";
+import { workPathSegment } from "../util/work-url";
 import { HOTKEY_EVENT, matchHotkey, readZenToggleHotkey } from "../util/hotkey-config";
 import { loadChapterNote, saveChapterNote, hasChapterNote } from "../util/chapter-notes-storage";
 
@@ -135,7 +137,8 @@ function useDebouncedValue<T>(value: T, delay: number): T {
 }
 
 export function EditorPage() {
-  const { workId } = useParams<{ workId: string }>();
+  const { resolvedWorkId, phase, routeParam } = useResolvedWorkFromRoute();
+  const workId = phase === "ok" && resolvedWorkId ? resolvedWorkId : null;
   const location = useLocation();
   const navigate = useNavigate();
   const rightRail = useRightRail();
@@ -147,6 +150,13 @@ export function EditorPage() {
     setActiveTab: setRightRailActiveTab,
   } = rightRail;
   const { zenWrite, setZenWrite } = useEditorZen();
+
+  useEffect(() => {
+    if (phase === "notfound") {
+      toast.error("未找到该作品，或书号/链接无效");
+      navigate("/library", { replace: true });
+    }
+  }, [phase, navigate]);
 
   useEffect(() => {
     const sp = new URLSearchParams(location.search);
@@ -224,7 +234,7 @@ export function EditorPage() {
   const [sidebarTab, setSidebarTab] = useState<"outline" | "chapter">("chapter");
   const [chapterListSortDir, setChapterListSortDir] = useState<"asc" | "desc">(() => {
     try {
-      const key = `${CHAPTER_SORT_DIR_KEY_PREFIX}${workId ?? ""}`;
+      const key = `${CHAPTER_SORT_DIR_KEY_PREFIX}${routeParam ?? ""}`;
       return localStorage.getItem(key) === "desc" ? "desc" : "asc";
     } catch {
       return "asc";
@@ -551,7 +561,7 @@ export function EditorPage() {
 
   useEffect(() => {
     try {
-      const key = `${CHAPTER_SORT_DIR_KEY_PREFIX}${workId ?? ""}`;
+      const key = `${CHAPTER_SORT_DIR_KEY_PREFIX}${workId ?? routeParam ?? ""}`;
       localStorage.setItem(key, chapterListSortDir);
     } catch {
       /* ignore */
@@ -671,12 +681,12 @@ export function EditorPage() {
     }
     try {
       const exp = chapterServerUpdatedAtRef.current.get(activeChapter.id);
-      const t = Date.now();
-      await updateChapter(
-        activeChapter.id,
-        { title: next },
-        exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
-      );
+      const t =
+        (await updateChapter(
+          activeChapter.id,
+          { title: next },
+          exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
+        )) ?? Date.now();
       chapterServerUpdatedAtRef.current.set(activeChapter.id, t);
       chapterTitleRef.current.set(activeChapter.id, next);
       setChapters((prev) =>
@@ -719,24 +729,25 @@ export function EditorPage() {
         });
         setSummaryDraft(text);
         const exp = chapterServerUpdatedAtRef.current.get(activeChapter.id);
-        const t = Date.now();
-        await updateChapter(
+        const summaryTs = Date.now();
+        const newAt = await updateChapter(
           activeChapter.id,
           {
             summary: text,
-            summaryUpdatedAt: t,
+            summaryUpdatedAt: summaryTs,
             summaryScopeFromOrder: activeChapter.order,
             summaryScopeToOrder: activeChapter.order,
           },
           exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
         );
+        const t = newAt ?? summaryTs;
         setChapters((prev) =>
           prev.map((c) =>
             c.id === activeChapter.id
               ? {
                   ...c,
                   summary: text,
-                  summaryUpdatedAt: t,
+                  summaryUpdatedAt: summaryTs,
                   summaryScopeFromOrder: activeChapter.order,
                   summaryScopeToOrder: activeChapter.order,
                   updatedAt: t,
@@ -1477,14 +1488,14 @@ export function EditorPage() {
         const prev = lastPersistedRef.current.get(chapterId) ?? "";
         addDailyWordsFromDelta(prev, text);
         const expected = chapterServerUpdatedAtRef.current.get(chapterId);
-        await updateChapter(
+        const newAt = await updateChapter(
           chapterId,
           { content: text },
           expected !== undefined ? { expectedUpdatedAt: expected } : undefined,
         );
         lastPersistedRef.current.set(chapterId, text);
         clearDraft(workId, chapterId);
-        const t = Date.now();
+        const t = newAt ?? Date.now();
         chapterServerUpdatedAtRef.current.set(chapterId, t);
         setChapters((prevCh) =>
           prevCh.map((c) =>
@@ -1799,12 +1810,30 @@ export function EditorPage() {
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem asChild>
-                <Link to={workId ? `/work/${workId}/bible` : "#"} onClick={(e) => !workId && e.preventDefault()}>
+                <Link
+                  to={workId && work ? `/work/${workPathSegment(work)}/bible` : "#"}
+                  onClick={(e) => !workId && e.preventDefault()}
+                >
                   打开锦囊页
                 </Link>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="editor-xy-pill"
+            disabled={chapters.length === 0}
+            title="重塑分析（独立全屏页）"
+            onClick={() => {
+              if (!workId) return;
+              const seg = work ? workPathSegment(work) : workId;
+              navigate(`/work/${seg}/reshape`);
+            }}
+          >
+            重塑
+          </Button>
           <Button
             type="button"
             variant="outline"
@@ -1939,16 +1968,18 @@ export function EditorPage() {
     setContent(snap.content);
     const wc = wordCount(snap.content);
     const exp = chapterServerUpdatedAtRef.current.get(activeChapter.id);
-    await updateChapter(
+    const newAt = await updateChapter(
       activeChapter.id,
       { content: snap.content },
       exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
     );
+    const rt = newAt ?? Date.now();
+    chapterServerUpdatedAtRef.current.set(activeChapter.id, rt);
     lastPersistedRef.current.set(activeChapter.id, snap.content);
     setChapters((prev) =>
       prev.map((c) =>
         c.id === activeChapter.id
-          ? { ...c, content: snap.content, updatedAt: Date.now(), wordCountCache: wc }
+          ? { ...c, content: snap.content, updatedAt: rt, wordCountCache: wc }
           : c,
       ),
     );
@@ -2060,6 +2091,37 @@ export function EditorPage() {
     // Effect below will fire once content settles
   }
 
+  async function navigateToStudyMention(chapterId: string, query: string) {
+    const q = query.trim();
+    if (!q) return;
+    const hitChapter = chapters.find((c) => c.id === chapterId);
+    if (!hitChapter) {
+      toast.error("目标章节不存在");
+      return;
+    }
+    pendingScrollRef.current = {
+      query: q,
+      isRegex: false,
+      offset: Math.max(0, (hitChapter.content ?? "").indexOf(q)),
+    };
+    setIncomingHit({
+      title: q,
+      hint: `书斋定位 · 第${hitChapter.order}章 ${hitChapter.title}`,
+    });
+    setFindQ(q);
+    if (chapterId === activeId) {
+      const ps = pendingScrollRef.current;
+      pendingScrollRef.current = null;
+      window.setTimeout(() => {
+        if (!ps) return;
+        editorRef.current?.scrollToMatch(ps.query, ps.isRegex, ps.offset);
+        editorRef.current?.highlight(ps.query, ps.isRegex);
+      }, 30);
+      return;
+    }
+    await switchChapter(chapterId);
+  }
+
   async function handleNewChapter() {
     if (!workId) return;
     try {
@@ -2156,12 +2218,12 @@ export function EditorPage() {
       // 本地先改卷归属（不全量 load）
       setChapters((prev) => prev.map((c) => (c.id === chapterId ? { ...c, volumeId: nextVid } : c)));
       const exp = chapterServerUpdatedAtRef.current.get(chapterId) ?? ch.updatedAt;
-      const tNow = Date.now();
-      await updateChapter(
+      const newAt = await updateChapter(
         chapterId,
         { volumeId: nextVid },
         exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
       );
+      const tNow = newAt ?? Date.now();
       chapterServerUpdatedAtRef.current.set(chapterId, tNow);
       setChapters((prev) => prev.map((c) => (c.id === chapterId ? { ...c, updatedAt: tNow } : c)));
     } catch (e) {
@@ -2241,8 +2303,12 @@ export function EditorPage() {
       setChapters((prev) => prev.map((c) => (c.id === id ? { ...c, title: nextTitle } : c)));
       chapterTitleRef.current.set(id, nextTitle);
       const exp = chapterServerUpdatedAtRef.current.get(id) ?? ch.updatedAt;
-      const tNow = Date.now();
-      await updateChapter(id, { title: nextTitle }, exp !== undefined ? { expectedUpdatedAt: exp } : undefined);
+      const newAt = await updateChapter(
+        id,
+        { title: nextTitle },
+        exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
+      );
+      const tNow = newAt ?? Date.now();
       chapterServerUpdatedAtRef.current.set(id, tNow);
       setChapters((prev) => prev.map((c) => (c.id === id ? { ...c, updatedAt: tNow } : c)));
     } catch (e) {
@@ -2413,13 +2479,24 @@ export function EditorPage() {
     else void switchChapter(chapterId).then(() => setSummaryOpen(true));
   }
 
-  function renderChapterSidebarItem(c: Chapter) {
+  function renderChapterSidebarItem(
+    c: Chapter,
+    opt?: {
+      key?: string | number;
+      dataIndex?: number;
+      measureRef?: (el: Element | null) => void;
+      style?: Record<string, string | number>;
+    },
+  ) {
     const i = chapters.findIndex((x) => x.id === c.id);
     const wc = c.wordCountCache ?? wordCount(c.content);
     const isCurrent = c.id === activeId;
     return (
       <li
-        key={c.id}
+        key={opt?.key ?? c.id}
+        data-index={opt?.dataIndex}
+        ref={opt?.measureRef}
+        style={opt?.style}
         className={cn("chapter-card", isCurrent ? "chapter-card--expanded active" : "chapter-card--compact")}
         draggable
         onDragStart={() => setDragChapterId(c.id)}
@@ -2625,8 +2702,13 @@ export function EditorPage() {
           open={studyLibraryOpen}
           onOpenChange={setStudyLibraryOpen}
           workId={workId}
+          linkWork={work ?? null}
+          workTitle={work?.title ?? ""}
           tab={studyLibraryTab}
           onTabChange={setStudyLibraryTab}
+          chapters={chapters}
+          activeChapterId={activeId}
+          onNavigateToMention={navigateToStudyMention}
           characters={bibleCharacters}
           glossaryTerms={glossaryTerms}
           onRefresh={refreshStudyLibrary}
@@ -2835,6 +2917,14 @@ export function EditorPage() {
                     {virtualizer.getVirtualItems().map((vItem) => {
                       const item = flatChapterItems[vItem.index];
                       if (!item) return null;
+                      if (item.kind === "chapter" || item.kind === "orphan-chapter") {
+                        return renderChapterSidebarItem(item.chapter, {
+                          key: vItem.key,
+                          dataIndex: vItem.index,
+                          measureRef: virtualizer.measureElement,
+                          style: { position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vItem.start}px)` },
+                        });
+                      }
                       return (
                         <li
                           key={vItem.key}
@@ -2853,7 +2943,6 @@ export function EditorPage() {
                               </div>
                             </div>
                           )}
-                          {(item.kind === "chapter" || item.kind === "orphan-chapter") && renderChapterSidebarItem(item.chapter)}
                           {item.kind === "orphan-head" && (
                             <div className="volume-row">
                               <span className="volume-title">未匹配章节 · {item.count}</span>
@@ -3401,24 +3490,25 @@ export function EditorPage() {
               void (async () => {
                 try {
                   const exp = chapterServerUpdatedAtRef.current.get(activeChapter.id);
-                  const t = Date.now();
-                  await updateChapter(
+                  const st = Date.now();
+                  const newAt = await updateChapter(
                     activeChapter.id,
                     {
                       summary: summaryDraft,
-                      summaryUpdatedAt: t,
+                      summaryUpdatedAt: st,
                       summaryScopeFromOrder: activeChapter.summaryScopeFromOrder ?? activeChapter.order,
                       summaryScopeToOrder: activeChapter.summaryScopeToOrder ?? activeChapter.order,
                     },
                     exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
                   );
+                  const t = newAt ?? st;
                   setChapters((prev) =>
                     prev.map((c) =>
                       c.id === activeChapter.id
                         ? {
                             ...c,
                             summary: summaryDraft,
-                            summaryUpdatedAt: t,
+                            summaryUpdatedAt: st,
                             summaryScopeFromOrder: c.summaryScopeFromOrder ?? c.order,
                             summaryScopeToOrder: c.summaryScopeToOrder ?? c.order,
                             updatedAt: t,
@@ -3451,24 +3541,25 @@ export function EditorPage() {
               void (async () => {
                 try {
                   const exp = chapterServerUpdatedAtRef.current.get(activeChapter.id);
-                  const t = Date.now();
-                  await updateChapter(
+                  const st = Date.now();
+                  const newAt = await updateChapter(
                     activeChapter.id,
                     {
                       summary: summaryDraft,
-                      summaryUpdatedAt: t,
+                      summaryUpdatedAt: st,
                       summaryScopeFromOrder: activeChapter.summaryScopeFromOrder ?? activeChapter.order,
                       summaryScopeToOrder: activeChapter.summaryScopeToOrder ?? activeChapter.order,
                     },
                     exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
                   );
+                  const t = newAt ?? st;
                   setChapters((prev) =>
                     prev.map((c) =>
                       c.id === activeChapter.id
                         ? {
                             ...c,
                             summary: summaryDraft,
-                            summaryUpdatedAt: t,
+                            summaryUpdatedAt: st,
                             summaryScopeFromOrder: c.summaryScopeFromOrder ?? c.order,
                             summaryScopeToOrder: c.summaryScopeToOrder ?? c.order,
                             updatedAt: t,
@@ -3497,7 +3588,7 @@ export function EditorPage() {
             }}
             onChapterSummarySaved={async (chapterId, summary, summaryUpdatedAt, order) => {
               const exp = chapterServerUpdatedAtRef.current.get(chapterId);
-              await updateChapter(
+              const newAt = await updateChapter(
                 chapterId,
                 {
                   summary,
@@ -3507,6 +3598,7 @@ export function EditorPage() {
                 },
                 exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
               );
+              const uAt = newAt ?? summaryUpdatedAt;
               setChapters((prev) =>
                 prev.map((c) =>
                   c.id === chapterId
@@ -3516,7 +3608,7 @@ export function EditorPage() {
                         summaryUpdatedAt,
                         summaryScopeFromOrder: order,
                         summaryScopeToOrder: order,
-                        updatedAt: summaryUpdatedAt,
+                        updatedAt: uAt,
                       }
                     : c,
                 ),

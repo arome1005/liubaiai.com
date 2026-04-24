@@ -1,10 +1,11 @@
-import { Link, Outlet, useLocation } from "react-router-dom";
+import { Link, matchPath, Outlet, useLocation } from "react-router-dom";
 import { Scan, Search, Settings, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { EditorWritingSettingsSheet } from "./EditorWritingSettingsSheet";
 import { exitDocumentFullscreen, getFullscreenElement, requestDocumentFullscreen } from "../util/browser-fullscreen";
 import { useAuthUserState } from "../hooks/useAuthUserState";
 import { workIdFromPath } from "../util/workPath";
+import { resolveWorkIdFromRouteParam } from "../db/repo";
 import { shortcutModifierSymbol } from "../util/keyboardHints";
 import { EditorZenProvider } from "./EditorZenContext";
 import { GlobalCommandPalette } from "./GlobalCommandPalette";
@@ -76,10 +77,12 @@ function safeBool(v: string | null, fallback: boolean): boolean {
  */
 export function EditorShell() {
   const { pathname } = useLocation();
+  /** 重塑独立页自带顶栏，不重复渲染写作顶栏（搜索/辅助/沉浸等） */
+  const hideWritingTopbar = Boolean(matchPath({ path: "/work/:workId/reshape", end: true }, pathname));
   const { authUser, refreshAuth } = useAuthUserState(pathname);
   const [commandOpen, setCommandOpen] = useState(false);
   const commandOpenRef = useRef(false);
-  const paletteWorkId = useMemo(() => {
+  const paletteWorkPathSeg = useMemo(() => {
     const id = workIdFromPath(pathname);
     if (id) return id;
     try {
@@ -88,6 +91,17 @@ export function EditorShell() {
       return null;
     }
   }, [pathname]);
+  const [paletteWorkUuid, setPaletteWorkUuid] = useState<string | null>(null);
+  useEffect(() => {
+    if (!paletteWorkPathSeg) {
+      setPaletteWorkUuid(null);
+      return;
+    }
+    void (async () => {
+      const internal = (await resolveWorkIdFromRouteParam(paletteWorkPathSeg)) ?? paletteWorkPathSeg;
+      setPaletteWorkUuid(internal);
+    })();
+  }, [paletteWorkPathSeg]);
   const cmdModKey = useMemo(() => shortcutModifierSymbol(), []);
   const [writingSettingsOpen, setWritingSettingsOpen] = useState(false);
   const [rightOpen, setRightOpen] = useState<boolean>(() => safeBool(localStorage.getItem(LS_RIGHT_OPEN), false));
@@ -274,62 +288,64 @@ export function EditorShell() {
           style={{ ["--shell-right-w" as string]: `${rightWidthPx}px` } as CSSProperties}
           className={"app-shell app-shell--editor app-shell--editor-xy" + (!rightOpen ? " app-shell--right-closed" : "")}
         >
-          <header
-            className="app-topbar app-topbar--editor app-topbar--editor-xy sticky top-0 z-50 grid min-h-12 shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-b border-border/40 bg-background/95 px-3 py-2 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60 lg:min-h-[3.25rem] lg:gap-3 lg:px-5"
-            aria-label="写作顶栏"
-          >
-            <div className="app-topbar-left app-topbar-left--editor app-topbar-left--editor-xy flex min-w-0 max-w-[min(100%,14rem)] items-center gap-2 lg:max-w-[18rem] lg:gap-3">
-              <div className="app-topbar-title app-topbar-title--editor app-topbar-title--editor-xy min-w-0 flex-1 overflow-hidden">
-                {topbarTitleNode ? (
-                  topbarTitleNode
-                ) : (
-                  <span className="text-sm text-muted-foreground">加载中…</span>
-                )}
+          {!hideWritingTopbar ? (
+            <header
+              className="app-topbar app-topbar--editor app-topbar--editor-xy sticky top-0 z-50 grid min-h-12 shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-b border-border/40 bg-background/95 px-3 py-2 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60 lg:min-h-[3.25rem] lg:gap-3 lg:px-5"
+              aria-label="写作顶栏"
+            >
+              <div className="app-topbar-left app-topbar-left--editor app-topbar-left--editor-xy flex min-w-0 max-w-[min(100%,14rem)] items-center gap-2 lg:max-w-[18rem] lg:gap-3">
+                <div className="app-topbar-title app-topbar-title--editor app-topbar-title--editor-xy min-w-0 flex-1 overflow-hidden">
+                  {topbarTitleNode ? (
+                    topbarTitleNode
+                  ) : (
+                    <span className="text-sm text-muted-foreground">加载中…</span>
+                  )}
+                </div>
               </div>
-            </div>
-            <div className="app-topbar-center app-topbar-center--editor app-topbar-center--editor-xy min-w-0 justify-self-stretch px-1">
-              {topbarCenterNode}
-            </div>
-            <div className="app-topbar-actions app-topbar-actions--editor app-topbar-actions--editor-xy flex min-w-0 flex-shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
-              {topbarActionsNode}
-              <span className="app-topbar-rail-toggle-area">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="app-editor-command-btn app-editor-command-btn--icon"
-                  aria-label="搜索与命令"
-                  title={`搜索与命令（${cmdModKey}+K）；正文聚焦时请先点顶栏或失焦再按快捷键`}
-                  onClick={() => setCommandOpen(true)}
-                >
-                  <Search className="app-editor-command-search-ico size-[1.05rem] shrink-0" strokeWidth={2.25} aria-hidden />
-                  <kbd className="app-editor-command-kbd">{cmdModKey}+K</kbd>
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="app-editor-rail-toggle h-9"
-                  onClick={() => setRightOpen((v) => !v)}
-                  title="展开或收起 AI 等辅助侧栏（宽屏侧栏，小屏抽屉）"
-                >
-                  {rightOpen ? "关闭" : "辅助"}
-                </Button>
-                <TopbarIconGroup
-                  zenWrite={zenWrite}
-                  onZenToggle={() => {
-                    if (zenWrite) {
-                      void exitDocumentFullscreen().finally(() => setZenWrite(false));
-                    } else {
-                      setZenWrite(true);
-                      void requestDocumentFullscreen();
-                    }
-                  }}
-                  onSettingsOpen={() => setWritingSettingsOpen(true)}
-                />
-              </span>
-            </div>
-          </header>
+              <div className="app-topbar-center app-topbar-center--editor app-topbar-center--editor-xy min-w-0 justify-self-stretch px-1">
+                {topbarCenterNode}
+              </div>
+              <div className="app-topbar-actions app-topbar-actions--editor app-topbar-actions--editor-xy flex min-w-0 flex-shrink-0 flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+                {topbarActionsNode}
+                <span className="app-topbar-rail-toggle-area">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="app-editor-command-btn app-editor-command-btn--icon"
+                    aria-label="搜索与命令"
+                    title={`搜索与命令（${cmdModKey}+K）；正文聚焦时请先点顶栏或失焦再按快捷键`}
+                    onClick={() => setCommandOpen(true)}
+                  >
+                    <Search className="app-editor-command-search-ico size-[1.05rem] shrink-0" strokeWidth={2.25} aria-hidden />
+                    <kbd className="app-editor-command-kbd">{cmdModKey}+K</kbd>
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="app-editor-rail-toggle h-9"
+                    onClick={() => setRightOpen((v) => !v)}
+                    title="展开或收起 AI 等辅助侧栏（宽屏侧栏，小屏抽屉）"
+                  >
+                    {rightOpen ? "关闭" : "辅助"}
+                  </Button>
+                  <TopbarIconGroup
+                    zenWrite={zenWrite}
+                    onZenToggle={() => {
+                      if (zenWrite) {
+                        void exitDocumentFullscreen().finally(() => setZenWrite(false));
+                      } else {
+                        setZenWrite(true);
+                        void requestDocumentFullscreen();
+                      }
+                    }}
+                    onSettingsOpen={() => setWritingSettingsOpen(true)}
+                  />
+                </span>
+              </div>
+            </header>
+          ) : null}
 
           <div className="app-editor-split">
             <div className="app-body">
@@ -403,7 +419,12 @@ export function EditorShell() {
             aria-hidden={!rightOpen}
           />
 
-          <GlobalCommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} workId={paletteWorkId} />
+          <GlobalCommandPalette
+            open={commandOpen}
+            onClose={() => setCommandOpen(false)}
+            workId={paletteWorkUuid}
+            workPathSeg={paletteWorkPathSeg}
+          />
         </div>
         </EditorZenProvider>
       </RightRailContext.Provider>

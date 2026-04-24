@@ -239,7 +239,7 @@ export function WritingSettingsRightPanel(props: {
         <details className="ai-panel-box" aria-labelledby="ws-acc-bible-preview-summary">
           <summary id="ws-acc-bible-preview-summary">锦囊 Markdown 预览（全书级导出）</summary>
           <div style={{ display: "flex", flexDirection: "column", minHeight: 0, marginTop: 6 }}>
-            <BibleMarkdownPreview workId={props.workId} />
+            <BibleMarkdownPreview workId={props.workId} linkWork={props.work} />
           </div>
         </details>
       </div>

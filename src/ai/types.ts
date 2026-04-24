@@ -126,5 +126,7 @@ export type AiChatMessage = {
 export type AiGenerateResult = {
   text: string;
   raw?: unknown;
+  /** OpenAI 兼容等接口返回的 total_tokens；未返回时省略，由调用方粗估 */
+  usageTotalTokens?: number;
 };
 

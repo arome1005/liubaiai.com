@@ -74,6 +74,7 @@ import { getDB } from "../db/database";
 import { extractPlainTextFromDocx } from "../util/extract-docx-text";
 import { extractPlainTextFromPdf } from "../util/extract-pdf-text";
 import { readUtf8TextFileWithCheck } from "../util/readUtf8TextFile";
+import { workPathSegmentForId } from "../util/work-url";
 import { downloadReferenceLibraryZip } from "../util/reference-batch-export";
 import {
   loadReferenceFavoriteIds,
@@ -254,6 +255,10 @@ export function ReferenceLibraryPage() {
   const [progressChapters, setProgressChapters] = useState<Chapter[]>([]);
   const [progressCursor, setProgressCursor] = useState<string | null>(null);
   const [worksList, setWorksList] = useState<Work[]>([]);
+  const refWorkPathSeg = useCallback(
+    (internalId: string) => workPathSegmentForId(worksList, internalId),
+    [worksList],
+  );
   const [editingExcerptId, setEditingExcerptId] = useState<string | null>(null);
   const [editNote, setEditNote] = useState("");
   const [editTagIds, setEditTagIds] = useState<string[]>([]);
@@ -881,14 +886,14 @@ export function ReferenceLibraryPage() {
       }
       toast.success("已导入锦囊", {
         description: "可前往「锦囊」页查看。",
-        action: importWorkId ? { label: "去锦囊", onClick: () => navigate(`/work/${importWorkId}/bible`) } : undefined,
+        action: importWorkId ? { label: "去锦囊", onClick: () => navigate(`/work/${refWorkPathSeg(importWorkId)}/bible`) } : undefined,
       });
     } catch (err) {
       toast.error("导入失败：" + (err instanceof Error ? err.message : String(err)));
     } finally {
       setImportBusy((prev) => ({ ...prev, [extract.id]: false }));
     }
-  }, [activeTitle, importWorkId, navigate]);
+  }, [activeTitle, importWorkId, navigate, refWorkPathSeg]);
 
   const applyKeyCardToWork = useCallback(
     async (card: ReferenceKeyCard) => {
@@ -938,10 +943,10 @@ export function ReferenceLibraryPage() {
         : card.kind === "glossary" ? "glossary"
         : "world";
       toast.success("已应用到作品锦囊", {
-        action: { label: "去查看", onClick: () => navigate(`/work/${wid}/bible?tab=${tab}`) },
+        action: { label: "去查看", onClick: () => navigate(`/work/${refWorkPathSeg(wid)}/bible?tab=${tab}`) },
       });
     },
-    [activeTitle, importWorkId, navigate],
+    [activeTitle, importWorkId, navigate, refWorkPathSeg],
   );
 
   const formatKeyCardText = useCallback(
@@ -999,9 +1004,9 @@ export function ReferenceLibraryPage() {
         toast.error(r.error);
         return;
       }
-      navigate(`/work/${wid}?chapter=${encodeURIComponent(chapterId)}`);
+      navigate(`/work/${refWorkPathSeg(wid)}?chapter=${encodeURIComponent(chapterId)}`);
     },
-    [formatKeyCardText, importWorkId, navigate, progressCursor],
+    [formatKeyCardText, importWorkId, navigate, progressCursor, refWorkPathSeg],
   );
 
   const jumpKeyCardToWritingHit = useCallback(
@@ -1036,9 +1041,9 @@ export function ReferenceLibraryPage() {
           hint: `来自《${activeTitle}》`,
         },
       });
-      navigate(`/work/${wid}?hit=1&chapter=${encodeURIComponent(chapterId)}`);
+      navigate(`/work/${refWorkPathSeg(wid)}?hit=1&chapter=${encodeURIComponent(chapterId)}`);
     },
-    [activeTitle, importWorkId, navigate, progressCursor],
+    [activeTitle, importWorkId, navigate, progressCursor, refWorkPathSeg],
   );
 
   const sendExcerptToWritingAsRef = useCallback(
@@ -1071,9 +1076,9 @@ export function ReferenceLibraryPage() {
           },
         ],
       });
-      navigate(`/work/${wid}?refsImport=1&chapter=${encodeURIComponent(chapterId)}`);
+      navigate(`/work/${refWorkPathSeg(wid)}?refsImport=1&chapter=${encodeURIComponent(chapterId)}`);
     },
-    [activeTitle, importWorkId, navigate, progressCursor],
+    [activeTitle, importWorkId, navigate, progressCursor, refWorkPathSeg],
   );
 
   // ── 打开「提炼提示词」Dialog ───────────────────────────────────────────────
@@ -3363,7 +3368,7 @@ export function ReferenceLibraryPage() {
                 <div className="rounded-xl border border-border/50 bg-card/30 p-4">
                   <div className="text-sm font-medium">跨模块入口</div>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    <Link to={importWorkId ? `/work/${importWorkId}/bible` : "#"} onClick={(e) => !importWorkId && e.preventDefault()}>
+                    <Link to={importWorkId ? `/work/${refWorkPathSeg(importWorkId)}/bible` : "#"} onClick={(e) => !importWorkId && e.preventDefault()}>
                       <Button type="button" size="sm" variant="outline" disabled={!importWorkId}>
                         进入锦囊（需选作品）
                       </Button>

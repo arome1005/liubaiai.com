@@ -5,7 +5,7 @@
  * 支持按类型筛选，用户点击后回调 onPick(template)；点「清除」回调 onPick(null)。
  *
  * - 推演页：filterTypes = ["outline","volume","scene"]（默认）
- * - 写作页：filterTypes = ["continue","opening","style","character","worldbuilding"]
+ * - 写作页：filterTypes = ["continue","opening","style","character","worldbuilding","universal_entry"]
  * - 章节概要批量：filterTypes = PROMPT_PICKER_ARTICLE_SUMMARY_TYPES（文章概括）
  */
 
@@ -49,7 +49,7 @@ export const PROMPT_PICKER_LUOBI_SLOTS: PromptSlot[] = PROMPT_SCOPE_SLOTS["luobi
 
 // 各场景默认类型
 const TUIYAN_TYPES: PromptType[] = ["outline", "volume", "scene"];
-const WRITING_TYPES: PromptType[] = ["continue", "opening", "style", "character", "worldbuilding"];
+const WRITING_TYPES: PromptType[] = ["continue", "opening", "style", "character", "worldbuilding", "universal_entry"];
 const ARTICLE_SUMMARY_TYPES: PromptType[] = ["article_summary"];
 
 /** 默认 filterTypes（推演页用） */
@@ -64,6 +64,7 @@ export const PROMPT_PICKER_WRITING_REQUIREMENT_TYPES: PromptType[] = [
   "opening",
   "character",
   "worldbuilding",
+  "universal_entry",
 ];
 /** 章节概要 / 文章概括类提示词（提示词库「文章概括」分类） */
 export const PROMPT_PICKER_ARTICLE_SUMMARY_TYPES = ARTICLE_SUMMARY_TYPES;
@@ -78,6 +79,8 @@ const TYPE_LABEL: Partial<Record<PromptType, string>> = {
   style:         "写作风格",
   character:      "人设",
   worldbuilding:  "世界观",
+  book_split:     "重塑",
+  universal_entry: "万能词条",
   article_summary: "文章概括",
 };
 

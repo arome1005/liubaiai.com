@@ -10,6 +10,7 @@ import {
   listReferenceLibrary,
   listWorks,
 } from "../db/repo";
+import { workPathSegment } from "../util/work-url";
 import { cn } from "../lib/utils";
 import { shortcutModifierSymbol } from "../util/keyboardHints";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
@@ -54,7 +55,8 @@ function rowMatches(row: CommandRow, q: string): boolean {
   return parts.every((p) => hay.includes(p));
 }
 
-function buildStaticRows(workId: string | null): CommandRow[] {
+function buildStaticRows(workId: string | null, workPathSeg: string | null): CommandRow[] {
+  const seg = workPathSeg ?? workId;
   const base: CommandRow[] = [
     {
       id: "home",
@@ -177,26 +179,26 @@ function buildStaticRows(workId: string | null): CommandRow[] {
       group: "其他",
     },
   ];
-  if (workId) {
+  if (workId && seg) {
     base.splice(2, 0, {
       id: "write",
       label: "写作（当前作品）",
       keywords: "编辑 正文 章节",
-      path: `/work/${workId}`,
+      path: `/work/${seg}`,
       group: "当前作品",
     });
     base.splice(3, 0, {
       id: "summary",
       label: "概要总览",
       keywords: "章 摘要",
-      path: `/work/${workId}/summary`,
+      path: `/work/${seg}/summary`,
       group: "当前作品",
     });
     base.splice(4, 0, {
       id: "bible",
       label: "本书锦囊",
       keywords: "落笔 设定 人物 术语",
-      path: `/work/${workId}/bible`,
+      path: `/work/${seg}/bible`,
       group: "当前作品",
       hint: "5",
     });
@@ -207,9 +209,16 @@ function buildStaticRows(workId: string | null): CommandRow[] {
 export function GlobalCommandPalette(props: {
   open: boolean;
   onClose: () => void;
+  /** 作品内部 UUID，用于本书锦囊等查询 */
   workId: string | null;
+  /**
+   * `/work/{段}/…` 使用书号或 UUID；未传时与 workId 相同。
+   * 书号路径下应为 URL 段（如 `"123456"`），与 workId 可成对由路由解析得到。
+   */
+  workPathSeg?: string | null;
 }) {
-  const { open, onClose, workId } = props;
+  const { open, onClose, workId, workPathSeg } = props;
+  const pathSeg = workPathSeg ?? workId;
   const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [active, setActive] = useState(0);
@@ -219,7 +228,7 @@ export function GlobalCommandPalette(props: {
   const listRef = useRef<HTMLDivElement>(null);
   const mod = shortcutModifierSymbol();
 
-  const staticRows = useMemo(() => buildStaticRows(workId), [workId]);
+  const staticRows = useMemo(() => buildStaticRows(workId, pathSeg), [workId, pathSeg]);
 
   useEffect(() => {
     if (!open) return;
@@ -235,17 +244,18 @@ export function GlobalCommandPalette(props: {
           id: `work-${w.id}`,
           label: w.title,
           keywords: `${w.title} ${(w.tags ?? []).join(" ")} 作品 书`,
-          path: `/work/${w.id}`,
+          path: `/work/${workPathSegment(w)}`,
           group: "作品",
         }));
         const chapterBatches = await Promise.all(
           works.map(async (w) => {
             const chs = await listChapters(w.id);
+            const seg = workPathSegment(w);
             return chs.map((c) => ({
               id: `ch-${c.id}`,
               label: `${w.title} · ${c.title}`,
               keywords: `${w.title} ${c.title} 章节 正文`,
-              path: `/work/${w.id}?chapter=${encodeURIComponent(c.id)}`,
+              path: `/work/${seg}?chapter=${encodeURIComponent(c.id)}`,
               group: "章节",
             }));
           }),
@@ -253,7 +263,7 @@ export function GlobalCommandPalette(props: {
 
         // 本书锦囊条目（当前 workId）：条目级跳转与定位
         const bibleRows: CommandRow[] = [];
-        if (workId) {
+        if (workId && pathSeg) {
           const [chars, world, glossary, timeline] = await Promise.all([
             listBibleCharacters(workId),
             listBibleWorldEntries(workId),
@@ -265,7 +275,7 @@ export function GlobalCommandPalette(props: {
               id: `bible-char-${c.id}`,
               label: `锦囊 · 人物 · ${c.name}`,
               keywords: `${c.name} 人物 锦囊 设定`,
-              path: `/work/${workId}/bible?tab=characters&entry=${encodeURIComponent(c.id)}`,
+              path: `/work/${pathSeg}/bible?tab=characters&entry=${encodeURIComponent(c.id)}`,
               group: "锦囊（当前作品）",
             });
           }
@@ -274,7 +284,7 @@ export function GlobalCommandPalette(props: {
               id: `bible-world-${w.id}`,
               label: `锦囊 · 世界观 · ${w.title}`,
               keywords: `${w.title} ${w.entryKind} 世界观 锦囊 设定`,
-              path: `/work/${workId}/bible?tab=world&entry=${encodeURIComponent(w.id)}`,
+              path: `/work/${pathSeg}/bible?tab=world&entry=${encodeURIComponent(w.id)}`,
               group: "锦囊（当前作品）",
             });
           }
@@ -283,7 +293,7 @@ export function GlobalCommandPalette(props: {
               id: `bible-glossary-${g.id}`,
               label: `锦囊 · 术语 · ${g.term}`,
               keywords: `${g.term} 术语 词典 锦囊 设定`,
-              path: `/work/${workId}/bible?tab=glossary&entry=${encodeURIComponent(g.id)}`,
+              path: `/work/${pathSeg}/bible?tab=glossary&entry=${encodeURIComponent(g.id)}`,
               group: "锦囊（当前作品）",
             });
           }
@@ -292,7 +302,7 @@ export function GlobalCommandPalette(props: {
               id: `bible-time-${ev.id}`,
               label: `锦囊 · 时间线 · ${ev.label}`,
               keywords: `${ev.label} 时间线 锦囊 设定`,
-              path: `/work/${workId}/bible?tab=timeline&entry=${encodeURIComponent(ev.id)}`,
+              path: `/work/${pathSeg}/bible?tab=timeline&entry=${encodeURIComponent(ev.id)}`,
               group: "锦囊（当前作品）",
             });
           }
@@ -329,7 +339,7 @@ export function GlobalCommandPalette(props: {
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, workId, pathSeg]);
 
   const rows = useMemo(() => [...staticRows, ...indexRows], [staticRows, indexRows]);
 

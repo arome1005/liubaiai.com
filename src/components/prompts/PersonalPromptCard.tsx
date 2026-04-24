@@ -24,6 +24,8 @@ const TYPE_COLOR: Record<PromptType, string> = {
   opening:        "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
   character:      "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
   worldbuilding:  "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300",
+  book_split:     "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200",
+  universal_entry:  "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-200",
   article_summary: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200",
 };
 

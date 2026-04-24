@@ -192,18 +192,19 @@ export function GlobalPromptQuickDialog(props: GlobalPromptQuickDialogProps) {
         showCloseButton
         overlayClassName="z-[228]"
         className={cn(
-          "z-[229] flex max-h-[min(90dvh,640px)] w-full max-w-2xl flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl",
-          "border-zinc-700/80 bg-zinc-950 text-zinc-100 shadow-2xl",
+          "z-[229] flex max-h-[min(90dvh,780px)] w-full max-w-4xl flex-col gap-0 overflow-hidden p-0 sm:max-w-4xl",
+          "border-zinc-200 bg-white text-zinc-900 shadow-2xl",
+          "dark:border-zinc-700/80 dark:bg-zinc-950 dark:text-zinc-100",
         )}
       >
-        <DialogHeader className="shrink-0 border-b border-zinc-800 px-4 py-3 text-left">
+        <DialogHeader className="shrink-0 border-b border-zinc-200 px-5 py-4 text-left dark:border-zinc-800">
           <DialogTitle className="text-base font-semibold">快捷选项</DialogTitle>
         </DialogHeader>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 md:grid-cols-[1fr_200px]">
-          <div className="flex min-h-0 flex-col border-b border-zinc-800 md:border-b-0 md:border-r md:border-zinc-800">
-            <div className="shrink-0 border-b border-zinc-800 px-3 py-2">
-              <div className="mb-2 flex flex-wrap gap-1.5">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-0 md:grid-cols-[1fr_220px]">
+          <div className="flex min-h-0 flex-col border-b border-zinc-200 md:border-b-0 md:border-r md:border-zinc-200 dark:border-zinc-800 dark:md:border-zinc-800">
+            <div className="shrink-0 border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+              <div className="mb-2.5 flex flex-wrap gap-1.5">
                 {(
                   [
                     ["favorites", "已收藏"],
@@ -216,10 +217,10 @@ export function GlobalPromptQuickDialog(props: GlobalPromptQuickDialogProps) {
                     type="button"
                     onClick={() => setSourceTab(id)}
                     className={cn(
-                      "rounded-md border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                      "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
                       sourceTab === id
-                        ? "border-emerald-500/60 bg-emerald-950/40 text-emerald-200"
-                        : "border-zinc-700/80 bg-zinc-900/50 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200",
+                        ? "border-emerald-500/60 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-200"
+                        : "border-zinc-300 bg-zinc-100/80 text-zinc-500 hover:border-zinc-400 hover:text-zinc-700 dark:border-zinc-700/80 dark:bg-zinc-900/50 dark:text-zinc-400 dark:hover:border-zinc-600 dark:hover:text-zinc-200",
                     )}
                   >
                     {label}
@@ -235,10 +236,10 @@ export function GlobalPromptQuickDialog(props: GlobalPromptQuickDialogProps) {
                 }}
               >
                 <div className="relative min-w-0 flex-1">
-                  <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-500" />
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-zinc-400 dark:text-zinc-500" />
                   <Input
                     ref={searchInputRef}
-                    className="h-8 border-zinc-700 bg-zinc-900 pl-7 text-xs text-zinc-100 placeholder:text-zinc-600"
+                    className="h-9 border-zinc-300 bg-zinc-50 pl-8 text-xs text-zinc-900 placeholder:text-zinc-400 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600"
                     placeholder="搜索提示词…"
                     value={inputValue}
                     onChange={(e) => {
@@ -250,19 +251,19 @@ export function GlobalPromptQuickDialog(props: GlobalPromptQuickDialogProps) {
                 <Button
                   type="submit"
                   size="sm"
-                  className="h-8 shrink-0 bg-emerald-600 px-2.5 text-xs text-white hover:bg-emerald-700"
+                  className="h-9 shrink-0 bg-emerald-600 px-3 text-xs text-white hover:bg-emerald-700"
                 >
                   搜索
                 </Button>
               </form>
             </div>
-            <div className="min-h-[200px] flex-1 overflow-y-auto px-2 py-2 md:max-h-[min(50dvh,360px)]">
+            <div className="min-h-[240px] flex-1 overflow-y-auto px-3 py-3 md:max-h-[min(55dvh,460px)]">
               {loading ? (
-                <p className="py-8 text-center text-xs text-zinc-500">加载中…</p>
+                <p className="py-10 text-center text-sm text-zinc-400 dark:text-zinc-500">加载中…</p>
               ) : filteredSource.length === 0 ? (
-                <p className="py-8 text-center text-xs text-zinc-600">{emptyLeftMessage}</p>
+                <p className="py-10 text-center text-sm text-zinc-400 dark:text-zinc-600">{emptyLeftMessage}</p>
               ) : (
-                <ul className="space-y-1">
+                <ul className="space-y-1.5">
                   {filteredSource.map((t) => {
                     const sel = t.id === selectedId || t.id === activeTemplate?.id;
                     return (
@@ -271,16 +272,16 @@ export function GlobalPromptQuickDialog(props: GlobalPromptQuickDialogProps) {
                           type="button"
                           onClick={() => pickTemplate(sel ? null : t)}
                           className={cn(
-                            "flex w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition-colors",
+                            "flex w-full items-center gap-2 rounded-lg border px-3 py-2.5 text-left text-sm transition-colors",
                             sel
-                              ? "border-emerald-500/60 bg-emerald-950/50 text-emerald-100"
-                              : "border-transparent bg-zinc-900/40 hover:border-zinc-700 hover:text-zinc-100",
+                              ? "border-emerald-500/60 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-100"
+                              : "border-transparent bg-zinc-50 hover:border-zinc-300 hover:text-zinc-900 dark:bg-zinc-900/40 dark:hover:border-zinc-700 dark:hover:text-zinc-100",
                           )}
                         >
-                          <span className={cn("min-w-0 flex-1 leading-snug", sel ? "font-medium text-emerald-200" : "text-zinc-300")}>
+                          <span className={cn("min-w-0 flex-1 leading-snug", sel ? "font-medium text-emerald-700 dark:text-emerald-200" : "text-zinc-600 dark:text-zinc-300")}>
                             {t.title}
                           </span>
-                          {sel && <Check className="h-3.5 w-3.5 shrink-0 text-emerald-400" />}
+                          {sel && <Check className="h-4 w-4 shrink-0 text-emerald-500 dark:text-emerald-400" />}
                         </button>
                       </li>
                     );
@@ -290,14 +291,14 @@ export function GlobalPromptQuickDialog(props: GlobalPromptQuickDialogProps) {
             </div>
           </div>
 
-          <aside className="flex min-h-0 flex-col bg-zinc-900/30">
-            <p className="shrink-0 border-b border-zinc-800 px-3 py-2 text-[11px] leading-snug text-zinc-500">
+          <aside className="flex min-h-0 flex-col bg-zinc-50/80 dark:bg-zinc-900/30">
+            <p className="shrink-0 border-b border-zinc-200 px-3 py-2.5 text-xs leading-snug text-zinc-500 dark:border-zinc-800 dark:text-zinc-500">
               最新
-              <span className="block text-[10px] text-zinc-600">（最近 7 天创建）</span>
+              <span className="block text-[11px] text-zinc-400 dark:text-zinc-600">（最近 7 天创建）</span>
             </p>
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
+            <div className="min-h-0 flex-1 overflow-y-auto px-2.5 py-2.5">
               {recentWeek.length === 0 ? (
-                <p className="py-6 text-center text-[11px] text-zinc-600">暂无</p>
+                <p className="py-8 text-center text-xs text-zinc-400 dark:text-zinc-600">暂无</p>
               ) : (
                 <ul className="space-y-1.5">
                   {recentWeek.map((t) => (
@@ -305,28 +306,28 @@ export function GlobalPromptQuickDialog(props: GlobalPromptQuickDialogProps) {
                       <button
                         type="button"
                         onClick={() => pickTemplate(t)}
-                        className="w-full rounded border border-transparent px-1.5 py-1.5 text-left text-[11px] hover:border-zinc-700 hover:bg-zinc-900"
+                        className="w-full rounded-md border border-transparent px-2 py-2 text-left text-xs hover:border-zinc-300 hover:bg-zinc-100 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
                       >
-                        <span className="line-clamp-2 text-zinc-300">{t.title}</span>
+                        <span className="line-clamp-2 text-zinc-600 dark:text-zinc-300">{t.title}</span>
                       </button>
                     </li>
                   ))}
                 </ul>
               )}
             </div>
-            <p className="shrink-0 border-t border-zinc-800 px-2 py-1.5 text-center text-[10px] text-zinc-600">
+            <p className="shrink-0 border-t border-zinc-200 px-2 py-2 text-center text-[11px] text-zinc-400 dark:border-zinc-800 dark:text-zinc-600">
               {recentWeek.length === 0 ? "—" : "已显示全部"}
             </p>
           </aside>
         </div>
 
-        <DialogFooter className="shrink-0 flex-row flex-wrap items-center justify-between gap-2 border-t border-zinc-800 px-3 py-3 sm:justify-between">
+        <DialogFooter className="shrink-0 flex-row flex-wrap items-center justify-between gap-2 border-t border-zinc-200 px-4 py-4 sm:justify-between dark:border-zinc-800">
           <div className="flex flex-wrap gap-2">
             <Button
               type="button"
               variant="secondary"
               size="sm"
-              className="bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+              className="bg-zinc-100 text-zinc-700 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-700"
               asChild
             >
               <Link to="/prompts" target="_blank" rel="noreferrer">
@@ -351,7 +352,7 @@ export function GlobalPromptQuickDialog(props: GlobalPromptQuickDialogProps) {
           <Button
             type="button"
             size="sm"
-            className="bg-amber-800/90 text-amber-50 hover:bg-amber-700"
+            className="bg-amber-600 text-white hover:bg-amber-700 dark:bg-amber-800/90 dark:text-amber-50 dark:hover:bg-amber-700"
             onClick={handleMorePrompts}
           >
             <Sparkles className="mr-1 h-3.5 w-3.5" />

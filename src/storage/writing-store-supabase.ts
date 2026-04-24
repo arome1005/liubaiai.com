@@ -251,6 +251,36 @@ export class WritingStoreSupabase implements WritingStore {
     return parseWorkRow(data as Json);
   }
 
+  async getWorkIdByBookNo(bookNo: number): Promise<string | undefined> {
+    const uid = await maybeUid();
+    if (!uid) return undefined;
+    if (!Number.isFinite(bookNo) || bookNo <= 0) return undefined;
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from("work")
+      .select("id")
+      .eq("user_id", uid)
+      .eq("book_no", bookNo)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return (data as { id: string } | null)?.id;
+  }
+
+  private async allocateNextBookNo(uid: string): Promise<number> {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from("work")
+      .select("book_no")
+      .eq("user_id", uid)
+      .order("book_no", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const row = data as { book_no: number | null } | null;
+    const max = row?.book_no != null ? Number(row.book_no) : 0;
+    return (Number.isFinite(max) && max > 0 ? max : 0) + 1;
+  }
+
   async createWork(title: string, opts?: { tags?: string[]; description?: string; status?: Work["status"] }): Promise<Work> {
     const uid = await requireUid();
     const sb = getSupabase();
@@ -259,12 +289,14 @@ export class WritingStoreSupabase implements WritingStore {
     const tags = normalizeWorkTagList(opts?.tags);
     const desc = (opts?.description ?? "").trim();
     const status = opts?.status ?? "serializing";
+    const bookNo = await this.allocateNextBookNo(uid);
     const work: Work = {
       id,
       title: title.trim() || "未命名作品",
       createdAt: t,
       updatedAt: t,
       progressCursor: null,
+      bookNo,
       ...(desc ? { description: desc } : {}),
       ...(status ? { status } : {}),
       ...(tags?.length ? { tags } : {}),
@@ -287,7 +319,7 @@ export class WritingStoreSupabase implements WritingStore {
 
   async updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status" | "bookNo">>,
   ): Promise<void> {
     const uid = await requireUid();
     const sb = getSupabase();
@@ -298,6 +330,9 @@ export class WritingStoreSupabase implements WritingStore {
     if (patch.progressCursor !== undefined) row.progress_cursor = patch.progressCursor;
     if (patch.coverImage !== undefined) row.cover_image = patch.coverImage === "" ? null : patch.coverImage;
     if (patch.tags !== undefined) row.tags = normalizeWorkTagList(patch.tags) ?? [];
+    if (patch.bookNo !== undefined) {
+      row.book_no = typeof patch.bookNo === "number" && patch.bookNo > 0 ? patch.bookNo : null;
+    }
     const { error } = await sb.from("work").update(row as never).eq("id", id).eq("user_id", uid);
     if (error) throw new Error(error.message);
   }
@@ -446,7 +481,7 @@ export class WritingStoreSupabase implements WritingStore {
       >
     >,
     options?: UpdateChapterOptions,
-  ): Promise<void> {
+  ): Promise<number | undefined> {
     await requireUid();
     const sb = getSupabase();
     const t = now();
@@ -477,6 +512,10 @@ export class WritingStoreSupabase implements WritingStore {
     if (options?.expectedUpdatedAt !== undefined && (!data || data.length === 0)) {
       throw new ChapterSaveConflictError();
     }
+    const written =
+      (data as { updated_at: number }[] | null | undefined)?.[0]?.updated_at;
+    if (typeof written === "number" && Number.isFinite(written) && written > 0) return written;
+    return t;
   }
 
   async deleteChapter(id: string): Promise<void> {

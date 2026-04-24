@@ -12,13 +12,23 @@ import {
 } from "../components/ui/dropdown-menu";
 import { Input } from "../components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
-import { createChapter, createWork, deleteWork, listChapters, listWorks, updateChapter, updateWork } from "../db/repo";
+import {
+  backfillMissingWorkBookNumbers,
+  createChapter,
+  createWork,
+  deleteWork,
+  listChapters,
+  listWorks,
+  updateChapter,
+  updateWork,
+} from "../db/repo";
 import type { Work } from "../db/types";
 import { cn } from "../lib/utils";
 import { exportWorkAsMergedMarkdown } from "../storage/backup";
 import { importWorkFromFile } from "../storage/import-work";
 import { formatRelativeUpdateMs } from "../util/relativeTime";
 import { computeWorkLibraryStat, type WorkLibraryStat } from "../util/work-library-stat";
+import { workPathSegment } from "../util/work-url";
 
 const LS_LIBRARY_VIEW = "liubai:libraryViewMode";
 const LS_LIBRARY_SORT = "liubai:librarySort";
@@ -152,10 +162,19 @@ export function LibraryPage() {
   }, []);
 
   const refresh = useCallback(async () => {
+    await backfillMissingWorkBookNumbers();
     const list = await listWorks();
     setWorks(list);
     void loadStats(list);
   }, [loadStats]);
+
+  const workRouteSeg = useCallback(
+    (wid: string) => {
+      const w = works.find((x) => x.id === wid);
+      return w ? workPathSegment(w) : wid;
+    },
+    [works],
+  );
 
   useEffect(() => {
     void (async () => {
@@ -173,7 +192,7 @@ export function LibraryPage() {
       const w = await createWork(payload.title, { tags: payload.tags });
       setWorkModal({ open: false });
       await refresh();
-      window.location.href = `/work/${w.id}`;
+      window.location.href = `/work/${workPathSegment(w)}`;
       return;
     }
     await updateWork(workModal.work.id, {
@@ -206,7 +225,7 @@ export function LibraryPage() {
     }
     if (created) {
       void refresh().catch(() => {});
-      navigate(`/work/${created.id}`);
+      navigate(`/work/${workPathSegment(created)}`);
     }
   }
 
@@ -273,7 +292,7 @@ export function LibraryPage() {
     e.preventDefault();
     e.stopPropagation();
     const ch = await createChapter(workId);
-    navigate(`/work/${workId}?chapterId=${ch.id}`);
+    navigate(`/work/${workRouteSeg(workId)}?chapterId=${ch.id}`);
   }
 
   async function handleExportWork(workId: string, title: string, e: React.MouseEvent) {
@@ -358,7 +377,7 @@ export function LibraryPage() {
       const title = file.name.replace(/\.[^.]+$/, "") || "导入章节";
       const ch = await createChapter(wid, title);
       await updateChapter(ch.id, { content: text, title });
-      navigate(`/work/${wid}?chapterId=${ch.id}`);
+      navigate(`/work/${workRouteSeg(wid)}?chapterId=${ch.id}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "导入章节失败");
     }
@@ -737,7 +756,7 @@ export function LibraryPage() {
             const rel = formatRelativeUpdateMs(w.updatedAt);
             return (
               <li key={w.id} className="library-work-card-wrap">
-                <Link to={`/work/${w.id}`} className="library-work-card-main">
+                <Link to={`/work/${workPathSegment(w)}`} className="library-work-card-main">
                   <div className="library-work-card-cover">
                     {w.coverImage ? (
                       <img src={w.coverImage} alt="" className="library-work-card-cover-img" />
@@ -807,7 +826,7 @@ export function LibraryPage() {
               </Link>
                 <div className="library-work-card-toolbar">
                   <Button asChild variant="ghost" size="sm">
-                    <Link to={`/work/${w.id}`} title="进入写作页">
+                    <Link to={`/work/${workPathSegment(w)}`} title="进入写作页">
                       写作
               </Link>
                   </Button>

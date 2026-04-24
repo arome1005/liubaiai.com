@@ -28,6 +28,7 @@ import {
 import type { Chapter, ReferenceLibraryEntry, Work } from "../db/types"
 import { resolveDefaultChapterId } from "../util/resolve-default-chapter"
 import { workTagsToProfileText } from "../util/work-tags"
+import { workPathSegment } from "../util/work-url"
 import { writeAiPanelDraft } from "../util/ai-panel-draft"
 import { writeEditorHitHandoff } from "../util/editor-hit-handoff"
 import { writeWenceHandoff } from "../util/wence-handoff"
@@ -1184,6 +1185,12 @@ export default function V0TuiyanPage() {
       ? "示例·推演演示"
       : workTitle || (works.length ? "—" : "暂无作品")
 
+  const workLinkSeg = useMemo(() => {
+    if (!workId) return null
+    const w = works.find((x) => x.id === workId)
+    return w ? workPathSegment(w) : workId
+  }, [works, workId])
+
   const applySamplePreview = useCallback(() => {
     setUseSamplePreview(true)
     setOutline(cloneMockOutline())
@@ -1518,12 +1525,12 @@ export default function V0TuiyanPage() {
           offset: 0,
           source: { module: "tuiyan", title: "推演写回草稿", hint: selectedNode?.title ? `节点：${selectedNode.title}` : undefined },
         })
-        navigate(`/work/${workId}?hit=1&chapter=${encodeURIComponent(ch.id)}`)
+        navigate(`/work/${workLinkSeg ?? workId}?hit=1&chapter=${encodeURIComponent(ch.id)}`)
       } else {
-        navigate(`/work/${workId}?chapter=${encodeURIComponent(ch.id)}`)
+        navigate(`/work/${workLinkSeg ?? workId}?chapter=${encodeURIComponent(ch.id)}`)
       }
     },
-    [workId, navigate, resolveChapterForJump, appendAssistant, selectedNode?.title],
+    [workId, workLinkSeg, navigate, resolveChapterForJump, appendAssistant, selectedNode?.title],
   )
 
   const goWenceWithPrefill = useCallback(
@@ -2623,7 +2630,7 @@ export default function V0TuiyanPage() {
                     className="gap-2"
                     type="button"
                     disabled={!workId}
-                    onClick={() => workId && navigate(`/work/${workId}`)}
+                    onClick={() => workId && navigate(`/work/${workLinkSeg ?? workId}`)}
                   >
                     <ArrowRight className="h-4 w-4" />
                     进入生辉
@@ -3347,7 +3354,7 @@ export default function V0TuiyanPage() {
                         className="gap-2"
                         type="button"
                         disabled={!workId}
-                        onClick={() => workId && navigate(`/work/${workId}`)}
+                        onClick={() => workId && navigate(`/work/${workLinkSeg ?? workId}`)}
                       >
                         <ArrowRight className="h-4 w-4" />
                         进入生辉

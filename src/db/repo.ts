@@ -2,6 +2,7 @@
  * 对外 API：全部委托给存储抽象层 {@link getWritingStore}，
  * 便于 Web IndexedDB / 桌面 SQLite 切换时无需改页面逻辑。
  */
+import { isWorkBookNoRouteParam } from "../util/work-url";
 import { getWritingStore } from "../storage/instance";
 import { getDB } from "./database";
 import type { UpdateChapterOptions } from "../storage/writing-store";
@@ -58,9 +59,40 @@ export async function createWork(
 
 export async function updateWork(
   id: string,
-  patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status">>,
+  patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status" | "bookNo">>,
 ): Promise<void> {
   return getWritingStore().updateWork(id, patch);
+}
+
+/** 将路由参数解析为作品内部 id：纯数字按书号查，否则视为 UUID。 */
+export async function resolveWorkIdFromRouteParam(param: string | undefined): Promise<string | null> {
+  if (!param?.trim()) return null;
+  const p = param.trim();
+  if (isWorkBookNoRouteParam(p)) {
+    const id = await getWritingStore().getWorkIdByBookNo(Number(p));
+    return id ?? null;
+  }
+  return p;
+}
+
+/**
+ * 为没有书号的历史作品补号（同一用户内递增、不重复）；在作品列表加载时调用一次即可。
+ */
+export async function backfillMissingWorkBookNumbers(): Promise<void> {
+  const store = getWritingStore();
+  const list = await store.listWorks();
+  const need = list.filter((w) => w.bookNo == null || w.bookNo <= 0);
+  if (need.length === 0) return;
+  let next =
+    Math.max(0, ...list.map((w) => (typeof w.bookNo === "number" && w.bookNo > 0 ? w.bookNo : 0))) + 1;
+  for (const w of need.sort((a, b) => a.createdAt - b.createdAt)) {
+    try {
+      await store.updateWork(w.id, { bookNo: next });
+      next += 1;
+    } catch {
+      /* 唯一冲突等：跳过 */
+    }
+  }
 }
 
 export async function deleteWork(id: string): Promise<void> {
@@ -103,7 +135,7 @@ export async function updateChapter(
     >
   >,
   options?: UpdateChapterOptions,
-): Promise<void> {
+): Promise<number | undefined> {
   return getWritingStore().updateChapter(id, patch, options);
 }
 

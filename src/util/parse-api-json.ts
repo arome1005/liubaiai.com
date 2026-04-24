@@ -44,6 +44,27 @@ export function openAiChatTextFromJson(raw: unknown): string {
   return typeof c === "string" ? c : "";
 }
 
+/** OpenAI 兼容：非流式或流式 JSON 根上的 `usage.total_tokens` */
+export function openAiUsageTotalTokensFromJson(raw: unknown): number | null {
+  if (!raw || typeof raw !== "object") return null;
+  const u = (raw as { usage?: unknown }).usage;
+  if (!u || typeof u !== "object") return null;
+  const t = (u as { total_tokens?: unknown }).total_tokens;
+  if (typeof t === "number" && Number.isFinite(t) && t >= 0) return Math.floor(t);
+  return null;
+}
+
+/** OpenAI 兼容 SSE：单行 `data: {...}` 中的 `usage.total_tokens`（常与空 choices 同现） */
+export function openAiStreamUsageTotalFromDataLine(dataLine: string): number | null {
+  let obj: unknown;
+  try {
+    obj = JSON.parse(dataLine);
+  } catch {
+    return null;
+  }
+  return openAiUsageTotalTokensFromJson(obj);
+}
+
 /** OpenAI 兼容 SSE：`data: { "choices":[{ "delta":{ "content":"..." }}] }` */
 export function openAiStreamDataDeltaContent(dataLine: string): string {
   let obj: unknown;

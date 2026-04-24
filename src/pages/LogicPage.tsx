@@ -11,6 +11,7 @@ import type { WritingWorkStyleSlice } from "../ai/assemble-context";
 import { getWork, getWorkStyleCard, listChapters, listWorks } from "../db/repo";
 import type { Chapter, Work } from "../db/types";
 import { resolveDefaultChapterId } from "../util/resolve-default-chapter";
+import { workPathSegment } from "../util/work-url";
 import { workTagsToProfileText } from "../util/work-tags";
 import { AiInlineErrorNotice } from "../components/AiInlineErrorNotice";
 import { Button } from "../components/ui/button";
@@ -463,7 +464,11 @@ export function LogicPage() {
                 size="sm"
                 className="gap-2"
                 disabled={!workId}
-                onClick={() => workId && navigate(`/work/${workId}`)}
+                onClick={() => {
+                  if (!workId) return;
+                  const w = works.find((x) => x.id === workId);
+                  void navigate(`/work/${w ? workPathSegment(w) : workId}`);
+                }}
               >
                 <Edit3 className="h-4 w-4" />
                 去写作

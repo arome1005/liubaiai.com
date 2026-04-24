@@ -7,6 +7,8 @@ import {
   ollamaStreamLinePayload,
   openAiChatTextFromJson,
   openAiStreamDataDeltaContent,
+  openAiStreamUsageTotalFromDataLine,
+  openAiUsageTotalTokensFromJson,
 } from "../util/parse-api-json";
 
 function requireKey(cfg: AiProviderConfig) {
@@ -118,7 +120,10 @@ function openAiChatBody(
   if (cfg.id === "xiaomi") {
     body.max_completion_tokens = 8192;
   }
-  if (stream) body.stream = true;
+  if (stream) {
+    body.stream = true;
+    body.stream_options = { include_usage: true };
+  }
   return body;
 }
 
@@ -182,7 +187,9 @@ export async function generateWithProviderStream(args: {
     if (shouldUseRouterProtocol(config)) return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
     return generateGeminiStream(config, messages, onDelta, args.temperature, args.signal);
   }
-  return generateWithProvider({ provider, config, messages, temperature: args.temperature, signal: args.signal });
+  const r = await generateWithProvider({ provider, config, messages, temperature: args.temperature, signal: args.signal });
+  if (r.text) onDelta(r.text);
+  return r;
 }
 
 export async function embedWithProvider(args: {
@@ -254,7 +261,8 @@ async function generateOpenAI(
     throw new Error(`${cfg.label} 请求失败：${messageFromApiJsonBody(raw) || String(resp.status)}`);
   }
   const text = openAiChatTextFromJson(raw);
-  return { text, raw };
+  const usageTotalTokens = openAiUsageTotalTokensFromJson(raw) ?? undefined;
+  return { text, raw, usageTotalTokens };
 }
 
 async function generateOpenAIStream(
@@ -269,7 +277,13 @@ async function generateOpenAIStream(
   const payload =
     cfg.id === "xiaomi"
       ? openAiChatBody(cfg, messages, temperature, true)
-      : { model: cfg.model, messages, temperature, stream: true };
+      : {
+          model: cfg.model,
+          messages,
+          temperature: Math.min(2, Math.max(0, temperature)),
+          stream: true,
+          stream_options: { include_usage: true },
+        };
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
   const resp = await fetchOrThrowCorsHint(cfg.label, url, {
@@ -287,6 +301,7 @@ async function generateOpenAIStream(
   const dec = new TextDecoder("utf-8");
   let buf = "";
   let full = "";
+  let lastUsageTotal: number | undefined;
   // SSE: data: {...}\n\n
   while (true) {
     const { done, value } = await reader.read();
@@ -301,13 +316,15 @@ async function generateOpenAIStream(
         if (!t.startsWith("data:")) continue;
         const data = t.slice(5).trim();
         if (!data) continue;
+        const ut = openAiStreamUsageTotalFromDataLine(data);
+        if (ut != null) lastUsageTotal = ut;
         if (data === "[DONE]") {
           try {
             await reader.cancel();
           } catch {
             /* ignore */
           }
-          return { text: full };
+          return { text: full, usageTotalTokens: lastUsageTotal };
         }
         const delta = openAiStreamDataDeltaContent(data);
         if (delta) {
@@ -317,7 +334,7 @@ async function generateOpenAIStream(
       }
     }
   }
-  return { text: full };
+  return { text: full, usageTotalTokens: lastUsageTotal };
 }
 
 /** 与历史非流式请求一致：system 合并；其余角色拼成单条 user（多轮为 USER:/ASSISTANT: 前缀） */

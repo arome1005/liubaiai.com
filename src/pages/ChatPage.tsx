@@ -45,6 +45,7 @@ import {
   listWorks,
 } from "../db/repo";
 import type { Work } from "../db/types";
+import { workPathSegment } from "../util/work-url";
 import { workTagsToProfileText } from "../util/work-tags";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
@@ -708,7 +709,9 @@ export function ChatPage() {
       if (entryId) {
         const tab =
           type === "character" ? "characters" : type === "world" ? "world" : type === "glossary" ? "glossary" : "timeline";
-        navigate(`/work/${workId}/bible?tab=${tab}&entry=${encodeURIComponent(entryId)}`);
+        const w = await getWork(workId);
+        const seg = w ? workPathSegment(w) : workId;
+        navigate(`/work/${seg}/bible?tab=${tab}&entry=${encodeURIComponent(entryId)}`);
       }
     } catch (e) {
       setBibleWriteStatus({ msgId, ok: false, label: e instanceof Error ? e.message : "写入失败" });
@@ -746,9 +749,13 @@ export function ChatPage() {
         offset: 0,
         source: { module: "wence", title: "问策写回草稿", hint: "来自问策 AI 输出" },
       });
-      navigate(`/work/${workId}?hit=1&chapter=${encodeURIComponent(chapterId)}`);
+      const w = await getWork(workId);
+      const seg = w ? workPathSegment(w) : workId;
+      navigate(`/work/${seg}?hit=1&chapter=${encodeURIComponent(chapterId)}`);
     } else {
-      navigate(`/work/${workId}?chapter=${encodeURIComponent(chapterId)}`);
+      const w = await getWork(workId);
+      const seg = w ? workPathSegment(w) : workId;
+      navigate(`/work/${seg}?chapter=${encodeURIComponent(chapterId)}`);
     }
   }
 

@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   AlignLeft,
@@ -16,6 +16,8 @@ import {
 } from "lucide-react";
 import { cn } from "../lib/utils";
 import { readLastWorkId } from "../util/lastWorkId";
+import { getWork } from "../db/repo";
+import { workPathSegment } from "../util/work-url";
 
 type ToolDef = {
   id: string;
@@ -142,10 +144,10 @@ const TOOLS: ToolDef[] = [
   },
 ];
 
-function ToolCard(props: { tool: ToolDef; workId: string | null; onNeedLibrary: () => void }) {
-  const { tool, workId, onNeedLibrary } = props;
+function ToolCard(props: { tool: ToolDef; workPathSeg: string | null; onNeedLibrary: () => void }) {
+  const { tool, workPathSeg, onNeedLibrary } = props;
   const href =
-    tool.staticHref ?? (workId && tool.hrefWithWork ? tool.hrefWithWork.split("{workId}").join(workId) : null);
+    tool.staticHref ?? (workPathSeg && tool.hrefWithWork ? tool.hrefWithWork.split("{workId}").join(workPathSeg) : null);
 
   const className = cn(
     "group flex min-h-[9.5rem] flex-col items-center justify-start rounded-xl border border-dashed border-border/60 bg-card/40 px-4 py-5 text-center shadow-sm transition-colors",
@@ -184,7 +186,15 @@ function ToolCard(props: { tool: ToolDef; workId: string | null; onNeedLibrary: 
 
 export function LuobiHubPage() {
   const navigate = useNavigate();
-  const workId = readLastWorkId();
+  const lastId = readLastWorkId();
+  const [workPathSeg, setWorkPathSeg] = useState<string | null>(null);
+  useEffect(() => {
+    if (!lastId) {
+      setWorkPathSeg(null);
+      return;
+    }
+    void getWork(lastId).then((w) => setWorkPathSeg(w ? workPathSegment(w) : lastId));
+  }, [lastId]);
   const globalTools = useMemo(() => TOOLS.filter((t) => t.group === "global"), []);
   const workTools = useMemo(() => TOOLS.filter((t) => t.group === "work"), []);
   const generators = useMemo(() => TOOLS.filter((t) => t.group === "generator"), []);
@@ -212,7 +222,7 @@ export function LuobiHubPage() {
           aria-label="落笔入口：全局资产"
         >
           {globalTools.map((tool) => (
-            <ToolCard key={tool.id} tool={tool} workId={workId} onNeedLibrary={() => navigate("/library")} />
+            <ToolCard key={tool.id} tool={tool} workPathSeg={workPathSeg} onNeedLibrary={() => navigate("/library")} />
           ))}
         </nav>
       </section>
@@ -221,7 +231,7 @@ export function LuobiHubPage() {
         <div className="mb-3 flex items-baseline justify-between gap-3">
           <h2 className="text-base font-semibold tracking-tight text-foreground">本书资产（需要作品上下文）</h2>
           <p className="text-xs text-muted-foreground">
-            {workId ? "将编辑最近打开的那本书（可在作品库切换）。" : "需要先在作品库打开/新建一本书。"}
+            {lastId ? "将编辑最近打开的那本书（可在作品库切换）。" : "需要先在作品库打开/新建一本书。"}
           </p>
         </div>
         <nav
@@ -229,7 +239,7 @@ export function LuobiHubPage() {
           aria-label="落笔入口：本书资产"
         >
           {workTools.map((tool) => (
-            <ToolCard key={tool.id} tool={tool} workId={workId} onNeedLibrary={() => navigate("/library")} />
+            <ToolCard key={tool.id} tool={tool} workPathSeg={workPathSeg} onNeedLibrary={() => navigate("/library")} />
           ))}
         </nav>
       </section>
@@ -244,7 +254,7 @@ export function LuobiHubPage() {
           aria-label="落笔入口：生成器"
         >
           {generators.map((tool) => (
-            <ToolCard key={tool.id} tool={tool} workId={workId} onNeedLibrary={() => navigate("/library")} />
+            <ToolCard key={tool.id} tool={tool} workPathSeg={workPathSeg} onNeedLibrary={() => navigate("/library")} />
           ))}
         </nav>
       </section>

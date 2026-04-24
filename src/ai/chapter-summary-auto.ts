@@ -128,20 +128,21 @@ export function createAutoSummaryQueue(): AutoSummaryQueue {
         settings: loadAiSettings(),
         signal: currentAbort.signal,
       });
-      const t = Date.now();
-      await updateChapter(
+      const st = Date.now();
+      const newAt = await updateChapter(
         job.chapterId,
         {
           summary: text,
-          summaryUpdatedAt: t,
+          summaryUpdatedAt: st,
           summaryScopeFromOrder: job.chapterOrder,
           summaryScopeToOrder: job.chapterOrder,
         },
         { expectedUpdatedAt: job.expectedUpdatedAt },
       );
+      const at = newAt ?? st;
       const next = readState(job.workId, job.chapterId);
-      writeState(job.workId, job.chapterId, { ...next, lastSuccessAt: t, lastError: undefined, lastContentLen: content.length });
-      emit({ kind: "ok", chapterId: job.chapterId, at: t, summary: text });
+      writeState(job.workId, job.chapterId, { ...next, lastSuccessAt: at, lastError: undefined, lastContentLen: content.length });
+      emit({ kind: "ok", chapterId: job.chapterId, at, summary: text });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const next = readState(job.workId, job.chapterId);

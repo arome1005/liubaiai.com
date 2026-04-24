@@ -15,11 +15,13 @@ import {
   PenLine,
   Plus,
   Search,
+  Scissors,
   Sparkles,
   ScrollText,
   Star,
   Trash2,
   Type,
+  Tag,
   User,
   Users,
   X,
@@ -39,6 +41,7 @@ import {
 import {
   addGlobalPromptTemplate,
   deleteGlobalPromptTemplate,
+  getWork,
   listApprovedPromptTemplates,
   listGlobalPromptTemplates,
   reorderGlobalPromptTemplates,
@@ -55,6 +58,7 @@ import {
 import { getSupabase } from "../lib/supabase";
 import { PersonalPromptCard } from "../components/prompts/PersonalPromptCard";
 import { readLastWorkId } from "../util/lastWorkId";
+import { workPathSegment } from "../util/work-url";
 import { bumpPromptHeat, getPromptHeat } from "../util/prompt-usage-heat";
 
 // ── 收藏持久化 ────────────────────────────────────────────────────────────────
@@ -85,6 +89,8 @@ const TYPE_ICONS: Record<PromptType, React.ReactNode> = {
   opening:        <Zap        className="h-3.5 w-3.5" strokeWidth={1.6} />,
   character:      <Users      className="h-3.5 w-3.5" strokeWidth={1.6} />,
   worldbuilding:  <Sparkles   className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  book_split:     <Scissors   className="h-3.5 w-3.5" strokeWidth={1.6} />,
+  universal_entry:  <Tag        className="h-3.5 w-3.5" strokeWidth={1.6} />,
   article_summary: <ScrollText className="h-3.5 w-3.5" strokeWidth={1.6} />,
 };
 
@@ -97,6 +103,8 @@ const TYPE_COLOR: Record<PromptType, string> = {
   opening:        "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
   character:      "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
   worldbuilding:  "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300",
+  book_split:     "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200",
+  universal_entry:  "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-200",
   article_summary: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200",
 };
 
@@ -593,12 +601,13 @@ export function PromptsPage() {
 
   // ── 装配 ────────────────────────────────────────────────────────────────────
 
-  const handleAssemble = (item: GlobalPromptTemplate) => {
+  const handleAssemble = async (item: GlobalPromptTemplate) => {
     bumpPromptHeat(item.id);
     setHeatTick((x) => x + 1);
     const workId = readLastWorkId();
     if (!workId) { alert("尚未打开过作品，请先去作品库选择或新建作品。"); return; }
-    navigate(`/work/${workId}`, { state: { applyUserHint: item.body } });
+    const w = await getWork(workId);
+    navigate(`/work/${w ? workPathSegment(w) : workId}`, { state: { applyUserHint: item.body } });
   };
 
   // ── 计数徽标 ────────────────────────────────────────────────────────────────

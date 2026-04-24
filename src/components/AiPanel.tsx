@@ -1900,7 +1900,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
       />
 
       <label className="ai-panel-field">
-        <span className="small muted">本章细纲 / 剧情（手动粘贴）</span>
+        <span className="small muted">本章细纲 / 剧情构思</span>
         <textarea
           name="chapterOutlinePaste"
           value={chapterOutlinePaste}

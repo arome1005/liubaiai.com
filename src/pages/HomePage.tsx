@@ -5,9 +5,10 @@ import { authMe, type AuthUser } from "../api/auth";
 import { postTestSave } from "../api/testSave";
 import { Button } from "../components/ui/button";
 import { Card, CardContent } from "../components/ui/card";
-import { getWork, listWorks } from "../db/repo";
+import { backfillMissingWorkBookNumbers, getWork, listWorks } from "../db/repo";
 import type { Work } from "../db/types";
 import { formatRelativeUpdateMs } from "../util/relativeTime";
+import { workPathSegment } from "../util/work-url";
 import { liuguangQuickCaptureShortcutLabel } from "../util/keyboardHints";
 
 const LS_LAST_WORK = "liubai:lastWorkId";
@@ -52,6 +53,7 @@ export function HomePage() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      await backfillMissingWorkBookNumbers();
       const list = await listWorks();
       if (!cancelled) setWorks(list.slice(0, 6));
     })();
@@ -139,13 +141,13 @@ export function HomePage() {
           </p>
           <div className="home-resume-actions">
             <Button asChild variant="default">
-              <Link to={`/work/${resumeWork.id}`}>进入写作</Link>
+              <Link to={`/work/${workPathSegment(resumeWork)}`}>进入写作</Link>
             </Button>
             <Button asChild variant="ghost" size="sm">
-              <Link to={`/work/${resumeWork.id}/summary`}>概要</Link>
+              <Link to={`/work/${workPathSegment(resumeWork)}/summary`}>概要</Link>
             </Button>
             <Button asChild variant="ghost" size="sm">
-              <Link to={`/work/${resumeWork.id}/bible`}>锦囊</Link>
+              <Link to={`/work/${workPathSegment(resumeWork)}/bible`}>锦囊</Link>
             </Button>
             <Button asChild variant="ghost" size="sm">
               <Link to="/library">作品库</Link>
@@ -233,7 +235,7 @@ export function HomePage() {
             {works.map((w) => (
               <li key={w.id}>
                 <Link
-                  to={`/work/${w.id}`}
+                  to={`/work/${workPathSegment(w)}`}
                   className="home-recent-card"
                   onClick={() => persistLastWork(w.id)}
                 >

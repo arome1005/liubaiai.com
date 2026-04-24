@@ -98,7 +98,7 @@ export class WritingStoreHybrid implements WritingStore {
   }
   async updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status" | "bookNo">>,
   ): Promise<void> {
     return this.remote.updateWork(id, patch);
   }
@@ -139,8 +139,11 @@ export class WritingStoreHybrid implements WritingStore {
       >
     >,
     options?: UpdateChapterOptions,
-  ): Promise<void> {
+  ): Promise<number | undefined> {
     return this.remote.updateChapter(id, patch, options);
+  }
+  async getWorkIdByBookNo(bookNo: number): Promise<string | undefined> {
+    return this.remote.getWorkIdByBookNo(bookNo);
   }
   async deleteChapter(id: string): Promise<void> {
     await this.remote.deleteChapter(id);

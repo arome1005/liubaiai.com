@@ -52,7 +52,7 @@ export interface WritingStore {
   createWork(title: string, opts?: { tags?: string[]; description?: string; status?: Work["status"] }): Promise<Work>;
   updateWork(
     id: string,
-    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status">>,
+    patch: Partial<Pick<Work, "title" | "progressCursor" | "coverImage" | "tags" | "description" | "status" | "bookNo">>,
   ): Promise<void>;
   deleteWork(id: string): Promise<void>;
 
@@ -63,6 +63,9 @@ export interface WritingStore {
 
   listChapters(workId: string): Promise<Chapter[]>;
   createChapter(workId: string, title?: string, volumeId?: string): Promise<Chapter>;
+  /**
+   * @returns 写入后的 `updatedAt`（毫秒时间戳），章不存在时 `undefined`（仅本地 IndexedDB 可能无操作）
+   */
   updateChapter(
     id: string,
     patch: Partial<
@@ -72,7 +75,9 @@ export interface WritingStore {
       >
     >,
     options?: UpdateChapterOptions,
-  ): Promise<void>;
+  ): Promise<number | undefined>;
+  /** 按书号查内部作品 id（同用户下唯一） */
+  getWorkIdByBookNo(bookNo: number): Promise<string | undefined>;
   deleteChapter(id: string): Promise<void>;
   reorderChapters(workId: string, orderedIds: string[]): Promise<void>;
 

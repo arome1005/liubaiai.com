@@ -1,7 +1,7 @@
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
-import { getWork, listChapters } from "../db/repo";
+import { getWork, listChapters, resolveWorkIdFromRouteParam } from "../db/repo";
 import { useAuthUserState } from "../hooks/useAuthUserState";
 import { GlobalCommandPalette } from "./GlobalCommandPalette";
 import { shortcutModifierSymbol } from "../util/keyboardHints";
@@ -9,6 +9,7 @@ import { persistThemePreference } from "../theme";
 import { wordCount } from "../util/wordCount";
 import { resolveDefaultChapterId } from "../util/resolve-default-chapter";
 import { isWorkBibleOrSummaryPath, workIdFromPath } from "../util/workPath";
+import { workPathSegment } from "../util/work-url";
 import type { Chapter, Work } from "../db/types";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -267,6 +268,11 @@ export function AppShell() {
   const [ctxWork, setCtxWork] = useState<Work | null>(null);
   const [ctxChapters, setCtxChapters] = useState<Chapter[]>([]);
   const [ctxLoading, setCtxLoading] = useState(false);
+  const commandPalettePathSeg = useMemo(() => {
+    if (ctxWork) return workPathSegment(ctxWork);
+    if (workIdInPath) return workIdInPath;
+    return workId;
+  }, [ctxWork, workIdInPath, workId]);
   useEffect(() => {
     if (!workId) {
       queueMicrotask(() => {
@@ -279,8 +285,9 @@ export function AppShell() {
     let cancelled = false;
     queueMicrotask(() => setCtxLoading(true));
     void (async () => {
-      const w = await getWork(workId);
-      const ch = await listChapters(workId);
+      const internalId = (await resolveWorkIdFromRouteParam(workId)) ?? workId;
+      const w = await getWork(internalId);
+      const ch = await listChapters(internalId);
       if (cancelled) return;
       setCtxWork(w ?? null);
       setCtxChapters(ch);
@@ -297,11 +304,14 @@ export function AppShell() {
 
   useEffect(() => {
     if (!workIdInPath) return;
-    try {
-      localStorage.setItem(LS_LAST_WORK, workIdInPath);
-    } catch {
-      /* ignore */
-    }
+    void (async () => {
+      const id = (await resolveWorkIdFromRouteParam(workIdInPath)) ?? workIdInPath;
+      try {
+        localStorage.setItem(LS_LAST_WORK, id);
+      } catch {
+        /* ignore */
+      }
+    })();
   }, [workIdInPath]);
 
   const hubPaths = useMemo(
@@ -360,7 +370,7 @@ export function AppShell() {
   const ctxChapterMeta = useMemo(() => {
     if (!workId || !ctxWork) return null;
     const sorted = [...ctxChapters].sort((a, b) => a.order - b.order);
-    const defId = resolveDefaultChapterId(workId, ctxChapters, ctxWork);
+    const defId = resolveDefaultChapterId(ctxWork.id, ctxChapters, ctxWork);
     const cur = defId ? sorted.find((c) => c.id === defId) : sorted[0];
     const idx = cur ? sorted.findIndex((c) => c.id === cur.id) + 1 : 0;
     const totalWords = sorted.reduce((s, c) => s + (c.wordCountCache ?? wordCount(c.content)), 0);
@@ -377,7 +387,12 @@ export function AppShell() {
     return (
       <div className="app-shell app-shell--auth-fullbleed">
         <Outlet />
-        <GlobalCommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} workId={workId} />
+        <GlobalCommandPalette
+          open={commandOpen}
+          onClose={() => setCommandOpen(false)}
+          workId={ctxWork?.id ?? null}
+          workPathSeg={commandPalettePathSeg}
+        />
       </div>
     );
   }
@@ -505,8 +520,8 @@ export function AppShell() {
                         <Link
                           to={
                             ctxChapterMeta.cur
-                              ? `/work/${workId}?chapter=${encodeURIComponent(ctxChapterMeta.cur.id)}`
-                              : `/work/${workId}`
+                              ? `/work/${workPathSegment(ctxWork)}?chapter=${encodeURIComponent(ctxChapterMeta.cur.id)}`
+                              : `/work/${workPathSegment(ctxWork)}`
                           }
                           onClick={() => setBookMenuOpen(false)}
                         >
@@ -519,7 +534,7 @@ export function AppShell() {
                         </Link>
                       </DropdownMenuItem>
                       <DropdownMenuItem asChild className="gap-2 rounded-lg">
-                        <Link to="/logic" state={{ preferWorkId: workId }} onClick={() => setBookMenuOpen(false)}>
+                        <Link to="/logic" state={{ preferWorkId: ctxWork?.id }} onClick={() => setBookMenuOpen(false)}>
                           <IconSparkles className="h-4 w-4 text-amber-500" />
                           <div className="min-w-0 flex-1">
                             <p className="font-medium">查看大纲</p>
@@ -716,15 +731,15 @@ export function AppShell() {
                     </div>
                     <div className="rounded-lg bg-background/60 p-3">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs text-muted-foreground">每日免费拆书</span>
+                        <span className="text-xs text-muted-foreground">每日免费重塑</span>
                         <Tooltip>
                           <TooltipTrigger asChild>
-                            <button type="button" className="text-muted-foreground/70 hover:text-muted-foreground" aria-label="每日免费拆书说明">
+                            <button type="button" className="text-muted-foreground/70 hover:text-muted-foreground" aria-label="每日免费重塑说明">
                               ?
                             </button>
                           </TooltipTrigger>
                           <TooltipContent side="top" sideOffset={6}>
-                            今日剩余 / 今日总量；用于拆书/提炼等免费额度。
+                            今日剩余 / 今日总量；用于重塑/提炼等免费额度。
                           </TooltipContent>
                         </Tooltip>
                       </div>
@@ -747,7 +762,7 @@ export function AppShell() {
                         <span className="font-medium text-foreground">0</span>
                       </li>
                       <li className="flex items-center justify-between gap-2">
-                        <span>今日免费拆书剩余</span>
+                        <span>今日免费重塑剩余</span>
                         <span className="font-medium text-foreground">0</span>
                       </li>
                       <li className="flex items-center justify-between gap-2">
@@ -830,7 +845,12 @@ export function AppShell() {
           </div>
         </main>
       </div>
-      <GlobalCommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} workId={workId} />
+      <GlobalCommandPalette
+        open={commandOpen}
+        onClose={() => setCommandOpen(false)}
+        workId={ctxWork?.id ?? null}
+        workPathSeg={commandPalettePathSeg}
+      />
     </div>
   );
 }
