@@ -22,6 +22,8 @@ import {
   getOwnerModel,
   setOwnerModel,
   probeSidecar,
+  readSidecarDailyTokens,
+  calcSidecarEquivCostUsd,
 } from "../util/owner-mode";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { cn } from "../lib/utils";
@@ -32,6 +34,7 @@ export function OwnerModeSection({ currentEmail }: { currentEmail: string | null
   const isLoggedIn = useMemo(() => !!(currentEmail && currentEmail.trim()), [currentEmail]);
 
   const [open, setOpen] = useState(false);
+  const [usageSnap, setUsageSnap] = useState(() => readSidecarDailyTokens());
   const [pwOpen, setPwOpen] = useState(false);
   const [pwInput, setPwInput] = useState("");
   const [pwError, setPwError] = useState(false);
@@ -198,6 +201,7 @@ export function OwnerModeSection({ currentEmail }: { currentEmail: string | null
                 setPwOpen(false);
                 setPwInput("");
                 setPwError(false);
+                setUsageSnap(readSidecarDailyTokens());
                 setOpen(true);
               } else {
                 setPwError(true);
@@ -246,6 +250,47 @@ export function OwnerModeSection({ currentEmail }: { currentEmail: string | null
             让 AI 调用走 Claude 订阅而不是 API 计费。平台<strong>不托管</strong>任何第三方账号或密钥；
             所有凭据仅保存在本机浏览器 localStorage 中。
           </p>
+
+          {/* 今日用量卡 */}
+          {(() => {
+            const { inputTokens, outputTokens, total, calls } = usageSnap;
+            const costUsd = calcSidecarEquivCostUsd(inputTokens, outputTokens, model);
+            return (
+              <div className="rounded-lg border border-border/30 bg-background/20 px-4 py-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-medium text-muted-foreground">今日用量（粗估）</span>
+                  <button
+                    type="button"
+                    className="text-[10px] text-muted-foreground/50 hover:text-muted-foreground transition-colors"
+                    onClick={() => setUsageSnap(readSidecarDailyTokens())}
+                  >
+                    刷新
+                  </button>
+                </div>
+                {total === 0 ? (
+                  <p className="text-xs text-muted-foreground/50">今日暂无调用记录。</p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                    <span className="text-muted-foreground">输入</span>
+                    <span className="tabular-nums text-right">{inputTokens.toLocaleString()} tokens</span>
+                    <span className="text-muted-foreground">输出</span>
+                    <span className="tabular-nums text-right">{outputTokens.toLocaleString()} tokens</span>
+                    <span className="text-muted-foreground">合计</span>
+                    <span className="tabular-nums text-right font-medium">{total.toLocaleString()} tokens</span>
+                    <span className="text-muted-foreground">调用次数</span>
+                    <span className="tabular-nums text-right">{calls} 次</span>
+                    <span className="text-muted-foreground">等效 API 参考价</span>
+                    <span className="tabular-nums text-right text-amber-400">
+                      ≈ ${costUsd.toFixed(4)}
+                    </span>
+                  </div>
+                )}
+                <p className="text-[10px] text-muted-foreground/40 leading-relaxed">
+                  粗估值，非计费凭证。基于 Claude 公开定价换算（{model === "opus" ? "Opus $15/$75 /M" : model === "haiku" ? "Haiku $0.8/$4 /M" : "Sonnet $3/$15 /M"}，输入/输出）。
+                </p>
+              </div>
+            );
+          })()}
 
           {/* 总开关 */}
           <div className="flex items-center justify-between rounded-lg border border-border/30 bg-background/30 px-4 py-3">

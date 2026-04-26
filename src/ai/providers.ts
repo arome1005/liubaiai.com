@@ -1,5 +1,7 @@
 import { apiUrl } from "../api/base";
 import type { AiChatMessage, AiGenerateResult, AiProviderConfig, AiProviderId } from "./types";
+import { addSidecarDailyTokens } from "../util/owner-mode";
+import { approxRoughTokenCount } from "./approx-tokens";
 import {
   anthropicMessageTextFromJson,
   geminiGenerateTextFromJson,
@@ -748,10 +750,10 @@ async function generateClaudeCodeLocal(
   signal?: AbortSignal,
 ): Promise<AiGenerateResult> {
   let acc = "";
-  await generateClaudeCodeLocalStream(cfg, messages, (d) => {
+  const result = await generateClaudeCodeLocalStream(cfg, messages, (d) => {
     acc += d;
   }, signal);
-  return { text: acc };
+  return result;
 }
 
 async function generateClaudeCodeLocalStream(
@@ -764,6 +766,8 @@ async function generateClaudeCodeLocalStream(
   if (!token) {
     throw new Error("Claude Code 本地直连：请先在「设置 → Owner 模式」填入 sidecar Token");
   }
+  // 估算输入 tokens（在发送前计算）
+  const inputApprox = messages.reduce((sum, m) => sum + approxRoughTokenCount(m.content), 0);
   const url = `${resolveSidecarBaseUrl(cfg)}/v1/stream`;
   const body = buildClaudeCodeLocalBody(messages, cfg.model || "sonnet");
 
@@ -813,7 +817,11 @@ async function generateClaudeCodeLocalStream(
         if (!dataLine) continue;
         const data = dataLine.slice(5).trim();
         if (!data) continue;
-        if (data === "[DONE]") return { text: acc };
+        if (data === "[DONE]") {
+          const outputApprox = approxRoughTokenCount(acc);
+          addSidecarDailyTokens(inputApprox, outputApprox);
+          return { text: acc, usageTotalTokens: inputApprox + outputApprox };
+        }
         let ev: { type?: string; text?: string; message?: string };
         try {
           ev = JSON.parse(data) as typeof ev;
@@ -826,7 +834,9 @@ async function generateClaudeCodeLocalStream(
         } else if (ev.type === "error") {
           throw new Error(`Claude Code 本地 sidecar 错误：${ev.message ?? "unknown"}`);
         } else if (ev.type === "done") {
-          return { text: acc };
+          const outputApprox = approxRoughTokenCount(acc);
+          addSidecarDailyTokens(inputApprox, outputApprox);
+          return { text: acc, usageTotalTokens: inputApprox + outputApprox };
         }
       }
     }
@@ -837,5 +847,8 @@ async function generateClaudeCodeLocalStream(
       /* ignore */
     }
   }
-  return { text: acc };
+  // stream 正常结束但未收到 done 事件（兜底）
+  const outputApprox = approxRoughTokenCount(acc);
+  if (acc) addSidecarDailyTokens(inputApprox, outputApprox);
+  return { text: acc, usageTotalTokens: inputApprox + outputApprox };
 }

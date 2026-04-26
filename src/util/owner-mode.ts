@@ -136,6 +136,75 @@ export async function probeSidecar(force = false): Promise<boolean> {
   }
 }
 
+/* ────────────────────────── 高级接入 · 日用量统计 ────────────────────────── */
+
+const LS_SIDECAR_DAILY_KEY_PREFIX = "liubai:sidecarDailyTokens:";
+
+interface SidecarDailyEntry {
+  date: string;
+  inputTokens: number;
+  outputTokens: number;
+  calls: number;
+}
+
+function todayDateStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** 记录一次 sidecar 调用的估算 token 用量 */
+export function addSidecarDailyTokens(inputTokens: number, outputTokens: number): void {
+  const ls = safeLs();
+  if (!ls) return;
+  const key = `${LS_SIDECAR_DAILY_KEY_PREFIX}${todayDateStr()}`;
+  let entry: SidecarDailyEntry = { date: todayDateStr(), inputTokens: 0, outputTokens: 0, calls: 0 };
+  try {
+    const raw = ls.getItem(key);
+    if (raw) entry = JSON.parse(raw) as SidecarDailyEntry;
+  } catch { /* ignore */ }
+  entry.inputTokens = (entry.inputTokens ?? 0) + Math.max(0, inputTokens);
+  entry.outputTokens = (entry.outputTokens ?? 0) + Math.max(0, outputTokens);
+  entry.calls = (entry.calls ?? 0) + 1;
+  try { ls.setItem(key, JSON.stringify(entry)); } catch { /* ignore */ }
+}
+
+/** 读取今日 sidecar 估算用量 */
+export function readSidecarDailyTokens(): { inputTokens: number; outputTokens: number; total: number; calls: number } {
+  const ls = safeLs();
+  if (!ls) return { inputTokens: 0, outputTokens: 0, total: 0, calls: 0 };
+  try {
+    const raw = ls.getItem(`${LS_SIDECAR_DAILY_KEY_PREFIX}${todayDateStr()}`);
+    if (!raw) return { inputTokens: 0, outputTokens: 0, total: 0, calls: 0 };
+    const e = JSON.parse(raw) as SidecarDailyEntry;
+    const inp = e.inputTokens ?? 0;
+    const out = e.outputTokens ?? 0;
+    return { inputTokens: inp, outputTokens: out, total: inp + out, calls: e.calls ?? 0 };
+  } catch {
+    return { inputTokens: 0, outputTokens: 0, total: 0, calls: 0 };
+  }
+}
+
+/* ── 等效 API 参考价（美元，仅供参考） ─────────────────────────── */
+
+const SIDECAR_PRICING: Record<string, { input: number; output: number }> = {
+  sonnet:  { input: 3.0,  output: 15.0  },
+  opus:    { input: 15.0, output: 75.0  },
+  haiku:   { input: 0.8,  output: 4.0   },
+};
+
+/**
+ * 计算等效 API 参考成本（美元）。
+ * 基于 Claude 公开定价，仅供参考，不是计费凭证。
+ */
+export function calcSidecarEquivCostUsd(
+  inputTokens: number,
+  outputTokens: number,
+  model = "sonnet",
+): number {
+  const p = SIDECAR_PRICING[model] ?? SIDECAR_PRICING.sonnet;
+  return (inputTokens * p.input + outputTokens * p.output) / 1_000_000;
+}
+
 /* ────────────────────────── 综合判定 ────────────────────────── */
 
 /**
