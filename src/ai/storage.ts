@@ -90,6 +90,9 @@ export function defaultAiSettings(): AiSettings {
     injectConfirmCloudBible: true,
     toneDriftHintEnabled: true,
     highRiskAlwaysConfirm: true,
+    highRiskConfirmMode: "confirm",
+    numericConfirm: true,
+    operationCooldown: true,
     aiSessionApproxTokenBudget: 0,
     dailyTokenBudget: 0,
     singleCallWarnTokens: 0,
@@ -172,6 +175,12 @@ export function loadAiSettings(): AiSettings {
         typeof px.toneDriftHintEnabled === "boolean" ? px.toneDriftHintEnabled : d.toneDriftHintEnabled,
       highRiskAlwaysConfirm:
         typeof px.highRiskAlwaysConfirm === "boolean" ? px.highRiskAlwaysConfirm : d.highRiskAlwaysConfirm,
+      highRiskConfirmMode:
+        px.highRiskConfirmMode === "off" || px.highRiskConfirmMode === "warn" || px.highRiskConfirmMode === "confirm"
+          ? px.highRiskConfirmMode
+          : d.highRiskConfirmMode,
+      numericConfirm: typeof px.numericConfirm === "boolean" ? px.numericConfirm : d.numericConfirm,
+      operationCooldown: typeof px.operationCooldown === "boolean" ? px.operationCooldown : d.operationCooldown,
       aiSessionApproxTokenBudget:
         typeof px.aiSessionApproxTokenBudget === "number" && Number.isFinite(px.aiSessionApproxTokenBudget)
           ? Math.max(0, Math.min(2_000_000, Math.floor(px.aiSessionApproxTokenBudget)))

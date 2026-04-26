@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -61,6 +61,18 @@ import {
   type EditorPaperTint,
   type EditorTypographyState,
 } from "../util/editor-typography";
+import {
+  ACCENT_COLORS,
+  persistAndApplyAccentColor,
+  readAccentColor,
+  type AccentColorId,
+} from "../util/accent-color";
+import {
+  applyEditorExperience,
+  loadEditorExperience,
+  saveEditorExperience,
+  type EditorExperienceState,
+} from "../util/editor-experience";
 import {
   defaultLiuguangQuickCaptureHotkey,
   defaultZenToggleHotkey,
@@ -298,6 +310,8 @@ export function SettingsPage() {
   const [refMaintainPct, setRefMaintainPct] = useState<number | null>(null);
   const [refMaintainLabel, setRefMaintainLabel] = useState<string | null>(null);
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings());
+  const [accentColor, setAccentColor] = useState<AccentColorId>(() => readAccentColor());
+  const [editorExp, setEditorExp] = useState<EditorExperienceState>(() => loadEditorExperience());
   const [backendOpen, setBackendOpen] = useState(false);
   const [fictionAck, setFictionAck] = useState(() => readFictionCreationAcknowledged());
   const [backupReminderOn, setBackupReminderOn] = useState(() => readBackupReminderEnabled());
@@ -358,6 +372,15 @@ export function SettingsPage() {
       scrollAppMainToTop();
     });
   }
+
+  const updateEditorExp = useCallback((patch: Partial<EditorExperienceState>) => {
+    setEditorExp((prev) => {
+      const next = { ...prev, ...patch };
+      saveEditorExperience(next);
+      applyEditorExperience(next);
+      return next;
+    });
+  }, []);
 
   function refreshStorageQuota() {
     if (!navigator.storage?.estimate) {
@@ -555,26 +578,42 @@ export function SettingsPage() {
           <SHead title="主题" sub="「跟随系统」可随日出日落自动切换，系统切换后本页同步更新。" />
           <div className="grid grid-cols-3 gap-3">
             {([
-              { value: "light", label: "浅色", Icon: Sun },
-              { value: "dark",  label: "深色", Icon: Moon },
-              { value: "system",label: "跟随系统", Icon: Monitor },
+              { value: "light",  label: "浅色",   Icon: Sun },
+              { value: "dark",   label: "深色",   Icon: Moon },
+              { value: "system", label: "跟随系统", Icon: Monitor },
             ] as const).map(({ value, label, Icon }) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setTheme(value as "light" | "dark" | "system")}
-                className={cn(
-                  "flex flex-col items-center gap-2 rounded-xl border-2 px-3 py-4 transition-all",
-                  theme === value
-                    ? "border-primary bg-primary/8 text-primary"
-                    : "border-border/30 bg-background/20 text-muted-foreground hover:border-border/60 hover:bg-background/40",
-                )}
-              >
+              <button key={value} type="button" onClick={() => setTheme(value)}
+                className={cn("flex flex-col items-center gap-2 rounded-xl border-2 px-3 py-4 transition-all",
+                  theme === value ? "border-primary bg-primary/8 text-primary" : "border-border/30 bg-background/20 text-muted-foreground hover:border-border/60 hover:bg-background/40")}>
                 <Icon className="h-5 w-5" />
                 <span className="text-xs font-medium">{label}</span>
               </button>
             ))}
           </div>
+        </SCard>
+
+        {/* 强调色 */}
+        <SCard>
+          <SHead title="强调色" sub="全局主色调，影响按钮、链接、高亮等交互元素。" />
+          <div className="flex flex-wrap gap-3">
+            {ACCENT_COLORS.map((c) => (
+              <button key={c.id} type="button" title={c.label}
+                onClick={() => { persistAndApplyAccentColor(c.id); setAccentColor(c.id); }}
+                className={cn("flex items-center gap-2 rounded-full border-2 px-3 py-1.5 text-xs font-medium transition-all",
+                  accentColor === c.id ? "border-primary text-foreground" : "border-transparent text-muted-foreground hover:border-border/40")}>
+                <span className={cn("h-3.5 w-3.5 rounded-full", c.tailwindClass)} />
+                {c.label}
+              </button>
+            ))}
+          </div>
+        </SCard>
+
+        {/* 布局 */}
+        <SCard>
+          <SHead title="布局" />
+          <SRow iconBg="bg-slate-500" icon={<Monitor className="h-4 w-4" />} title="紧凑模式" desc="减少页面间距，在较小屏幕上显示更多内容。">
+            <Toggle checked={editorExp.compactMode} onChange={(v) => updateEditorExp({ compactMode: v })} />
+          </SRow>
         </SCard>
       </div>
                     );
@@ -645,6 +684,22 @@ export function SettingsPage() {
                 {l}
               </button>
             ))}
+          </div>
+        </SCard>
+
+        {/* 编辑体验 */}
+        <SCard>
+          <SHead title="编辑体验" />
+          <div className="space-y-2">
+            <SRow iconBg="bg-blue-500" icon={<PenTool className="h-4 w-4" />} title="打字机模式" desc="当前行保持在屏幕垂直中央，减少视线移动。">
+              <Toggle checked={editorExp.typewriterMode} onChange={(v) => updateEditorExp({ typewriterMode: v })} />
+            </SRow>
+            <SRow iconBg="bg-indigo-500" icon={<Moon className="h-4 w-4" />} title="专注模式" desc="淡化非当前段落，减少写作干扰。">
+              <Toggle checked={editorExp.focusMode} onChange={(v) => updateEditorExp({ focusMode: v })} />
+            </SRow>
+            <SRow iconBg="bg-emerald-500" icon={<Zap className="h-4 w-4" />} title="显示字数统计" desc="在写作页底部实时显示当前字数。">
+              <Toggle checked={editorExp.showWordCount} onChange={(v) => updateEditorExp({ showWordCount: v })} />
+            </SRow>
           </div>
         </SCard>
 
@@ -994,11 +1049,47 @@ export function SettingsPage() {
           </div>
         </SCard>
 
-        {/* 高危操作始终确认 */}
+        {/* 超阈值验证级别 */}
         <SCard>
-          <SRow iconBg="bg-amber-500" icon={<AlertTriangle className="h-4 w-4" />} title="高危操作始终确认" desc="整卷/多章/批量操作发起前弹出「清单 + 数字确认」，避免误触与高额消耗。建议开启。">
-            <Toggle checked={!!aiSettings.highRiskAlwaysConfirm} onChange={(on) => { const next={...aiSettings,highRiskAlwaysConfirm:on}; setAiSettings(next); try{saveAiSettings(next);setMsg("已保存。");}catch{setMsg("保存失败。");} }} />
-          </SRow>
+          <SHead title="超阈值强制验证" sub="高危操作（整卷/多章/批量）发起前的确认方式。" badge={<span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500">安全保护</span>} />
+          <div className="space-y-2">
+            {([
+              { value: "off",     label: "关闭",     desc: "不进行任何验证提示" },
+              { value: "warn",    label: "仅提示",   desc: "显示消耗预估，用户可选择继续" },
+              { value: "confirm", label: "强制确认", desc: "必须通过清单确认才能继续执行" },
+            ] as const).map(({ value, label, desc }) => {
+              const current = aiSettings.highRiskConfirmMode ?? (aiSettings.highRiskAlwaysConfirm ? "confirm" : "off");
+              const active = current === value;
+              return (
+                <button key={value} type="button"
+                  onClick={() => { const next={...aiSettings,highRiskConfirmMode:value,highRiskAlwaysConfirm:value==="confirm"}; setAiSettings(next); try{saveAiSettings(next);setMsg("已保存。");}catch{setMsg("保存失败。");} }}
+                  className={cn("flex w-full items-start gap-3 rounded-lg border-2 px-4 py-3 text-left transition-all",
+                    active ? "border-primary bg-primary/5" : "border-border/20 bg-background/10 hover:border-border/40")}>
+                  <div className={cn("mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2", active ? "border-primary" : "border-border/50")}>
+                    {active && <div className="h-2 w-2 rounded-full bg-primary" />}
+                  </div>
+                  <div>
+                    <p className={cn("text-sm font-medium", active ? "text-primary" : "text-foreground")}>{label}</p>
+                    <p className="text-xs text-muted-foreground">{desc}</p>
+                  </div>
+                  {value === "confirm" && <span className="ml-auto rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">推荐</span>}
+                </button>
+              );
+            })}
+          </div>
+        </SCard>
+
+        {/* 进阶防误触 */}
+        <SCard>
+          <SHead title="进阶防误触" sub="额外安全机制，增加操作步骤但有效防止意外消耗。" badge={<span className="rounded-full border border-border/30 px-2 py-0.5 text-[10px] text-muted-foreground">可选</span>} />
+          <div className="space-y-2">
+            <SRow iconBg="bg-blue-500" icon={<Keyboard className="h-4 w-4" />} title="数字确认" desc="超阈值时需输入屏幕显示的验证码才能继续执行。">
+              <Toggle checked={!!aiSettings.numericConfirm} onChange={(on) => { const next={...aiSettings,numericConfirm:on}; setAiSettings(next); try{saveAiSettings(next);setMsg("已保存。");}catch{setMsg("保存失败。");} }} />
+            </SRow>
+            <SRow iconBg="bg-violet-500" icon={<AlertTriangle className="h-4 w-4" />} title="操作冷却" desc="同一高危操作间隔至少 5 秒，防止连续误触。">
+              <Toggle checked={!!aiSettings.operationCooldown} onChange={(on) => { const next={...aiSettings,operationCooldown:on}; setAiSettings(next); try{saveAiSettings(next);setMsg("已保存。");}catch{setMsg("保存失败。");} }} />
+            </SRow>
+          </div>
         </SCard>
 
         {/* 高级接入 (OwnerModeSection) */}

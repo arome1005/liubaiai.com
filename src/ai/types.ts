@@ -109,6 +109,16 @@ export type AiSettings = {
   /** §11 步 48：高危操作（整卷/多章/批量）始终确认清单 */
   highRiskAlwaysConfirm: boolean;
   /**
+   * 超阈值验证级别（替代 highRiskAlwaysConfirm 的三档控制）：
+   * "off" = 不验证；"warn" = 仅提示（不阻断）；"confirm" = 强制清单确认。
+   * 未设置时回退到 highRiskAlwaysConfirm。
+   */
+  highRiskConfirmMode?: "off" | "warn" | "confirm";
+  /** 进阶防误触：超阈值时要求输入屏幕显示的数字验证码 */
+  numericConfirm: boolean;
+  /** 进阶防误触：同一高危操作冷却间隔至少 5 秒 */
+  operationCooldown: boolean;
+  /**
    * §11 步 48：本会话（当前标签页）侧栏累计粗估 tokens 上限；0=不限制。
    * 计入单次请求的 messages 与当次模型输出（粗估，非计费凭证）。
    */

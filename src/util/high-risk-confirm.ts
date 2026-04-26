@@ -78,6 +78,15 @@ export function confirmHighRiskChecklist(args: HighRiskConfirmArgs): boolean {
 }
 
 export function highRiskAlwaysConfirmEnabled(settings: AiSettings): boolean {
+  if (settings.highRiskConfirmMode === "off") return false;
+  if (settings.highRiskConfirmMode === "warn" || settings.highRiskConfirmMode === "confirm") return true;
+  return Boolean(settings.highRiskAlwaysConfirm);
+}
+
+/** 当前是否为「强制确认」级别（vs 仅提示） */
+export function highRiskMustConfirm(settings: AiSettings): boolean {
+  if (settings.highRiskConfirmMode === "confirm") return true;
+  if (settings.highRiskConfirmMode === "off" || settings.highRiskConfirmMode === "warn") return false;
   return Boolean(settings.highRiskAlwaysConfirm);
 }
 

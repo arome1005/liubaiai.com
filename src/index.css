@@ -10236,3 +10236,67 @@ select {
   overflow-y: auto;
   line-height: 1.6;
 }
+/* ═══════════════════════════════════════════════════════════════
+   强调色系统 — data-accent 属性覆盖 --primary / --accent
+   ═══════════════════════════════════════════════════════════════ */
+
+:root[data-accent="purple"] { --primary: 262 83% 52%; --accent: #7c3aed; }
+:root[data-accent="green"]  { --primary: 158 64% 36%; --accent: #059669; }
+:root[data-accent="amber"]  { --primary:  38 92% 45%; --accent: #d97706; }
+:root[data-accent="rose"]   { --primary: 347 77% 50%; --accent: #e11d48; }
+:root[data-accent="cyan"]   { --primary: 192 82% 40%; --accent: #0891b2; }
+
+:root[data-theme="dark"][data-accent="purple"] { --primary: 262 83% 65%; --accent: #a78bfa; }
+:root[data-theme="dark"][data-accent="green"]  { --primary: 158 64% 52%; --accent: #34d399; }
+:root[data-theme="dark"][data-accent="amber"]  { --primary:  38 92% 58%; --accent: #fbbf24; }
+:root[data-theme="dark"][data-accent="rose"]   { --primary: 347 77% 62%; --accent: #fb7185; }
+:root[data-theme="dark"][data-accent="cyan"]   { --primary: 192 82% 55%; --accent: #22d3ee; }
+
+/* ═══════════════════════════════════════════════════════════════
+   打字机模式 — 当前行居中
+   ═══════════════════════════════════════════════════════════════ */
+
+:root.liubai-typewriter .cm-editor .cm-content {
+  padding-top: 40vh;
+  padding-bottom: 40vh;
+}
+
+:root.liubai-typewriter .cm-editor .cm-cursorLayer {
+  /* CodeMirror 打字机光标居中由 scrollIntoView 处理；此处预留扩展 */
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   专注模式 — 淡化非 active 段落
+   ═══════════════════════════════════════════════════════════════ */
+
+:root.liubai-focus .cm-editor .cm-line {
+  opacity: 0.35;
+  transition: opacity 0.2s;
+}
+
+:root.liubai-focus .cm-editor .cm-activeLine {
+  opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   字数统计显示控制
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 默认显示；关闭时隐藏含 data-wordcount 属性的元素 */
+:root:not(.liubai-wordcount) [data-wordcount] {
+  display: none !important;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   紧凑模式
+   ═══════════════════════════════════════════════════════════════ */
+
+:root.liubai-compact .app-main > div {
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+
+:root.liubai-compact header,
+:root.liubai-compact .masthead {
+  --masthead-h: 2.5rem;
+}
