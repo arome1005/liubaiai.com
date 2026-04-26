@@ -438,7 +438,7 @@ export class WritingStoreIndexedDB implements WritingStore {
     patch: Partial<
       Pick<
         Chapter,
-        "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder" | "outlineDraft" | "outlineNodeId" | "outlinePushedAt"
+        "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder" | "outlineDraft" | "outlineNodeId" | "outlinePushedAt" | "chapterNote"
       >
     >,
     options?: UpdateChapterOptions,
@@ -1329,6 +1329,14 @@ export class WritingStoreIndexedDB implements WritingStore {
       linkedRefWorkIds: patch.linkedRefWorkIds ?? prev?.linkedRefWorkIds ?? [],
       mindmap: patch.mindmap ?? prev?.mindmap ?? { nodes: [], edges: [] },
       scenes: patch.scenes ?? prev?.scenes ?? [],
+      selectedPromptTemplateId: patch.selectedPromptTemplateId ?? prev?.selectedPromptTemplateId ?? null,
+      planningIdea: patch.planningIdea ?? prev?.planningIdea ?? "",
+      planningTree: patch.planningTree ?? prev?.planningTree ?? [],
+      planningDraftsByNodeId: patch.planningDraftsByNodeId ?? prev?.planningDraftsByNodeId ?? {},
+      planningMetaByNodeId: patch.planningMetaByNodeId ?? prev?.planningMetaByNodeId ?? {},
+      planningStructuredMetaByNodeId: patch.planningStructuredMetaByNodeId ?? prev?.planningStructuredMetaByNodeId ?? {},
+      planningSelectedNodeId: patch.planningSelectedNodeId ?? prev?.planningSelectedNodeId ?? null,
+      planningPushedOutlines: patch.planningPushedOutlines ?? prev?.planningPushedOutlines ?? [],
     };
     await db.tuiyanStates.put(next);
     return next;

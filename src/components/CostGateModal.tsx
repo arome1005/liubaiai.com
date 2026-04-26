@@ -26,6 +26,11 @@ export type CostGatePayload = {
 type Props = CostGatePayload & {
   onConfirm: () => void;
   onCancel: () => void;
+  /**
+   * "block" 默认：阻断式，显示「取消」「继续发送」。
+   * "info"：纯展示，仅显示「知道了」一个按钮，点击等同 onCancel/onConfirm（两者都会触发关闭）。
+   */
+  mode?: "block" | "info";
 };
 
 function fmt(n: number): string {
@@ -42,7 +47,9 @@ export function CostGateModal({
   triggerLabel,
   onConfirm,
   onCancel,
+  mode = "block",
 }: Props) {
+  const isInfo = mode === "info";
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   // ESC 键取消
@@ -97,8 +104,8 @@ export function CostGateModal({
           id="cost-gate-title"
           style={{ margin: "0 0 0.75rem", fontSize: "1rem", fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}
         >
-          <span style={{ fontSize: "1.2rem" }}>⚠</span>
-          {triggerLabel ?? "AI 调用确认"}
+          <span style={{ fontSize: "1.2rem" }}>{isInfo ? "ℹ" : "⚠"}</span>
+          {triggerLabel ?? (isInfo ? "本次注入量预估" : "AI 调用确认")}
         </h2>
 
         {/* token 用量卡片 */}
@@ -153,14 +160,18 @@ export function CostGateModal({
           )}
         </div>
 
-        {/* 触发原因 */}
-        {reasons.length > 0 && (
+        {/* 触发原因（info 模式下若没有触发项也给一行说明，避免空白） */}
+        {reasons.length > 0 ? (
           <ul style={{ margin: "0 0 1rem", padding: "0 0 0 1.1rem", fontSize: "0.82rem", color: "var(--muted-foreground)", lineHeight: 1.6 }}>
             {reasons.map((r, i) => (
               <li key={i}>{r}</li>
             ))}
           </ul>
-        )}
+        ) : isInfo ? (
+          <p style={{ margin: "0 0 1rem", fontSize: "0.82rem", color: "var(--muted-foreground)", lineHeight: 1.6 }}>
+            当前注入量未触发任何阈值，可直接生成。
+          </p>
+        ) : null}
 
         {/* 免责声明 */}
         <p style={{ margin: "0 0 1.2rem", fontSize: "0.75rem", color: "var(--muted-foreground)" }}>
@@ -169,22 +180,35 @@ export function CostGateModal({
 
         {/* 操作按钮 */}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <Button
-            ref={cancelRef}
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={onCancel}
-          >
-            取消
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            onClick={onConfirm}
-          >
-            继续发送
-          </Button>
+          {isInfo ? (
+            <Button
+              ref={cancelRef}
+              type="button"
+              size="sm"
+              onClick={onConfirm}
+            >
+              知道了
+            </Button>
+          ) : (
+            <>
+              <Button
+                ref={cancelRef}
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={onCancel}
+              >
+                取消
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={onConfirm}
+              >
+                继续发送
+              </Button>
+            </>
+          )}
         </div>
       </div>
     </div>

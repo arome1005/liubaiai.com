@@ -11,7 +11,13 @@ export type AiProviderId =
   /** Kimi / Moonshot（OpenAI 兼容） */
   | "kimi"
   /** 小米 MiMo 等（OpenAI 兼容；Base URL 以官方文档为准） */
-  | "xiaomi";
+  | "xiaomi"
+  /**
+   * Owner-only：通过本机 sidecar（Claude Agent SDK）调 Claude Code 订阅，
+   * 绕过 API 计费。仅当登录账号是 owner、并启用 Owner 模式 + 探测到 sidecar 时才会被激活。
+   * 不在用户可见的 provider 列表中。
+   */
+  | "claude-code-local";
 
 export type AiProviderConfig = {
   id: AiProviderId;
@@ -47,6 +53,8 @@ export type AiSettings = {
   zhipu: AiProviderConfig;
   kimi: AiProviderConfig;
   xiaomi: AiProviderConfig;
+  /** Owner 模式专用：本机 sidecar 配置；apiKey 字段用于存放 sidecar Bearer Token */
+  claudeCodeLocal: AiProviderConfig;
   /**
    * AI 隐私与上传范围（仅对"非本机模型"生效）。
    * 注意：本项目为纯前端直连；只要发起请求，就会把本次 prompt 发往对应提供方。

@@ -170,6 +170,7 @@ export async function generateWithProvider(args: {
   signal?: AbortSignal;
 }): Promise<AiGenerateResult> {
   const { provider, config, messages } = args;
+  if (provider === "claude-code-local") return generateClaudeCodeLocal(config, messages, args.signal);
   if (provider === "ollama") return generateOllama(config, messages, args.temperature, args.signal);
   if (provider === "mlx") return generateOpenAI(config, messages, args.temperature, args.signal);
   if (provider === "openai") return generateOpenAI(config, messages, args.temperature, args.signal);
@@ -207,6 +208,7 @@ export async function generateWithProviderStream(args: {
   signal?: AbortSignal;
 }): Promise<AiGenerateResult> {
   const { provider, config, messages, onDelta } = args;
+  if (provider === "claude-code-local") return generateClaudeCodeLocalStream(config, messages, onDelta, args.signal);
   if (provider === "ollama") return generateOllamaStream(config, messages, onDelta, args.temperature, args.signal);
   if (provider === "mlx") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
   if (provider === "openai") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
@@ -291,10 +293,11 @@ async function generateOpenAI(
     body: JSON.stringify(payload),
     signal,
   });
-  const raw: unknown = await resp.json();
   if (!resp.ok) {
+    const raw: unknown = await resp.json().catch(() => ({}));
     throw new Error(`${cfg.label} 请求失败：${messageFromApiJsonBody(raw) || String(resp.status)}`);
   }
+  const raw: unknown = await resp.json();
   const text = openAiChatTextFromJson(raw);
   const usageTotalTokens = openAiUsageTotalTokensFromJson(raw) ?? undefined;
   return { text, raw, usageTotalTokens };
@@ -429,10 +432,11 @@ async function generateAnthropic(
     }),
     signal,
   });
-  const raw: unknown = await resp.json();
   if (!resp.ok) {
+    const raw: unknown = await resp.json().catch(() => ({}));
     throw new Error(`Claude 请求失败：${messageFromApiJsonBody(raw) || String(resp.status)}`);
   }
+  const raw: unknown = await resp.json();
   const text = anthropicMessageTextFromJson(raw);
   return { text, raw };
 }
@@ -549,10 +553,11 @@ async function generateGemini(
     body: JSON.stringify(geminiGenerateJsonBody(messages, temperature)),
     signal,
   });
-  const raw: unknown = await resp.json();
   if (!resp.ok) {
+    const raw: unknown = await resp.json().catch(() => ({}));
     throw new Error(`Gemini 请求失败：${messageFromApiJsonBody(raw) || String(resp.status)}`);
   }
+  const raw: unknown = await resp.json();
   const text = geminiGenerateTextFromJson(raw);
   return { text, raw };
 }
@@ -643,10 +648,11 @@ async function generateOllama(
     }),
     signal,
   });
-  const raw: unknown = await resp.json();
   if (!resp.ok) {
+    const raw: unknown = await resp.json().catch(() => ({}));
     throw new Error(`Ollama 请求失败：${messageFromApiJsonBody(raw) || String(resp.status)}`);
   }
+  const raw: unknown = await resp.json();
   const text = ollamaChatTextFromJson(raw);
   return { text, raw };
 }
@@ -713,3 +719,123 @@ async function generateOllamaStream(
   return { text: full };
 }
 
+
+
+/* =============================================================================
+ * Claude Code 本地 sidecar（owner-only）
+ * 通过 http://127.0.0.1:7788 SSE，把作者本人的 Pro/Max 订阅当 AI 后端用。
+ * 仅当 owner 邮箱 + Owner 模式开关 + sidecar 健康时，会被 src/ai/client.ts 路由到。
+ * =========================================================================== */
+
+function resolveSidecarBaseUrl(cfg: AiProviderConfig): string {
+  const t = (cfg.baseUrl ?? "").trim();
+  return (t || "http://127.0.0.1:7788").replace(/\/+$/, "");
+}
+
+function buildClaudeCodeLocalBody(messages: AiChatMessage[], model: string) {
+  const systemMsg = messages.find((m) => m.role === "system");
+  const turns = messages.filter((m) => m.role !== "system");
+  return {
+    system: systemMsg?.content,
+    messages: turns.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
+    model,
+  };
+}
+
+async function generateClaudeCodeLocal(
+  cfg: AiProviderConfig,
+  messages: AiChatMessage[],
+  signal?: AbortSignal,
+): Promise<AiGenerateResult> {
+  let acc = "";
+  await generateClaudeCodeLocalStream(cfg, messages, (d) => {
+    acc += d;
+  }, signal);
+  return { text: acc };
+}
+
+async function generateClaudeCodeLocalStream(
+  cfg: AiProviderConfig,
+  messages: AiChatMessage[],
+  onDelta: (textDelta: string) => void,
+  signal?: AbortSignal,
+): Promise<AiGenerateResult> {
+  const token = (cfg.apiKey ?? "").trim();
+  if (!token) {
+    throw new Error("Claude Code 本地直连：请先在「设置 → Owner 模式」填入 sidecar Token");
+  }
+  const url = `${resolveSidecarBaseUrl(cfg)}/v1/stream`;
+  const body = buildClaudeCodeLocalBody(messages, cfg.model || "sonnet");
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      signal,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new Error(
+      `Claude Code 本地 sidecar 不可达：${e instanceof Error ? e.message : String(e)}。请确认 npm run sidecar 已启动。`,
+    );
+  }
+  if (!resp.ok || !resp.body) {
+    const t = await resp.text().catch(() => "");
+    if (resp.status === 401) {
+      throw new Error("Claude Code 本地 sidecar：Token 无效，请重新粘贴。");
+    }
+    throw new Error(`Claude Code 本地 sidecar 返回 ${resp.status}: ${t || resp.statusText}`);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let acc = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      let idx: number;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const chunk = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const dataLine = chunk
+          .split("\n")
+          .find((l) => l.startsWith("data:"));
+        if (!dataLine) continue;
+        const data = dataLine.slice(5).trim();
+        if (!data) continue;
+        if (data === "[DONE]") return { text: acc };
+        let ev: { type?: string; text?: string; message?: string };
+        try {
+          ev = JSON.parse(data) as typeof ev;
+        } catch {
+          continue;
+        }
+        if (ev.type === "delta" && typeof ev.text === "string") {
+          acc += ev.text;
+          onDelta(ev.text);
+        } else if (ev.type === "error") {
+          throw new Error(`Claude Code 本地 sidecar 错误：${ev.message ?? "unknown"}`);
+        } else if (ev.type === "done") {
+          return { text: acc };
+        }
+      }
+    }
+  } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
+  return { text: acc };
+}

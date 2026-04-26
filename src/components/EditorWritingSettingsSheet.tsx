@@ -29,13 +29,14 @@ import {
   readThemePreference,
   type ThemePreference,
 } from "../theme";
+import {
+  EDITOR_AUTO_WIDTH_KEY,
+  EDITOR_DEFAULT_MAX_WIDTH_PX,
+  EDITOR_WIDTH_KEY,
+} from "../util/editor-layout-prefs";
 
 // ── localStorage keys ────────────────────────────────────────────────────────
 const FONT_KEY = "liubai:fontSizePx";
-const EDITOR_WIDTH_KEY = "liubai:editorMaxWidthPx";
-const EDITOR_AUTO_WIDTH_KEY = "liubai:editorAutoWidth";
-
-const EDITOR_DEFAULT_MAX_WIDTH_PX = 1200;
 const WIDTH_PRESETS = [
   { label: "自适应", auto: true, px: EDITOR_DEFAULT_MAX_WIDTH_PX },
   { label: "窄列", auto: false, px: 760 },

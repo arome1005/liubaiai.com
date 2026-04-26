@@ -1,0 +1,24 @@
+---
+description: 全局：结构优先、防页面膨胀、Effect/对话框/常量习惯（与本仓库现有 hooks/util 风格一致）
+alwaysApply: true
+---
+
+# 留白写作 · 结构与实现准则 / Structure-first defaults
+
+**原则**：默认优先**可维护的结构**（边界清晰、可测、可复用），再交付行为。禁止为「少改几行」把大段逻辑继续塞进单个页面文件。
+
+**Before adding non-trivial logic, answer briefly (can be in chat):**
+1) 最合适落点：现有文件 / 新 `hook` / 新 `component` / `util` / `ai` 模块？  
+2) 若向 `*Page.tsx` 增加 **> ~30 行** 可抽离逻辑：先问是否抽成 `src/hooks/use*.ts` 或 `src/components/<area>/`。**向 `V0TuiyanPage.tsx` 或 `EditorPage.tsx` 增加 > ~50 行** 时，默认应先拆分再继续（分别见 `v0-tuiyan-page.mdc`、`editor-page.mdc`）。  
+3) 纯函数、魔法字符串、与 UI 无关的配置 → **`src/util/`** 或 **`src/ai/`**，不要留在组件里硬编码。
+
+**工程习惯（与现有代码一致，例如 `useEditorPersist`）/ Engineering habits**
+- `useEffect` 里：异步、定时器、订阅、**`window.addEventListener`** → 必须在 return 中 **清理**（`clearTimeout` / `abort` / `removeEventListener`）。  
+- **不要** 使用 `window.confirm` / `window.prompt`；用项目里已有的 **Dialog**（Radix / 现有弹窗组件）。  
+- 新常量（文案过长、列 key、轮询间隔等）→ 放到对应 `util` 或同 feature 的 `*.ts` 顶部 **具名常量**，避免散落魔数。  
+- 数据访问：继续通过 **`src/db/repo.ts`** 暴露的 API，不要绕过抽象直接绑实现细节。  
+
+**收工时向用户说明 / Wrap-up (for the user)**  
+- 本改动**修改了哪些文件**、**大约新增/移动多少行**、若超过 ~50 行则说明**为何未再拆**或**下一步可拆点**。
+
+**Language**：代码注释与用户可见文案以项目现状为准（中文 UI 保持中文）。

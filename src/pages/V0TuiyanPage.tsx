@@ -1,10 +1,47 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
-import { PromptPicker, PROMPT_PICKER_TUIYAN_SLOTS } from "../components/PromptPicker"
-import type { GlobalPromptTemplate } from "../db/types"
+import { TuiyanPlanningNodeCenterEditor } from "../components/tuiyan/TuiyanPlanningNodeCenterEditor"
+import {
+  TuiyanPlanningPushDialog,
+  type TuiyanPlanningPushCandidate,
+} from "../components/tuiyan/TuiyanPlanningPushDialog"
+import { TuiyanPlanningStatsInline } from "../components/tuiyan/TuiyanPlanningStatsInline"
+import { TuiyanPlanningTree } from "../components/tuiyan/TuiyanPlanningTree"
+import { TuiyanPlanningUnifiedPanel } from "../components/tuiyan/TuiyanPlanningUnifiedPanel"
+import { PlanningDeleteConfirmDialog, type PlanningDeleteTarget } from "../components/tuiyan/PlanningDeleteConfirmDialog"
+import { TuiyanChatPanel, type ChatMessage } from "../components/tuiyan/TuiyanChatPanel"
+import { TuiyanReferencePanel } from "../components/tuiyan/TuiyanReferencePanel"
+import { useTuiyanLayoutPanels } from "../hooks/useTuiyanLayoutPanels"
+import type {
+  GlobalPromptTemplate,
+  PlanningNodeStructuredMeta,
+  TuiyanPlanningLevel,
+  TuiyanPlanningMeta,
+  TuiyanPlanningNode,
+  TuiyanPushedOutlineEntry,
+} from "../db/types"
 import { renderPromptTemplate } from "../util/render-prompt-template"
+import {
+  listPlanningChildren,
+  PLANNING_LEVEL_LABEL,
+  PLANNING_LEVEL_TO_SLOT,
+  STRUCTURED_FIELDS_BY_LEVEL,
+  planningNodeTitleFallback,
+  DEFAULT_PLANNING_SCALE,
+  PLANNING_MIN_CHARS,
+  countCharsNoPunct,
+  countCharsWithPunct,
+  serializePlanningNodeForCount,
+  type PlanningScale,
+} from "../util/tuiyan-planning"
 import { Link, useNavigate } from "react-router-dom"
 import { isFirstAiGateCancelledError } from "../ai/client"
 import { generateLogicThreeBranches, LogicBranchPredictError } from "../ai/logic-branch-predict"
+import { generatePlanningAdvisorReply, TuiyanPlanningChatError } from "../ai/tuiyan-planning-chat"
+import {
+  generateTuiyanPlanningDetail,
+  generateTuiyanPlanningList,
+  TuiyanPlanningGenerateError,
+} from "../ai/tuiyan-planning-generate"
 import type { WritingWorkStyleSlice } from "../ai/assemble-context"
 import { loadAiSettings, saveAiSettings } from "../ai/storage"
 import { aiModelIdToProvider, aiProviderToModelId } from "../util/ai-ui-model-map"
@@ -16,12 +53,8 @@ import {
   listWorks,
   getTuiyanState,
   upsertTuiyanState,
-  createVolume,
   updateVolume,
   updateChapter,
-  deleteVolume,
-  deleteChapter,
-  reorderChapters,
   listReferenceLibrary,
   listReferenceExcerpts,
 } from "../db/repo"
@@ -60,24 +93,20 @@ import {
 } from "../util/v0-tuiyan-outline"
 import {
   ChevronRight,
+  ChevronLeft,
   ChevronDown,
-  ChevronUp,
   Plus,
   MoreHorizontal,
-  Search,
   BookOpen,
   Network,
   FileText,
   History,
   Sparkles,
-  Send,
   Pencil,
   Trash2,
   Copy,
   Link2,
   ArrowRight,
-  Zap,
-  Brain,
   Target,
   Users,
   MapPin,
@@ -87,26 +116,24 @@ import {
   Lock,
   RefreshCw,
   Download,
+  Undo2,
+  PersonStanding,
   Settings,
   Layers,
   GitMerge,
   Milestone,
   BarChart3,
   PanelLeftClose,
+  PanelRightClose,
   PanelLeft,
-  Bot,
   User,
-  ThumbsUp,
-  ThumbsDown,
   Pin,
   PinOff,
   CircleDot,
   Circle,
   CheckCircle,
   Lightbulb,
-  Wand2,
   List,
-  Maximize2,
   X,
 } from "lucide-react"
 import { cn } from "../lib/utils"
@@ -119,8 +146,13 @@ import { Badge } from "../components/ui/badge"
 import { Progress } from "../components/ui/progress"
 import { Textarea } from "../components/ui/textarea"
 import { ScrollArea } from "../components/ui/scroll-area"
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog"
-import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -137,9 +169,6 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-  DropdownMenuSub,
-  DropdownMenuSubTrigger,
-  DropdownMenuSubContent,
 } from "../components/ui/dropdown-menu"
 import {
   Tooltip,
@@ -153,7 +182,6 @@ type OutlineNode = V0OutlineNode
 const LS_LAST_WORK = "liubai:lastWorkId"
 const LS_TUIYAN_DEMO_DEFAULT_SEEN = "liubai:tuiyanDemoDefaultSeen:v1"
 const LS_TUIYAN_DEMO_DISABLE_DEFAULT = "liubai:tuiyanDemoDisableDefault:v1"
-
 function formatBranchesForChat(branches: { title: string; summary: string }[]): string {
   return branches
     .map((b, i) => `**分支${i + 1}：${b.title}**\n\n${b.summary}`)
@@ -169,20 +197,6 @@ interface WenCeEntry {
   relatedOutlineId?: string
   isPinned?: boolean
   tags?: string[]
-}
-
-interface ChatMessage {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  timestamp: Date
-  relatedOutlineId?: string
-  suggestedChanges?: {
-    type: "add" | "modify" | "delete"
-    target: string
-    content: string
-  }[]
-  isApplied?: boolean
 }
 
 // Legacy v0 demo type (kept for mock data compatibility; real data uses ReferenceLibraryEntry)
@@ -541,242 +555,6 @@ function cloneMockWenCe(): WenCeEntry[] {
 
 // ============ Subcomponents ============
 
-// 大纲树节点
-function OutlineTreeNode({
-  node,
-  depth = 0,
-  selectedId,
-  onSelect,
-  onToggle,
-  isFinalizedId,
-  onToggleFinalized,
-  onChangeStatus,
-  onDelete,
-  getStatusOverride,
-  onMove,
-}: {
-  node: OutlineNode
-  depth?: number
-  selectedId: string | null
-  onSelect: (id: string) => void
-  onToggle: (id: string) => void
-  isFinalizedId?: (id: string) => boolean
-  onToggleFinalized?: (id: string) => void
-  onChangeStatus?: (id: string, status: OutlineNode["status"]) => void
-  onDelete?: (id: string) => void
-  getStatusOverride?: (id: string) => OutlineNode["status"] | null
-  onMove?: (id: string, dir: "up" | "down") => void
-}) {
-  const hasChildren = node.children && node.children.length > 0
-  const isSelected = selectedId === node.id
-
-  const statusConfig = {
-    draft: { icon: Circle, color: "text-muted-foreground", label: "草稿" },
-    refining: { icon: CircleDot, color: "text-amber-400", label: "打磨中" },
-    finalized: { icon: CheckCircle, color: "text-[oklch(0.7_0.15_145)]", label: "已定稿" },
-    locked: { icon: Lock, color: "text-primary", label: "已锁定" },
-  }
-
-  const typeConfig = {
-    volume: { icon: BookOpen, color: "text-primary" },
-    chapter: { icon: FileText, color: "text-muted-foreground" },
-    scene: { icon: Layers, color: "text-muted-foreground/70" },
-  }
-
-  const effectiveStatus = isFinalizedId?.(node.id)
-    ? "finalized"
-    : getStatusOverride?.(node.id) ?? node.status
-  const status = statusConfig[effectiveStatus]
-  const type = typeConfig[node.type]
-  const StatusIcon = status.icon
-  const TypeIcon = type.icon
-
-  return (
-    <div>
-      <div
-        className={cn(
-          "group flex items-center gap-1 rounded-lg px-2 py-1.5 transition-colors cursor-pointer",
-          isSelected ? "bg-primary/10" : "hover:bg-muted/50",
-          depth > 0 && "ml-4"
-        )}
-        onClick={() => onSelect(node.id)}
-      >
-        {/* Expand/Collapse */}
-        {hasChildren ? (
-          <button
-            className="flex h-5 w-5 shrink-0 items-center justify-center rounded hover:bg-muted"
-            onClick={(e) => {
-              e.stopPropagation()
-              onToggle(node.id)
-            }}
-          >
-            {node.collapsed ? (
-              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
-            ) : (
-              <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
-            )}
-          </button>
-        ) : (
-          <span className="w-5" />
-        )}
-
-        {/* Type Icon */}
-        <TypeIcon className={cn("h-4 w-4 shrink-0", type.color)} />
-
-        {/* Title */}
-        <span
-          className={cn(
-            "flex-1 truncate text-sm",
-            isSelected ? "font-medium text-foreground" : "text-foreground/80"
-          )}
-        >
-          {node.title}
-        </span>
-
-        {/* Status */}
-        <TooltipProvider>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <StatusIcon className={cn("h-3.5 w-3.5 shrink-0", status.color)} />
-            </TooltipTrigger>
-            <TooltipContent side="right">
-              <p className="text-xs">{status.label}</p>
-            </TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
-
-        {/* Quick Actions */}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <button
-              className="flex h-5 w-5 shrink-0 items-center justify-center rounded opacity-0 transition-opacity hover:bg-muted group-hover:opacity-100"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <MoreHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-48">
-            <DropdownMenuItem>
-              <Pencil className="mr-2 h-4 w-4" />
-              编辑
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <Plus className="mr-2 h-4 w-4" />
-              添加子项
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={(e) => {
-                e.preventDefault()
-                onMove?.(node.id, "up")
-              }}
-            >
-              <ChevronUp className="mr-2 h-4 w-4" />
-              上移
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={(e) => {
-                e.preventDefault()
-                onMove?.(node.id, "down")
-              }}
-            >
-              <ChevronDown className="mr-2 h-4 w-4" />
-              下移
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <CircleDot className="mr-2 h-4 w-4" />
-                更改状态
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault()
-                    onChangeStatus?.(node.id, "draft")
-                  }}
-                >
-                  <Circle className="mr-2 h-4 w-4" />
-                  草稿
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault()
-                    onChangeStatus?.(node.id, "refining")
-                  }}
-                >
-                  <CircleDot className="mr-2 h-4 w-4" />
-                  打磨中
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault()
-                    onToggleFinalized?.(node.id)
-                  }}
-                >
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                  已定稿
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onSelect={(e) => {
-                    e.preventDefault()
-                    onChangeStatus?.(node.id, "locked")
-                  }}
-                >
-                  <Lock className="mr-2 h-4 w-4" />
-                  锁定
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem>
-              <Sparkles className="mr-2 h-4 w-4" />
-              AI 优化
-            </DropdownMenuItem>
-            <DropdownMenuItem>
-              <GitMerge className="mr-2 h-4 w-4" />
-              生成细纲
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              className="text-destructive"
-              onSelect={(e) => {
-                e.preventDefault()
-                onDelete?.(node.id)
-              }}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              删除
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-
-      {/* Children */}
-      {hasChildren && !node.collapsed && (
-        <div className="border-l border-border/30 ml-[18px]">
-          {node.children!.map((child) => (
-            <OutlineTreeNode
-              key={child.id}
-              node={child}
-              depth={depth + 1}
-              selectedId={selectedId}
-              onSelect={onSelect}
-              onToggle={onToggle}
-              isFinalizedId={isFinalizedId}
-              onToggleFinalized={onToggleFinalized}
-              onChangeStatus={onChangeStatus}
-              onDelete={onDelete}
-              getStatusOverride={getStatusOverride}
-              onMove={onMove}
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // 思维导图节点
 function MindMapNode({
   node,
@@ -954,147 +732,6 @@ function WenCeCard({
   )
 }
 
-// AI 对话消息（inline=true 时只渲染内容+操作，外层气泡由调用方控制）
-function ChatMessageBubble({
-  message,
-  onApplySuggestion,
-  onWriteToDraft,
-  onGoWence,
-  inline = false,
-}: {
-  message: ChatMessage
-  onApplySuggestion?: (changes: ChatMessage["suggestedChanges"]) => void
-  onWriteToDraft?: (content: string) => void
-  onGoWence?: (content: string) => void
-  inline?: boolean
-}) {
-  const isAssistant = message.role === "assistant"
-  const isBranchLike = isAssistant && /分支\d+：/.test(message.content)
-
-  const actionBar = (
-    <div className="mt-1.5 flex items-center gap-1 flex-wrap">
-      {isBranchLike && (
-        <>
-          <button
-            className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-colors"
-            onClick={() => onWriteToDraft?.(message.content)}
-            type="button"
-          >
-            写入侧栏草稿
-          </button>
-          <button
-            className="rounded px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted/80 hover:text-foreground transition-colors"
-            onClick={() => onGoWence?.(message.content)}
-            type="button"
-          >
-            去问策跟进
-          </button>
-        </>
-      )}
-      {isAssistant && (
-        <div className="flex items-center gap-0.5 ml-auto">
-          <button className="rounded p-1 hover:bg-muted/80 transition-colors" title="有帮助">
-            <ThumbsUp className="h-3 w-3 text-muted-foreground" />
-          </button>
-          <button className="rounded p-1 hover:bg-muted/80 transition-colors" title="无帮助">
-            <ThumbsDown className="h-3 w-3 text-muted-foreground" />
-          </button>
-          <button className="rounded p-1 hover:bg-muted/80 transition-colors" title="复制">
-            <Copy className="h-3 w-3 text-muted-foreground" onClick={() => void navigator.clipboard.writeText(message.content)} />
-          </button>
-        </div>
-      )}
-    </div>
-  )
-
-  // inline 模式：只渲染文字内容 + 操作栏，外层气泡由调用方绘制
-  if (inline) {
-    return (
-      <div>
-        <div className="whitespace-pre-wrap text-sm leading-relaxed">{message.content}</div>
-        {message.suggestedChanges && message.suggestedChanges.length > 0 && (
-          <div className="mt-2 space-y-1.5">
-            {message.suggestedChanges.map((change, idx) => (
-              <div key={idx} className="flex items-center gap-2 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-1.5">
-                <Wand2 className="h-3.5 w-3.5 text-primary shrink-0" />
-                <span className="flex-1 text-xs text-muted-foreground">
-                  {change.type === "add" && "添加："}
-                  {change.type === "modify" && "修改："}
-                  {change.type === "delete" && "删除："}
-                  {change.content}
-                </span>
-                {!message.isApplied && (
-                  <Button size="sm" variant="ghost" className="h-6 text-xs text-primary hover:text-primary px-2"
-                    onClick={() => onApplySuggestion?.(message.suggestedChanges)}>
-                    采纳
-                  </Button>
-                )}
-                {message.isApplied && (
-                  <Badge variant="secondary" className="h-5 text-[10px]">已应用</Badge>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-        {actionBar}
-      </div>
-    )
-  }
-
-  // 完整气泡模式（保留向后兼容）
-  const isUser = message.role === "user"
-  return (
-    <div className={cn("flex gap-3", isUser && "flex-row-reverse")}>
-      <div className={cn(
-        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full",
-        isUser ? "bg-primary/20" : "bg-muted"
-      )}>
-        {isUser ? <User className="h-4 w-4 text-primary" /> : <LiubaiLogo className="h-4 w-4 text-muted-foreground" />}
-      </div>
-      <div className={cn("flex-1 max-w-[85%]", isUser && "text-right")}>
-        <div className={cn(
-          "inline-block rounded-2xl px-4 py-2.5 text-sm",
-          isUser ? "bg-primary text-primary-foreground rounded-tr-md" : "bg-muted/50 text-foreground rounded-tl-md"
-        )}>
-          <div className="whitespace-pre-wrap">{message.content}</div>
-        </div>
-        {message.suggestedChanges && message.suggestedChanges.length > 0 && (
-          <div className="mt-2 space-y-2">
-            {message.suggestedChanges.map((change, idx) => (
-              <div key={idx} className="flex items-center gap-2 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-2">
-                <Wand2 className="h-4 w-4 text-primary" />
-                <span className="flex-1 text-xs text-muted-foreground">
-                  {change.type === "add" && "添加："}
-                  {change.type === "modify" && "修改："}
-                  {change.type === "delete" && "删除："}
-                  {change.content}
-                </span>
-                {!message.isApplied && (
-                  <Button size="sm" variant="ghost" className="h-6 text-xs text-primary hover:text-primary"
-                    onClick={() => onApplySuggestion?.(message.suggestedChanges)}>
-                    采纳
-                  </Button>
-                )}
-                {message.isApplied && (
-                  <Badge variant="secondary" className="h-5 text-[10px] bg-[oklch(0.7_0.15_145)]/10 text-[oklch(0.7_0.15_145)]">
-                    已应用
-                  </Badge>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-        <div className={cn("mt-1 flex items-center gap-2", isUser ? "justify-end" : "justify-start")}>
-          <span className="text-[10px] text-muted-foreground">
-            {message.timestamp.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
-          </span>
-          {actionBar}
-        </div>
-      </div>
-    </div>
-  )
-}
-
 // ============ Main Component ============
 export default function V0TuiyanPage() {
   const navigate = useNavigate()
@@ -1114,8 +751,6 @@ export default function V0TuiyanPage() {
   const [statusByNodeId, setStatusByNodeId] = useState<Record<string, "draft" | "refining" | "locked">>({})
   const [linkedRefWorkIds, setLinkedRefWorkIds] = useState<string[]>([])
   const [refLibrary, setRefLibrary] = useState<ReferenceLibraryEntry[]>([])
-  const [linkRefOpen, setLinkRefOpen] = useState(false)
-  const [linkRefQ, setLinkRefQ] = useState("")
   const [mmNodes, setMmNodes] = useState<Node[]>([])
   const [mmEdges, setMmEdges] = useState<Edge[]>([])
   const [mmViewport, setMmViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 })
@@ -1123,27 +758,57 @@ export default function V0TuiyanPage() {
   const [scenes, setScenes] = useState<
     Array<{ id: string; title: string; summary?: string; linkedChapterIds: string[]; createdAt: number; updatedAt: number }>
   >([])
-  const [sceneLinkOpen, setSceneLinkOpen] = useState(false)
-  const [sceneQ, setSceneQ] = useState("")
   const [chatInput, setChatInput] = useState("")
   const [activeTab, setActiveTab] = useState<"outline" | "mindmap" | "wence">("outline")
   const [rightPanelTab, setRightPanelTab] = useState<"detail" | "chat" | "reference">("detail")
-  const [showLeftPanel, setShowLeftPanel] = useState(true)
-  const [showRightPanel] = useState(true)
+  const {
+    showLeftPanel,
+    showRightPanel,
+    leftPanelWidth,
+    rightPanelWidth,
+    setShowLeftPanel,
+    setShowRightPanel,
+    beginPanelDrag,
+    resetLeftPanelWidth,
+    resetRightPanelWidth,
+  } = useTuiyanLayoutPanels()
   const [isGenerating, setIsGenerating] = useState(false)
-  const [outlineSearch, setOutlineSearch] = useState("")
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null)
-  // Sprint 3：选中的提示词模板（运行时对象，随 picker 更新）+ 步骤条折叠
+  const [planningIdea, setPlanningIdea] = useState("")
+  const [planningTree, setPlanningTree] = useState<TuiyanPlanningNode[]>([])
+  const [planningDraftsByNodeId, setPlanningDraftsByNodeId] = useState<Record<string, string>>({})
+  const [planningMetaByNodeId, setPlanningMetaByNodeId] = useState<Record<string, TuiyanPlanningMeta>>({})
+  const [planningStructuredMetaByNodeId, setPlanningStructuredMetaByNodeId] = useState<Record<string, PlanningNodeStructuredMeta>>({})
+  const [planningSelectedNodeId, setPlanningSelectedNodeId] = useState<string | null>(null)
+  const [planningMode, setPlanningMode] = useState<"model" | "template">("model")
+  const [planningBusyLevel, setPlanningBusyLevel] = useState<TuiyanPlanningLevel | null>(null)
+  const [planningError, setPlanningError] = useState("")
+  const [planningIdeaDialogOpen, setPlanningIdeaDialogOpen] = useState(false)
+  const [planningPushDialogOpen, setPlanningPushDialogOpen] = useState(false)
+  const [planningScale, setPlanningScale] = useState<PlanningScale>(() => {
+    try {
+      const saved = localStorage.getItem("liubai:tuiyan:planningScale:v1")
+      if (saved) return { ...DEFAULT_PLANNING_SCALE, ...(JSON.parse(saved) as PlanningScale) }
+    } catch { /* ignore */ }
+    return DEFAULT_PLANNING_SCALE
+  })
+  const handlePlanningScaleChange = useCallback((s: PlanningScale) => {
+    setPlanningScale(s)
+    localStorage.setItem("liubai:tuiyan:planningScale:v1", JSON.stringify(s))
+  }, [])
+  const [pushOverwriteConfirmOpen, setPushOverwriteConfirmOpen] = useState(false)
+  const [planningDeleteTarget, setPlanningDeleteTarget] = useState<PlanningDeleteTarget>(null)
+  /** 规划树折叠：undefined / true 为展开，false 为收起 */
+  const [planningExpandedById, setPlanningExpandedById] = useState<Record<string, boolean>>({})
+  // Sprint 3：选中的提示词模板（运行时对象，随 picker 更新）
   const [selectedPromptTemplate, _setSelectedPromptTemplate] = useState<GlobalPromptTemplate | null>(null)
   const selectedPromptTemplateRef = useRef<GlobalPromptTemplate | null>(null)
   const setSelectedPromptTemplate = useCallback((t: GlobalPromptTemplate | null) => {
     selectedPromptTemplateRef.current = t
     _setSelectedPromptTemplate(t)
   }, [])
-  const [showFlowBar, setShowFlowBar] = useState(true)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const branchAbortRef = useRef<AbortController | null>(null)
+  const planningAbortRef = useRef<AbortController | null>(null)
   const tuiyanHydratedRef = useRef(false)
   const tuiyanSaveTimerRef = useRef<number | null>(null)
 
@@ -1197,6 +862,11 @@ export default function V0TuiyanPage() {
     setChatHistory(cloneMockChatHistory())
     setWenCe(cloneMockWenCe())
     setSelectedOutlineId("c1-1")
+    setPlanningIdea("")
+    setPlanningTree([])
+    setPlanningDraftsByNodeId({})
+    setPlanningMetaByNodeId({})
+    setPlanningSelectedNodeId(null)
     setChapters([])
     setWorkTitle("")
     setWorkId(null)
@@ -1211,6 +881,11 @@ export default function V0TuiyanPage() {
     setStatusByNodeId({})
     setLinkedRefWorkIds([])
     setSelectedOutlineId(null)
+    setPlanningIdea("")
+    setPlanningTree([])
+    setPlanningDraftsByNodeId({})
+    setPlanningMetaByNodeId({})
+    setPlanningSelectedNodeId(null)
     setChapters([])
     tuiyanHydratedRef.current = false
   }, [])
@@ -1290,6 +965,12 @@ export default function V0TuiyanPage() {
         timestamp: new Date(m.timestamp),
       })) as unknown as ChatMessage[],
     )
+    setPlanningIdea(st?.planningIdea ?? "")
+    setPlanningTree(st?.planningTree ?? [])
+    setPlanningDraftsByNodeId(st?.planningDraftsByNodeId ?? {})
+    setPlanningMetaByNodeId(st?.planningMetaByNodeId ?? {})
+    setPlanningStructuredMetaByNodeId(st?.planningStructuredMetaByNodeId ?? {})
+    setPlanningSelectedNodeId(st?.planningSelectedNodeId ?? null)
     setSelectedOutlineId((prev) => {
       if (prev && findNodeById(withScenes, prev)) return prev
       if (chs.length && w) {
@@ -1308,18 +989,6 @@ export default function V0TuiyanPage() {
   const isFinalized = useCallback(
     (nodeId: string) => finalizedNodeIds.includes(nodeId),
     [finalizedNodeIds],
-  )
-
-  const toggleFinalized = useCallback((nodeId: string) => {
-    setFinalizedNodeIds((prev) => {
-      if (prev.includes(nodeId)) return prev.filter((x) => x !== nodeId)
-      return [...prev, nodeId]
-    })
-  }, [])
-
-  const getStatusOverride = useCallback(
-    (nodeId: string) => (statusByNodeId[nodeId] as OutlineNode["status"] | undefined) ?? null,
-    [statusByNodeId],
   )
 
   useEffect(() => {
@@ -1352,9 +1021,34 @@ export default function V0TuiyanPage() {
         mindmap: { nodes: mmNodes as unknown[], edges: mmEdges as unknown[], viewport: mmViewport },
         scenes,
         selectedPromptTemplateId: selectedPromptTemplateRef.current?.id ?? null,
+        planningIdea,
+        planningTree,
+        planningDraftsByNodeId,
+        planningMetaByNodeId,
+        planningStructuredMetaByNodeId,
+        planningSelectedNodeId,
       })
     }, 550)
-  }, [workId, useSamplePreview, chatHistory, wenCe, finalizedNodeIds, statusByNodeId, linkedRefWorkIds, mmNodes, mmEdges, mmViewport, scenes, selectedPromptTemplate])
+  }, [
+    workId,
+    useSamplePreview,
+    chatHistory,
+    wenCe,
+    finalizedNodeIds,
+    statusByNodeId,
+    linkedRefWorkIds,
+    mmNodes,
+    mmEdges,
+    mmViewport,
+    scenes,
+    selectedPromptTemplate,
+    planningIdea,
+    planningTree,
+    planningDraftsByNodeId,
+    planningMetaByNodeId,
+    planningStructuredMetaByNodeId,
+    planningSelectedNodeId,
+  ])
 
   useEffect(() => {
     void (async () => {
@@ -1389,12 +1083,21 @@ export default function V0TuiyanPage() {
       setSelectedOutlineId(null)
       setChatHistory([])
       setWenCe([])
+      setPlanningIdea("")
+      setPlanningTree([])
+      setPlanningDraftsByNodeId({})
+      setPlanningMetaByNodeId({})
+      setPlanningSelectedNodeId(null)
       return
     }
     void reloadOutlineForWork(workId)
   }, [workId, useSamplePreview, reloadOutlineForWork])
 
-  useEffect(() => () => branchAbortRef.current?.abort(), [])
+  useEffect(() => () => {
+    branchAbortRef.current?.abort()
+    planningAbortRef.current?.abort()
+  }, [])
+
   useEffect(
     () => () => {
       if (tuiyanSaveTimerRef.current) window.clearTimeout(tuiyanSaveTimerRef.current)
@@ -1418,8 +1121,11 @@ export default function V0TuiyanPage() {
     [selectedOutlineId],
   )
 
+  const planningNodeMap = useMemo(() => new Map(planningTree.map((n) => [n.id, n])), [planningTree])
+  const planningSelectedNode = planningSelectedNodeId ? planningNodeMap.get(planningSelectedNodeId) ?? null : null
+
   const runBranchPredict = useCallback(
-    async (userHint: string) => {
+    async (userHint: string, planningContextArg?: string) => {
       if (!workId) {
         appendAssistant(
           useSamplePreview
@@ -1428,9 +1134,45 @@ export default function V0TuiyanPage() {
         )
         return
       }
+
+      // ── 规划顾问模式：有选中规划节点时走新路径 ──────────────────────────
+      if (planningSelectedNodeId) {
+        branchAbortRef.current?.abort()
+        const ac = new AbortController()
+        branchAbortRef.current = ac
+        setIsGenerating(true)
+        try {
+          const history = chatHistory.map((m) => ({ role: m.role, content: m.content }))
+          const reply = await generatePlanningAdvisorReply({
+            planningContext: planningContextArg ?? "",
+            userHint,
+            history,
+            settings: loadAiSettings(),
+            signal: ac.signal,
+          })
+          appendAssistant(reply)
+        } catch (e) {
+          if (isFirstAiGateCancelledError(e)) return
+          if (e instanceof DOMException && e.name === "AbortError") return
+          if (e instanceof Error && e.name === "AbortError") return
+          const msg =
+            e instanceof TuiyanPlanningChatError
+              ? e.message
+              : e instanceof Error
+                ? e.message
+                : String(e)
+          appendAssistant(msg)
+        } finally {
+          setIsGenerating(false)
+          branchAbortRef.current = null
+        }
+        return
+      }
+
+      // ── 兜底续写模式：依赖写作大纲选中的章节正文 ─────────────────────────
       const ch = resolveChapterForAi(selectedOutlineId, outline, chapters)
       if (!ch) {
-        appendAssistant("请先在左侧大纲中选择一章，或选中卷（将使用卷内第一章）。")
+        appendAssistant("请在左侧规划树选中一个节点（推荐），或在写作大纲中选择一章开始对话。")
         return
       }
       branchAbortRef.current?.abort()
@@ -1447,7 +1189,6 @@ export default function V0TuiyanPage() {
           styleAnchor: card?.styleAnchor ?? "",
           extraRules: card?.extraRules ?? "",
         }
-        // Sprint 3+5：如果选了提示词模板，渲染变量后前置到 userHint
         const tpl = selectedPromptTemplateRef.current
         const effectiveHint = tpl
           ? `【提示词模板：${tpl.title}】\n${renderPromptTemplate(tpl.body, {
@@ -1494,6 +1235,8 @@ export default function V0TuiyanPage() {
       workTitle,
       appendAssistant,
       useSamplePreview,
+      planningSelectedNodeId,
+      chatHistory,
     ],
   )
 
@@ -1504,6 +1247,649 @@ export default function V0TuiyanPage() {
   }, [workId, selectedOutlineId, outline, chapters])
 
   const selectedNode = selectedOutlineId ? findNodeById(outline, selectedOutlineId) : null
+
+  const planningSelectedDraft =
+    planningSelectedNodeId && planningSelectedNodeId in planningDraftsByNodeId
+      ? planningDraftsByNodeId[planningSelectedNodeId] ?? ""
+      : ""
+
+  useEffect(() => {
+    setPlanningError("")
+  }, [planningSelectedNodeId])
+
+  const planningMasterNodes = useMemo(
+    () => listPlanningChildren(planningTree, null, "master_outline"),
+    [planningTree],
+  )
+  const planningOutlineNodes = useMemo(
+    () => planningTree.filter((n) => n.level === "outline").sort((a, b) => a.order - b.order),
+    [planningTree],
+  )
+  const planningSelectedAncestors = useMemo(() => {
+    const ancestors: TuiyanPlanningNode[] = []
+    let n = planningSelectedNode
+    while (n?.parentId) {
+      const parent = planningNodeMap.get(n.parentId)
+      if (!parent) break
+      ancestors.unshift(parent)
+      n = parent
+    }
+    return ancestors
+  }, [planningNodeMap, planningSelectedNode])
+  const planningActiveMaster = useMemo(() => {
+    if (planningSelectedNode?.level === "master_outline") return planningSelectedNode
+    return planningSelectedAncestors.find((n) => n.level === "master_outline") ?? planningMasterNodes[0] ?? null
+  }, [planningMasterNodes, planningSelectedAncestors, planningSelectedNode])
+  const planningActiveOutline = useMemo(() => {
+    if (planningSelectedNode?.level === "outline") return planningSelectedNode
+    return (
+      planningSelectedAncestors.find((n) => n.level === "outline") ??
+      (planningActiveMaster ? listPlanningChildren(planningTree, planningActiveMaster.id, "outline")[0] : null) ??
+      listPlanningChildren(planningTree, null, "outline")[0] ??
+      null
+    )
+  }, [planningActiveMaster, planningSelectedAncestors, planningSelectedNode, planningTree])
+  const planningVolumeNodes = useMemo(
+    () => listPlanningChildren(planningTree, planningActiveOutline?.id ?? null, "volume"),
+    [planningTree, planningActiveOutline?.id],
+  )
+  const planningActiveVolume = useMemo(() => {
+    if (planningSelectedNode?.level === "volume") return planningSelectedNode
+    const ancestorVolume = planningSelectedAncestors.find((n) => n.level === "volume")
+    if (ancestorVolume) return ancestorVolume
+    return planningVolumeNodes[0] ?? null
+  }, [planningSelectedAncestors, planningSelectedNode, planningVolumeNodes])
+  const planningMasterTotal = useMemo(
+    () => planningTree.filter((n) => n.level === "master_outline").length,
+    [planningTree],
+  )
+  const planningVolumeTotal = useMemo(
+    () => planningTree.filter((n) => n.level === "volume").length,
+    [planningTree],
+  )
+  /** 当前激活大纲节点下已生成的卷数（用于串行生成按钮提示） */
+  const volumeCountForActiveOutline = useMemo(
+    () => listPlanningChildren(planningTree, planningActiveOutline?.id ?? null, "volume").length,
+    [planningTree, planningActiveOutline?.id],
+  )
+  const planningChapterOutlineTotal = useMemo(
+    () => planningTree.filter((n) => n.level === "chapter_outline").length,
+    [planningTree],
+  )
+  const planningPushCandidates = useMemo<TuiyanPlanningPushCandidate[]>(() => {
+    const levelOrder: Record<TuiyanPlanningLevel, number> = {
+      master_outline: 0,
+      outline: 1,
+      volume: 2,
+      chapter_outline: 3,
+      chapter_detail: 4,
+    }
+    const pathFor = (node: TuiyanPlanningNode) => {
+      const chain: TuiyanPlanningNode[] = []
+      let cur: TuiyanPlanningNode | undefined = node
+      while (cur) {
+        chain.unshift(cur)
+        cur = cur.parentId ? planningNodeMap.get(cur.parentId) : undefined
+      }
+      return chain
+    }
+    const pathKey = (node: TuiyanPlanningNode) =>
+      pathFor(node)
+        .map((n) => String(n.order).padStart(4, "0"))
+        .join(".")
+
+    return planningTree
+      .slice()
+      .sort((a, b) => {
+        const ka = pathKey(a)
+        const kb = pathKey(b)
+        if (ka !== kb) return ka.localeCompare(kb)
+        return levelOrder[a.level] - levelOrder[b.level]
+      })
+      .map((node) => {
+        const content =
+          node.level === "chapter_detail"
+            ? (planningDraftsByNodeId[node.id] ?? "").trim() || (node.summary ?? "").trim()
+            : (node.summary ?? "").trim()
+        return {
+          id: node.id,
+          parentId: node.parentId ?? null,
+          level: node.level,
+          order: node.order,
+          title: node.title,
+          content,
+        }
+      })
+  }, [planningDraftsByNodeId, planningNodeMap, planningTree])
+
+  const togglePlanningExpand = useCallback((id: string) => {
+    setPlanningExpandedById((prev) => {
+      const cur = prev[id] !== false
+      return { ...prev, [id]: !cur }
+    })
+  }, [])
+
+  const selectPlanningNode = useCallback((id: string) => {
+    setPlanningSelectedNodeId(id)
+    setSelectedOutlineId(null)
+    setPlanningExpandedById((prev) => {
+      const map = new Map(planningTree.map((n) => [n.id, n]))
+      const next = { ...prev }
+      let n = map.get(id)
+      while (n?.parentId) {
+        next[n.parentId] = true
+        n = map.get(n.parentId)
+      }
+      return next
+    })
+  }, [planningTree])
+
+  const makePlanningContext = useCallback(
+    (targetLevel: TuiyanPlanningLevel, parentNode: TuiyanPlanningNode | null) => {
+      const work = works.find((w) => w.id === workId)
+      const ancestors: TuiyanPlanningNode[] = []
+      let cursor = parentNode
+      while (cursor?.parentId) {
+        const parent = planningNodeMap.get(cursor.parentId)
+        if (!parent) break
+        ancestors.unshift(parent)
+        cursor = parent
+      }
+      const lineage = [...ancestors, ...(parentNode ? [parentNode] : [])]
+
+      const serializeNodeWithMeta = (n: TuiyanPlanningNode): string => {
+        const parts: string[] = [`【${PLANNING_LEVEL_LABEL[n.level]}】${n.title}`]
+        if (n.summary.trim()) parts.push(n.summary.trim())
+        const meta = planningStructuredMetaByNodeId[n.id]
+        if (meta) {
+          const fields = STRUCTURED_FIELDS_BY_LEVEL[n.level]
+          for (const f of fields) {
+            const val = (meta[f.key] ?? "").trim()
+            if (val) parts.push(`${f.label}：${val}`)
+          }
+        }
+        return parts.join("\n")
+      }
+
+      const parentContext = parentNode ? serializeNodeWithMeta(parentNode) : ""
+      const lineageContext = lineage.map(serializeNodeWithMeta).join("\n\n")
+
+      const tpl = selectedPromptTemplateRef.current
+      const promptCtx = renderPromptTemplate(tpl?.body ?? "", {
+        work_title: (work?.title ?? workTitle).trim() || "未命名",
+        work_tags: (work?.tags ?? []).join("，"),
+        outline_node_title: parentNode?.title ?? "",
+        outline_node_summary: parentNode?.summary ?? "",
+        parent_context: parentContext,
+        lineage_context: lineageContext,
+        planning_level: PLANNING_LEVEL_LABEL[targetLevel],
+        idea_text: planningIdea,
+      }).trim()
+      const header = [
+        `作品：${(work?.title ?? workTitle).trim() || "未命名"}`,
+        planningIdea.trim() ? `构思：${planningIdea.trim()}` : "",
+        lineageContext ? `继承链上下文（后续推演必须服从上层约束）：\n${lineageContext}` : "",
+        parentContext ? `父层上下文：\n${parentContext}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+      if (planningMode !== "template" || !tpl) return header
+      return `${header}\n\n【模板(${tpl.title})】\n${promptCtx}`.trim()
+    },
+    [planningIdea, planningMode, planningNodeMap, planningStructuredMetaByNodeId, workId, workTitle, works],
+  )
+
+  /** 当前规划节点的序列化继承链上下文，供 AI 对话组件使用 */
+  const planningContext = useMemo(
+    () => planningSelectedNode ? makePlanningContext(planningSelectedNode.level, planningSelectedNode) : "",
+    [planningSelectedNode, makePlanningContext],
+  )
+
+  const upsertPlanningMeta = useCallback(
+    (nodeIds: string[], level: TuiyanPlanningLevel) => {
+      const s = loadAiSettings()
+      const model = AI_MODELS.find((m) => m.id === selectedModelId)
+      const slot = PLANNING_LEVEL_TO_SLOT[level]
+      const base: TuiyanPlanningMeta = {
+        generatedAt: Date.now(),
+        mode: planningMode,
+        promptSlot: slot,
+        provider: s.provider,
+        modelId: model?.id ?? selectedModelId,
+        templateId: selectedPromptTemplateRef.current?.id ?? null,
+      }
+      setPlanningMetaByNodeId((prev) => {
+        const next = { ...prev }
+        for (const id of nodeIds) next[id] = base
+        return next
+      })
+    },
+    [planningMode, selectedModelId],
+  )
+
+  const generatePlanningLevel = useCallback(
+    async (level: TuiyanPlanningLevel, parentNode: TuiyanPlanningNode | null) => {
+      if (!workId || useSamplePreview) return
+      setPlanningError("")
+      planningAbortRef.current?.abort()
+      const ac = new AbortController()
+      planningAbortRef.current = ac
+      setPlanningBusyLevel(level)
+      try {
+        if (planningMode === "template" && !selectedPromptTemplateRef.current) {
+          throw new TuiyanPlanningGenerateError("当前是模板高级模式，请先在顶部选择一个提示词模板。")
+        }
+        if (level === "master_outline") {
+          if (!planningIdea.trim()) {
+            throw new TuiyanPlanningGenerateError("请先填写「作品构思」，再生成总纲。")
+          }
+          const userInput = makePlanningContext("master_outline", null)
+          const { items } = await generateTuiyanPlanningList({
+            level: "master_outline",
+            desiredCount: 1,
+            userInput,
+            settings: loadAiSettings(),
+            signal: ac.signal,
+          })
+          const it0 = items[0]!
+          // ── 字数校验：不含标点 >= 1000 字 ──────────────────────────────────
+          const masterText = serializePlanningNodeForCount(
+            it0.title, it0.summary, it0.structuredMeta as Record<string, string | undefined>,
+          )
+          const masterCharCount = countCharsNoPunct(masterText)
+          if (masterCharCount < PLANNING_MIN_CHARS.masterOutlineNoPunct) {
+            throw new TuiyanPlanningGenerateError(
+              `总纲字数（${masterCharCount}字，不含标点）不足 ${PLANNING_MIN_CHARS.masterOutlineNoPunct} 字，请重试。`,
+            )
+          }
+          const nodes: TuiyanPlanningNode[] = items.slice(0, 1).map((it, idx) => ({
+            id: `plan-master-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
+            parentId: null,
+            level: "master_outline",
+            title: it.title.trim() || planningNodeTitleFallback("master_outline", idx),
+            summary: it.summary.trim(),
+            order: idx,
+          }))
+          setPlanningTree((prev) => {
+            const oldMasterIds = new Set(prev.filter((n) => n.level === "master_outline").map((n) => n.id))
+            const removeIds = new Set(oldMasterIds)
+            let changed = true
+            while (changed) {
+              changed = false
+              for (const node of prev) {
+                if (node.parentId && removeIds.has(node.parentId) && !removeIds.has(node.id)) {
+                  removeIds.add(node.id)
+                  changed = true
+                }
+              }
+            }
+            return [...prev.filter((n) => !removeIds.has(n.id)), ...nodes]
+          })
+          setPlanningSelectedNodeId(nodes[0]?.id ?? null)
+          upsertPlanningMeta(nodes.map((n) => n.id), "master_outline")
+          const masterPatch: Record<string, PlanningNodeStructuredMeta> = {}
+          nodes.forEach((n, idx) => {
+            const sm = items[idx]?.structuredMeta
+            if (sm && Object.keys(sm).length) masterPatch[n.id] = sm
+          })
+          if (Object.keys(masterPatch).length) {
+            setPlanningStructuredMetaByNodeId((prev) => ({ ...prev, ...masterPatch }))
+          }
+          return
+        }
+        if (!parentNode) {
+          throw new TuiyanPlanningGenerateError("请先选择父节点，再生成下一层。")
+        }
+        if (level === "outline") {
+          const userInput = makePlanningContext("outline", parentNode)
+          const { items } = await generateTuiyanPlanningList({
+            level: "outline",
+            desiredCount: 3,
+            userInput,
+            settings: loadAiSettings(),
+            signal: ac.signal,
+          })
+          // ── 字数校验：三条合计含标点 >= 2000 字 ────────────────────────────
+          const outlineCombinedText = items
+            .map((it) => serializePlanningNodeForCount(it.title, it.summary, it.structuredMeta as Record<string, string | undefined>))
+            .join("\n\n")
+          const outlineCharCount = countCharsWithPunct(outlineCombinedText)
+          if (outlineCharCount < PLANNING_MIN_CHARS.outlineTotalWithPunct) {
+            throw new TuiyanPlanningGenerateError(
+              `一级大纲合计字数（${outlineCharCount}字，含标点）不足 ${PLANNING_MIN_CHARS.outlineTotalWithPunct} 字，请重试。`,
+            )
+          }
+          const nodes: TuiyanPlanningNode[] = items.map((it, idx) => ({
+            id: `plan-outline-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
+            parentId: parentNode.id,
+            level: "outline",
+            title: it.title.trim() || planningNodeTitleFallback("outline", idx),
+            summary: it.summary.trim(),
+            order: idx,
+          }))
+          setPlanningTree((prev) => [
+            ...prev.filter((n) => n.parentId !== parentNode.id || n.level !== "outline"),
+            ...nodes,
+          ])
+          setPlanningSelectedNodeId(nodes[0]?.id ?? null)
+          upsertPlanningMeta(nodes.map((n) => n.id), "outline")
+          const outlinePatch: Record<string, PlanningNodeStructuredMeta> = {}
+          nodes.forEach((n, idx) => {
+            const sm = items[idx]?.structuredMeta
+            if (sm && Object.keys(sm).length) outlinePatch[n.id] = sm
+          })
+          if (Object.keys(outlinePatch).length) {
+            setPlanningStructuredMetaByNodeId((prev) => ({ ...prev, ...outlinePatch }))
+          }
+          return
+        }
+        if (level === "volume") {
+          // ── 串行生成：每次只生成下一卷 ────────────────────────────────────
+          const existingVolumes = listPlanningChildren(planningTree, parentNode.id, "volume")
+          const nextVolumeOrder = existingVolumes.length
+          if (nextVolumeOrder >= planningScale.volumeCount) {
+            throw new TuiyanPlanningGenerateError(
+              `本大纲已完成全部 ${planningScale.volumeCount} 卷卷纲，如需更多请在规模设置中调整目标卷数。`,
+            )
+          }
+          const existingVolumeHint =
+            existingVolumes.length > 0
+              ? `已生成的卷（请在剧情上接续）：${existingVolumes.map((v) => v.title || `第${v.order + 1}卷`).join("、")}`
+              : ""
+          const userInput = [
+            makePlanningContext("volume", parentNode),
+            `本次任务：生成【第 ${nextVolumeOrder + 1} 卷】（该大纲段共规划 ${planningScale.volumeCount} 卷，每卷约 ${planningScale.chaptersPerVolume} 章节）。`,
+            existingVolumeHint,
+          ]
+            .filter(Boolean)
+            .join("\n\n")
+          const { items } = await generateTuiyanPlanningList({
+            level: "volume",
+            desiredCount: 1,
+            userInput,
+            settings: loadAiSettings(),
+            signal: ac.signal,
+          })
+          const volItem = items[0]!
+          // ── 字数校验：含标点 >= 1500 字 ─────────────────────────────────
+          const volText = serializePlanningNodeForCount(
+            volItem.title, volItem.summary, volItem.structuredMeta as Record<string, string | undefined>,
+          )
+          const volCharCount = countCharsWithPunct(volText)
+          if (volCharCount < PLANNING_MIN_CHARS.volumeWithPunct) {
+            throw new TuiyanPlanningGenerateError(
+              `第 ${nextVolumeOrder + 1} 卷卷纲字数（${volCharCount}字，含标点）不足 ${PLANNING_MIN_CHARS.volumeWithPunct} 字，请重试。`,
+            )
+          }
+          const newVolNode: TuiyanPlanningNode = {
+            id: `plan-volume-${Date.now()}-${nextVolumeOrder}-${Math.random().toString(36).slice(2, 7)}`,
+            parentId: parentNode.id,
+            level: "volume",
+            title: volItem.title.trim() || planningNodeTitleFallback("volume", nextVolumeOrder),
+            summary: volItem.summary.trim(),
+            order: nextVolumeOrder,
+          }
+          setPlanningTree((prev) => [...prev, newVolNode])
+          setPlanningSelectedNodeId(newVolNode.id)
+          upsertPlanningMeta([newVolNode.id], "volume")
+          if (volItem.structuredMeta && Object.keys(volItem.structuredMeta).length) {
+            setPlanningStructuredMetaByNodeId((prev) => ({ ...prev, [newVolNode.id]: volItem.structuredMeta }))
+          }
+          return
+        }
+        if (level === "chapter_outline") {
+          const userInput = makePlanningContext("chapter_outline", parentNode)
+          const { items } = await generateTuiyanPlanningList({
+            level: "chapter_outline",
+            desiredCount: planningScale.chaptersPerVolume,
+            userInput,
+            settings: loadAiSettings(),
+            signal: ac.signal,
+          })
+          const volumeChapters = chapters.filter((c) => c.volumeId === parentNode.id)
+          const fallbackChapters = volumeChapters.length ? volumeChapters : chapters
+          const nodes: TuiyanPlanningNode[] = items.map((it, idx) => ({
+            id: `plan-chapter-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 7)}`,
+            parentId: parentNode.id,
+            level: "chapter_outline",
+            title: it.title.trim() || planningNodeTitleFallback("chapter_outline", idx),
+            summary: it.summary.trim(),
+            order: idx,
+            chapterId: fallbackChapters[idx]?.id ?? null,
+          }))
+          setPlanningTree((prev) => [
+            ...prev.filter((n) => n.parentId !== parentNode.id || n.level !== "chapter_outline"),
+            ...nodes,
+          ])
+          setPlanningSelectedNodeId(nodes[0]?.id ?? null)
+          upsertPlanningMeta(nodes.map((n) => n.id), "chapter_outline")
+          const chapterPatch: Record<string, PlanningNodeStructuredMeta> = {}
+          nodes.forEach((n, idx) => {
+            const sm = items[idx]?.structuredMeta
+            if (sm && Object.keys(sm).length) chapterPatch[n.id] = sm
+          })
+          if (Object.keys(chapterPatch).length) {
+            setPlanningStructuredMetaByNodeId((prev) => ({ ...prev, ...chapterPatch }))
+          }
+          return
+        }
+        const userInput = makePlanningContext("chapter_detail", parentNode)
+        const { text, structuredMeta: detailMeta } = await generateTuiyanPlanningDetail({
+          userInput,
+          settings: loadAiSettings(),
+          signal: ac.signal,
+        })
+        const existing = listPlanningChildren(planningTree, parentNode.id, "chapter_detail")[0]
+        const detailNode: TuiyanPlanningNode =
+          existing ?? {
+            id: `plan-detail-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            parentId: parentNode.id,
+            level: "chapter_detail",
+            title: `${parentNode.title}·详细细纲`,
+            summary: "可直接写作的详细细纲",
+            order: 0,
+          }
+        setPlanningTree((prev) => {
+          if (existing) return prev
+          return [...prev, detailNode]
+        })
+        setPlanningDraftsByNodeId((prev) => ({ ...prev, [detailNode.id]: text }))
+        setPlanningSelectedNodeId(detailNode.id)
+        upsertPlanningMeta([detailNode.id], "chapter_detail")
+        if (detailMeta && Object.keys(detailMeta).some((k) => !!(detailMeta as Record<string, string>)[k])) {
+          setPlanningStructuredMetaByNodeId((prev) => ({
+            ...prev,
+            [detailNode.id]: { ...prev[detailNode.id], ...detailMeta },
+          }))
+        }
+      } catch (e) {
+        if (isFirstAiGateCancelledError(e)) return
+        if (e instanceof DOMException && e.name === "AbortError") return
+        if (e instanceof Error && e.name === "AbortError") return
+        const msg = e instanceof Error ? e.message : String(e)
+        setPlanningError(msg)
+      } finally {
+        setPlanningBusyLevel(null)
+        planningAbortRef.current = null
+      }
+    },
+    [
+      chapters,
+      makePlanningContext,
+      planningIdea,
+      planningScale,
+      planningTree,
+      planningMode,
+      upsertPlanningMeta,
+      useSamplePreview,
+      workId,
+    ],
+  )
+
+  /** 重生成当前选中卷：删除旧卷及其章纲子节点，生成同序号的新卷 */
+  const regenerateCurrentVolume = useCallback(async () => {
+    if (!planningActiveOutline || !planningActiveVolume) return
+    const volumeOrder = planningActiveVolume.order
+    const volumeId = planningActiveVolume.id
+    const removedIds = new Set<string>([volumeId])
+    planningTree.forEach((n) => {
+      if (n.parentId === volumeId) removedIds.add(n.id)
+    })
+    const siblingsKept = planningTree.filter(
+      (n) => n.parentId === planningActiveOutline.id && n.level === "volume" && n.id !== volumeId,
+    )
+    const existingVolumeHint =
+      siblingsKept.length > 0
+        ? `已生成的其他卷（请在剧情上保持一致）：${siblingsKept.map((v) => v.title || `第${v.order + 1}卷`).join("、")}`
+        : ""
+    const userInput = [
+      makePlanningContext("volume", planningActiveOutline),
+      `本次任务：重新生成【第 ${volumeOrder + 1} 卷】（共规划 ${planningScale.volumeCount} 卷，每卷约 ${planningScale.chaptersPerVolume} 章节）。`,
+      existingVolumeHint,
+    ]
+      .filter(Boolean)
+      .join("\n\n")
+
+    setPlanningError("")
+    planningAbortRef.current?.abort()
+    const ac = new AbortController()
+    planningAbortRef.current = ac
+    setPlanningBusyLevel("volume")
+    try {
+      const { items } = await generateTuiyanPlanningList({
+        level: "volume",
+        desiredCount: 1,
+        userInput,
+        settings: loadAiSettings(),
+        signal: ac.signal,
+      })
+      const volItem = items[0]!
+      const volText = serializePlanningNodeForCount(
+        volItem.title, volItem.summary, volItem.structuredMeta as Record<string, string | undefined>,
+      )
+      const volCharCount = countCharsWithPunct(volText)
+      if (volCharCount < PLANNING_MIN_CHARS.volumeWithPunct) {
+        throw new TuiyanPlanningGenerateError(
+          `重生成的第 ${volumeOrder + 1} 卷卷纲字数（${volCharCount}字，含标点）不足 ${PLANNING_MIN_CHARS.volumeWithPunct} 字，请重试。`,
+        )
+      }
+      const newVolNode: TuiyanPlanningNode = {
+        id: `plan-volume-${Date.now()}-${volumeOrder}-${Math.random().toString(36).slice(2, 7)}`,
+        parentId: planningActiveOutline.id,
+        level: "volume",
+        title: volItem.title.trim() || planningNodeTitleFallback("volume", volumeOrder),
+        summary: volItem.summary.trim(),
+        order: volumeOrder,
+      }
+      setPlanningTree((prev) => [...prev.filter((n) => !removedIds.has(n.id)), newVolNode])
+      setPlanningSelectedNodeId(newVolNode.id)
+      upsertPlanningMeta([newVolNode.id], "volume")
+      if (volItem.structuredMeta && Object.keys(volItem.structuredMeta).length) {
+        setPlanningStructuredMetaByNodeId((prev) => ({ ...prev, [newVolNode.id]: volItem.structuredMeta }))
+      }
+    } catch (e) {
+      if (isFirstAiGateCancelledError(e)) return
+      if (e instanceof DOMException && e.name === "AbortError") return
+      if (e instanceof Error && e.name === "AbortError") return
+      setPlanningError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setPlanningBusyLevel(null)
+      planningAbortRef.current = null
+    }
+  }, [
+    makePlanningContext,
+    planningActiveOutline,
+    planningActiveVolume,
+    planningScale,
+    planningTree,
+    upsertPlanningMeta,
+  ])
+
+  const updatePlanningNodeDraft = useCallback((nodeId: string, value: string) => {
+    setPlanningDraftsByNodeId((prev) => ({ ...prev, [nodeId]: value }))
+  }, [])
+
+  const updatePlanningNodeSummary = useCallback((nodeId: string, value: string) => {
+    setPlanningTree((prev) =>
+      prev.map((n) => (n.id === nodeId ? { ...n, summary: value } : n)),
+    )
+  }, [])
+
+  const updatePlanningNodeTitle = useCallback((nodeId: string, value: string) => {
+    setPlanningTree((prev) => prev.map((n) => (n.id === nodeId ? { ...n, title: value } : n)))
+  }, [])
+
+  const updatePlanningNodeStructuredMeta = useCallback(
+    (nodeId: string, patch: Partial<PlanningNodeStructuredMeta>) => {
+      setPlanningStructuredMetaByNodeId((prev) => ({
+        ...prev,
+        [nodeId]: { ...prev[nodeId], ...patch },
+      }))
+    },
+    [],
+  )
+
+  const executePlanningDelete = useCallback((target: NonNullable<PlanningDeleteTarget>) => {
+    if (target.type === "all") {
+      setPlanningTree([])
+      setPlanningDraftsByNodeId({})
+      setPlanningMetaByNodeId({})
+      setPlanningStructuredMetaByNodeId({})
+      setPlanningSelectedNodeId(null)
+      return
+    }
+    // 收集该节点及所有后代 id
+    setPlanningTree((prev) => {
+      const toRemove = new Set<string>([target.nodeId])
+      let changed = true
+      while (changed) {
+        changed = false
+        for (const n of prev) {
+          if (n.parentId && toRemove.has(n.parentId) && !toRemove.has(n.id)) {
+            toRemove.add(n.id)
+            changed = true
+          }
+        }
+      }
+      setPlanningDraftsByNodeId((d) => Object.fromEntries(Object.entries(d).filter(([k]) => !toRemove.has(k))))
+      setPlanningMetaByNodeId((m) => Object.fromEntries(Object.entries(m).filter(([k]) => !toRemove.has(k))))
+      setPlanningStructuredMetaByNodeId((s) => Object.fromEntries(Object.entries(s).filter(([k]) => !toRemove.has(k))))
+      setPlanningSelectedNodeId((cur) => (cur && toRemove.has(cur) ? null : cur))
+      return prev.filter((n) => !toRemove.has(n.id))
+    })
+  }, [])
+
+  const doPushPlanningTree = useCallback(async () => {
+    if (!workId || planningPushCandidates.length === 0) return
+    const pushedAt = Date.now()
+    const nextEntries: TuiyanPushedOutlineEntry[] = planningPushCandidates.map((candidate) => ({
+      id: candidate.id,
+      parentId: candidate.parentId,
+      level: candidate.level,
+      order: candidate.order,
+      title: candidate.title,
+      content: candidate.content,
+      pushedAt,
+      structuredMeta: planningStructuredMetaByNodeId[candidate.id] ?? undefined,
+    }))
+    await upsertTuiyanState(workId, { planningPushedOutlines: nextEntries })
+    setPlanningError("")
+  }, [planningPushCandidates, planningStructuredMetaByNodeId, workId])
+
+  const pushPlanningTreeToWriter = useCallback(async () => {
+    if (!workId) return
+    if (planningPushCandidates.length === 0) {
+      setPlanningError("当前规划树为空，请先生成总纲/大纲/卷纲/细纲。")
+      return
+    }
+    const previousState = await getTuiyanState(workId)
+    const hadPrevious = (previousState?.planningPushedOutlines?.length ?? 0) > 0
+    if (hadPrevious) {
+      setPushOverwriteConfirmOpen(true)
+      return
+    }
+    await doPushPlanningTree()
+  }, [doPushPlanningTree, planningPushCandidates.length, workId])
 
   const writeToAiPanelDraftAndOpenEditor = useCallback(
     (draft: string) => {
@@ -1587,62 +1973,6 @@ export default function V0TuiyanPage() {
     URL.revokeObjectURL(a.href)
   }
 
-  const [quickEditTitle, setQuickEditTitle] = useState("")
-  const [quickEditSummary, setQuickEditSummary] = useState("")
-
-  useEffect(() => {
-    if (!selectedNode) return
-    setQuickEditTitle(selectedNode.title ?? "")
-    setQuickEditSummary((selectedNode.summary as string | undefined) ?? "")
-  }, [selectedNode?.id])
-
-  const flushQuickEdit = useCallback(async () => {
-    if (!workId || useSamplePreview) return
-    if (!selectedNode) return
-    const title = quickEditTitle.trim() || selectedNode.title
-    const summary = quickEditSummary
-    if (selectedNode.type === "volume") {
-      await updateVolume(selectedNode.id, { title, summary })
-    } else if (selectedNode.type === "chapter") {
-      await updateChapter(selectedNode.id, { title, summary })
-    }
-    await reloadOutlineForWork(workId)
-  }, [workId, useSamplePreview, selectedNode, quickEditTitle, quickEditSummary, reloadOutlineForWork])
-
-  const selectedScene = useMemo(() => {
-    if (!selectedNode || selectedNode.type !== "scene") return null
-    return scenes.find((s) => s.id === selectedNode.id) ?? null
-  }, [selectedNode, scenes])
-
-  const selectedChapterId = selectedNode?.type === "chapter" ? selectedNode.id : null
-  const linkedScenesForSelectedChapter = useMemo(() => {
-    if (!selectedChapterId) return []
-    return scenes.filter((s) => s.linkedChapterIds.includes(selectedChapterId))
-  }, [scenes, selectedChapterId])
-
-  const filteredSceneChoicesForLink = useMemo(() => {
-    const q = sceneQ.trim().toLowerCase()
-    const linked = new Set(linkedScenesForSelectedChapter.map((s) => s.id))
-    const base = scenes.filter((s) => !linked.has(s.id))
-    if (!q) return base
-    return base.filter((s) => `${s.title}\n${s.summary ?? ""}`.toLowerCase().includes(q))
-  }, [sceneQ, scenes, linkedScenesForSelectedChapter])
-
-  // 切换折叠
-  const toggleCollapse = (id: string) => {
-    const updateNodes = (nodes: OutlineNode[]): OutlineNode[] => {
-      return nodes.map((node) => {
-        if (node.id === id) {
-          return { ...node, collapsed: !node.collapsed }
-        }
-        if (node.children) {
-          return { ...node, children: updateNodes(node.children) }
-        }
-        return node
-      })
-    }
-    setOutline(updateNodes(outline))
-  }
 
   // 置顶文策
   const handlePinWenCe = (id: string) => {
@@ -1652,115 +1982,6 @@ export default function V0TuiyanPage() {
       )
     )
   }
-
-  const filteredOutline = useMemo(() => {
-    const q = outlineSearch.trim().toLowerCase()
-    if (!q) return outline
-    const walk = (nodes: OutlineNode[]): OutlineNode[] => {
-      const out: OutlineNode[] = []
-      for (const n of nodes) {
-        const hay = `${n.title ?? ""}\n${(n.summary ?? "") as string}`.toLowerCase()
-        const child = n.children ? walk(n.children) : []
-        if (hay.includes(q) || child.length > 0) {
-          out.push({ ...n, collapsed: q ? false : n.collapsed, children: child.length ? child : n.children })
-        }
-      }
-      return out
-    }
-    return walk(outline)
-  }, [outline, outlineSearch])
-
-  useEffect(() => {
-    if (!outlineSearch.trim()) return
-    if (!selectedOutlineId) return
-    if (findNodeById(filteredOutline, selectedOutlineId)) return
-    const first = firstChapterIdInTree(filteredOutline)
-    if (first) setSelectedOutlineId(first)
-  }, [outlineSearch, selectedOutlineId, filteredOutline])
-
-  const handleCreateVolume = useCallback(async () => {
-    if (!workId) return
-    const v = await createVolume(workId, "新卷")
-    await reloadOutlineForWork(workId)
-    setSelectedOutlineId(v.id)
-  }, [workId, reloadOutlineForWork])
-
-  const applyNodeStatus = useCallback(
-    (nodeId: string, status: OutlineNode["status"]) => {
-      if (status === "finalized") return
-      setOutline((prev) => {
-        const walk = (nodes: OutlineNode[]): OutlineNode[] =>
-          nodes.map((n) => {
-            if (n.id === nodeId) return { ...n, status }
-            if (n.children) return { ...n, children: walk(n.children) }
-            return n
-          })
-        return walk(prev)
-      })
-      if (status === "draft" || status === "refining" || status === "locked") {
-        setStatusByNodeId((prev) => ({ ...prev, [nodeId]: status }))
-      }
-    },
-    [],
-  )
-
-  const requestMoveNode = useCallback(
-    async (nodeId: string, dir: "up" | "down") => {
-      if (!workId || useSamplePreview) return
-      const node = findNodeById(outline, nodeId)
-      if (!node) return
-
-      if (node.type === "chapter") {
-        const idx = chapters.findIndex((c) => c.id === nodeId)
-        if (idx < 0) return
-        const j = dir === "up" ? idx - 1 : idx + 1
-        if (j < 0 || j >= chapters.length) return
-        const orderedIds = chapters.map((c) => c.id)
-        ;[orderedIds[idx], orderedIds[j]] = [orderedIds[j]!, orderedIds[idx]!]
-        await reorderChapters(workId, orderedIds)
-        await reloadOutlineForWork(workId)
-        return
-      }
-
-      if (node.type === "volume") {
-        const vols = await listVolumes(workId)
-        const idx = vols.findIndex((v) => v.id === nodeId)
-        if (idx < 0) return
-        const j = dir === "up" ? idx - 1 : idx + 1
-        if (j < 0 || j >= vols.length) return
-        const a = vols[idx]!
-        const b = vols[j]!
-        await Promise.all([
-          updateVolume(a.id, { order: b.order }),
-          updateVolume(b.id, { order: a.order }),
-        ])
-        await reloadOutlineForWork(workId)
-      }
-    },
-    [workId, useSamplePreview, outline, chapters, reloadOutlineForWork],
-  )
-
-  const handleDeleteNode = useCallback(
-    async (nodeId: string) => {
-      if (!workId || useSamplePreview) return
-      const node = findNodeById(outline, nodeId)
-      if (!node) return
-      if (node.type === "scene") {
-        setScenes((prev) => prev.filter((s) => s.id !== nodeId))
-        setSelectedOutlineId((cur) => (cur === nodeId ? null : cur))
-        return
-      }
-      if (node.type === "volume") await deleteVolume(node.id)
-      if (node.type === "chapter") await deleteChapter(node.id)
-      await reloadOutlineForWork(workId)
-    },
-    [workId, useSamplePreview, outline, reloadOutlineForWork],
-  )
-
-  const linkedRefs = useMemo(() => {
-    const set = new Set(linkedRefWorkIds)
-    return refLibrary.filter((r) => set.has(r.id))
-  }, [refLibrary, linkedRefWorkIds])
 
   useEffect(() => {
     // Keep outline's scene nodes in sync with `scenes` (scenes are independent of vol/chap tree).
@@ -1778,25 +1999,6 @@ export default function V0TuiyanPage() {
       return [...sceneNodes, ...rest]
     })
   }, [scenes])
-
-  const filteredRefChoices = useMemo(() => {
-    const q = linkRefQ.trim().toLowerCase()
-    const linked = new Set(linkedRefWorkIds)
-    const base = refLibrary.filter((r) => !linked.has(r.id))
-    if (!q) return base
-    return base.filter((r) => {
-      const hay = `${r.title ?? ""}\n${r.category ?? ""}`.toLowerCase()
-      return hay.includes(q)
-    })
-  }, [refLibrary, linkedRefWorkIds, linkRefQ])
-
-  const linkRef = useCallback((refWorkId: string) => {
-    setLinkedRefWorkIds((prev) => (prev.includes(refWorkId) ? prev : [...prev, refWorkId]))
-  }, [])
-
-  const unlinkRef = useCallback((refWorkId: string) => {
-    setLinkedRefWorkIds((prev) => prev.filter((x) => x !== refWorkId))
-  }, [])
 
   const applyRefToOutline = useCallback(
     async (ref: ReferenceLibraryEntry) => {
@@ -1834,11 +2036,6 @@ export default function V0TuiyanPage() {
     [selectedOutlineId],
   )
 
-  const requestDeleteNode = useCallback((nodeId: string) => {
-    setPendingDeleteId(nodeId)
-    setDeleteConfirmOpen(true)
-  }, [])
-
   const createScene = useCallback(() => {
     const id = `scene-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
     const t = Date.now()
@@ -1857,43 +2054,6 @@ export default function V0TuiyanPage() {
     setActiveTab("outline")
   }, [])
 
-  const linkSceneToChapter = useCallback((sceneId: string, chapterId: string) => {
-    const t = Date.now()
-    setScenes((prev) =>
-      prev.map((s) => {
-        if (s.id !== sceneId) return s
-        if (s.linkedChapterIds.includes(chapterId)) return s
-        return { ...s, linkedChapterIds: [...s.linkedChapterIds, chapterId], updatedAt: t }
-      }),
-    )
-  }, [])
-
-  const unlinkSceneFromChapter = useCallback((sceneId: string, chapterId: string) => {
-    const t = Date.now()
-    setScenes((prev) =>
-      prev.map((s) =>
-        s.id === sceneId
-          ? { ...s, linkedChapterIds: s.linkedChapterIds.filter((x) => x !== chapterId), updatedAt: t }
-          : s,
-      ),
-    )
-  }, [])
-
-  const handleSendMessage = () => {
-    const text = chatInput.trim()
-    if (!text) return
-    const newMessage: ChatMessage = {
-      id: `m${Date.now()}`,
-      role: "user",
-      content: text,
-      timestamp: new Date(),
-      relatedOutlineId: selectedOutlineId || undefined,
-    }
-    setChatHistory((prev) => [...prev, newMessage])
-    setChatInput("")
-    setRightPanelTab("chat")
-    void runBranchPredict(text)
-  }
 
   // 统计数据
   const countNodes = (nodes: OutlineNode[], type?: OutlineNode["type"]): number => {
@@ -1926,7 +2086,7 @@ export default function V0TuiyanPage() {
 
   if (pageLoading) {
     return (
-      <div className="flex h-[calc(100vh-3.5rem)] items-center justify-center">
+      <div className="flex h-dvh items-center justify-center">
         <div className="text-center">
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           <p className="mt-2 text-sm text-muted-foreground">加载中...</p>
@@ -1936,49 +2096,67 @@ export default function V0TuiyanPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3.5rem)] flex-col bg-background">
-      <AlertDialog
-        open={deleteConfirmOpen}
-        onOpenChange={(v) => {
-          setDeleteConfirmOpen(v)
-          if (!v) setPendingDeleteId(null)
-        }}
-      >
+    <>
+    <div className="flex h-dvh flex-col bg-background">
+      <Dialog open={planningIdeaDialogOpen} onOpenChange={setPlanningIdeaDialogOpen}>
+        <DialogContent className="flex max-h-[90vh] max-w-4xl flex-col gap-0 p-0 sm:max-w-4xl">
+          <DialogHeader className="shrink-0 space-y-1 border-b border-border/40 px-6 py-4 text-left">
+            <DialogTitle>作品构思</DialogTitle>
+            <DialogDescription>
+              可粘贴多段、几千字长文。关闭本窗口后内容会保留在右侧详情区，并随作品自动保存。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex min-h-0 flex-col gap-2 px-6 pb-4 pt-2">
+            <Textarea
+              value={planningIdea}
+              onChange={(e) => setPlanningIdea(e.target.value)}
+              placeholder="梗概、人设、矛盾、卷线、结局走向等均可写在这里…"
+              className="min-h-[min(55vh,480px)] w-full resize-y text-sm leading-relaxed"
+              disabled={!workId || useSamplePreview}
+            />
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>约 {planningIdea.length} 字</span>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setPlanningIdeaDialogOpen(false)}>
+                完成
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <TuiyanPlanningPushDialog
+        open={planningPushDialogOpen}
+        onOpenChange={setPlanningPushDialogOpen}
+        candidates={planningPushCandidates}
+        onConfirmPush={pushPlanningTreeToWriter}
+      />
+
+      <AlertDialog open={pushOverwriteConfirmOpen} onOpenChange={setPushOverwriteConfirmOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>确认删除？</AlertDialogTitle>
+            <AlertDialogTitle>覆盖章纲快照</AlertDialogTitle>
             <AlertDialogDescription>
-              {pendingDeleteId
-                ? (() => {
-                    const n = findNodeById(outline, pendingDeleteId)
-                    if (!n) return "该节点不存在或已被删除。"
-                    const kind =
-                      n.type === "volume" ? "卷" : n.type === "chapter" ? "章" : n.type === "scene" ? "场景" : "节点"
-                    return `将删除${kind}「${n.title}」。此操作不可撤销。`
-                  })()
-                : "此操作不可撤销。"}
+              写作页左侧「章纲」栏已有上一次推送的五层快照，继续推送会整体覆盖旧的快照。
+              <br /><br />
+              这只会更新「章纲」栏，不会动「章节正文」。是否继续？
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={() => {
-                const id = pendingDeleteId
-                setDeleteConfirmOpen(false)
-                setPendingDeleteId(null)
-                if (id) void handleDeleteNode(id)
+                void doPushPlanningTree()
               }}
             >
-              删除
+              确认覆盖
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
       {/* Top Toolbar */}
       <div className="flex h-12 items-center justify-between border-b border-border/40 px-4">
         <div className="flex items-center gap-3">
-          {/* Left Panel Toggle */}
+          {/* 返回主页（图标） */}
           <TooltipProvider>
             <Tooltip>
               <TooltipTrigger asChild>
@@ -1986,18 +2164,12 @@ export default function V0TuiyanPage() {
                   variant="ghost"
                   size="sm"
                   className="h-8 w-8 p-0"
-                  onClick={() => setShowLeftPanel(!showLeftPanel)}
+                  onClick={() => navigate("/library")}
                 >
-                  {showLeftPanel ? (
-                    <PanelLeftClose className="h-4 w-4" />
-                  ) : (
-                    <PanelLeft className="h-4 w-4" />
-                  )}
+                  <Undo2 className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>
-                {showLeftPanel ? "收起大纲面板" : "展开大纲面板"}
-              </TooltipContent>
+              <TooltipContent>返回主页</TooltipContent>
             </Tooltip>
           </TooltipProvider>
 
@@ -2102,69 +2274,24 @@ export default function V0TuiyanPage() {
               <History className="h-4 w-4" />
               文策
             </button>
-            <Popover>
-              <PopoverTrigger asChild>
-                <button
-                  type="button"
-                  aria-label="搜索大纲"
-                  title="搜索大纲"
-                  className={cn(
-                    "flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-sm transition-colors",
-                    outlineSearch.trim()
-                      ? "text-primary"
-                      : "text-muted-foreground hover:text-foreground",
-                  )}
-                >
-                  <Search className="h-4 w-4" />
-                </button>
-              </PopoverTrigger>
-              <PopoverContent className="w-80 p-3" align="start" sideOffset={8}>
-                <div className="flex items-center gap-2 rounded-lg bg-muted/30 px-3 py-2">
-                  <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="搜索大纲..."
-                    className="flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
-                    value={outlineSearch}
-                    onChange={(e) => setOutlineSearch(e.target.value)}
-                    autoFocus
-                  />
-                </div>
-              </PopoverContent>
-            </Popover>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <div
-            className="flex items-center rounded-lg bg-muted/30 px-3 py-1.5 text-xs"
-            title="已标记为「已定稿」的节点数 ÷ 当前大纲总节点数（卷/章/场景）"
-          >
-            <span className="text-muted-foreground">定稿进度</span>
-            <span className="ml-1.5 font-medium tabular-nums text-foreground">
-              {totalNodes > 0 ? `${Math.round(progressPercent)}%` : "—"}
-            </span>
-          </div>
-
-          <div className="h-5 w-px bg-border/50" />
-
-          {/* Actions */}
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 w-8 p-0"
-                  type="button"
-                  onClick={handleExportOutline}
-                >
-                  <Download className="h-4 w-4" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>导出大纲</TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
+          {workLinkSeg && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-base leading-none" asChild>
+                    <Link to={`/work/${workLinkSeg}`} aria-label="返回写作">
+                      <PersonStanding className="h-4 w-4" />
+                    </Link>
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>返回写作</TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
 
           <TooltipProvider>
             <Tooltip>
@@ -2226,165 +2353,106 @@ export default function V0TuiyanPage() {
         </div>
       </div>
 
-      {/* TuiyanFlowBar — Sprint 3：步骤条 + 提示词选择器（可折叠） */}
-      <div className="border-b border-border/30 bg-muted/20">
-        <div className="flex items-center gap-3 px-4 py-1.5">
-          <button
-            type="button"
-            onClick={() => setShowFlowBar((v) => !v)}
-            className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors shrink-0"
-            title={showFlowBar ? "折叠步骤条" : "展开步骤条"}
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            提示词
-            {showFlowBar
-              ? <ChevronUp className="h-3 w-3" />
-              : <ChevronDown className="h-3 w-3" />}
-          </button>
-
-          {showFlowBar && (
-            <>
-              {/* 步骤 1 */}
-              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-[10px] font-bold text-primary shrink-0">1</span>
-                <span className="hidden sm:inline">选作品</span>
-              </div>
-              <div className="h-px w-3 bg-border/60 shrink-0 hidden sm:block" />
-              {/* 步骤 2：PromptPicker */}
-              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-[10px] font-bold text-primary shrink-0">2</span>
-                <span className="hidden sm:inline">选提示词</span>
-              </div>
-              <PromptPicker
-                selectedId={selectedPromptTemplate?.id}
-                onPick={(t) => setSelectedPromptTemplate(t)}
-                filterSlots={PROMPT_PICKER_TUIYAN_SLOTS}
-              />
-              {selectedPromptTemplate && (
-                <button
-                  type="button"
-                  className="rounded p-0.5 text-muted-foreground hover:text-foreground transition-colors"
-                  title="清除提示词选择"
-                  onClick={() => setSelectedPromptTemplate(null)}
-                >
-                  <X className="h-3.5 w-3.5" />
-                </button>
-              )}
-              <div className="h-px w-3 bg-border/60 shrink-0 hidden sm:block" />
-              {/* 步骤 3 */}
-              <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-[10px] font-bold text-primary shrink-0">3</span>
-                <span className="hidden sm:inline">AI 生成</span>
-              </div>
-              {selectedPromptTemplate && (
-                <span className="ml-1 hidden text-[11px] text-primary sm:inline">
-                  ✓ 模板已选，点顶栏「AI 生成」即可注入
-                </span>
-              )}
-            </>
-          )}
-        </div>
-      </div>
-
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left Panel - Outline Tree */}
         {showLeftPanel && (
-          <div className="flex w-80 flex-col border-r border-border/40 bg-card/20">
-            {/* Stats */}
-            <div className="grid grid-cols-4 gap-1 border-b border-border/40 p-3">
-              {[
-                { label: "卷", value: countNodes(outline, "volume"), color: "text-primary" },
-                { label: "章", value: countNodes(outline, "chapter"), color: "text-amber-400" },
-                { label: "场景", value: countNodes(outline, "scene"), color: "text-muted-foreground" },
-                { label: "已定", value: finalizedNodes, color: "text-[oklch(0.7_0.15_145)]" },
-              ].map((stat) => (
-                <div key={stat.label} className="text-center">
-                  <p className={cn("text-lg font-semibold", stat.color)}>{stat.value}</p>
-                  <p className="text-[10px] text-muted-foreground">{stat.label}</p>
-                </div>
-              ))}
-            </div>
-
-            {/* Outline Tree */}
-            <ScrollArea className="flex-1">
-              <div className="p-3 space-y-1">
-                {filteredOutline.map((node) => (
-                  <OutlineTreeNode
-                    key={node.id}
-                    node={node}
-                    selectedId={selectedOutlineId}
-                    onSelect={setSelectedOutlineId}
-                    onToggle={toggleCollapse}
-                    isFinalizedId={isFinalized}
-                    onToggleFinalized={toggleFinalized}
-                    onChangeStatus={(id, status) => applyNodeStatus(id, status)}
-                    onDelete={(id) => requestDeleteNode(id)}
-                    getStatusOverride={getStatusOverride}
-                    onMove={(id, dir) => void requestMoveNode(id, dir)}
-                  />
-                ))}
+          <div
+            className="flex h-full min-h-0 min-w-[18rem] flex-shrink-0 flex-col border-r border-border/40 bg-card/20"
+            style={{ width: `${leftPanelWidth}px` }}
+          >
+            <div className="flex min-h-0 items-center gap-2 border-b border-border/40 px-2 py-1.5">
+              <p className="shrink-0 text-xs font-medium text-foreground">规划章纲</p>
+              <div className="min-w-0 flex-1">
+                <TuiyanPlanningStatsInline
+                  masterCount={planningMasterTotal}
+                  outlineCount={planningOutlineNodes.length}
+                  volumeCount={planningVolumeTotal}
+                  chapterOutlineCount={planningChapterOutlineTotal}
+                />
               </div>
-            </ScrollArea>
-
-            {/* Add Actions */}
-            <div className="border-t border-border/40 p-3 space-y-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full justify-start gap-2"
-                type="button"
-                onClick={() => void handleCreateVolume()}
-                disabled={!workId}
-              >
-                <Plus className="h-4 w-4" />
-                新建卷
-              </Button>
               <Button
                 variant="ghost"
                 size="sm"
-                className="w-full justify-start gap-2 text-muted-foreground"
+                className="h-7 w-7 shrink-0 p-0"
                 type="button"
-                disabled={isGenerating || !workId}
-                onClick={() =>
-                  handleAiShortcut(
-                    "请根据已有卷章结构，给出三条「后续大纲」方向（每条含标题与走向说明）。",
-                  )
-                }
+                title="收起左侧栏"
+                onClick={() => setShowLeftPanel(false)}
               >
-                <Wand2 className="h-4 w-4" />
-                AI 生成大纲
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full justify-start gap-2"
-                type="button"
-                onClick={() => createScene()}
-              >
-                <Layers className="h-4 w-4" />
-                新建场景
+                <PanelLeftClose className="h-4 w-4" />
               </Button>
             </div>
+
+            <ScrollArea className="min-h-0 flex-1 overflow-hidden">
+              <div className="p-2 pb-3">
+                <TuiyanPlanningTree
+                  tree={planningTree}
+                  selectedId={planningSelectedNodeId}
+                  onSelectNode={selectPlanningNode}
+                  expandedById={planningExpandedById}
+                  onToggleExpand={togglePlanningExpand}
+                />
+              </div>
+            </ScrollArea>
+          </div>
+        )}
+
+        {showLeftPanel && (
+          <div
+            className="group relative z-10 w-1.5 shrink-0 cursor-col-resize bg-transparent hover:bg-primary/30"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整左侧栏宽度"
+            title="拖拽调整宽度；双击恢复默认"
+            onMouseDown={(e) => {
+              e.preventDefault()
+              beginPanelDrag("left", e.clientX)
+            }}
+            onDoubleClick={resetLeftPanelWidth}
+          />
+        )}
+
+        {!showLeftPanel && (
+          <div className="flex w-8 shrink-0 items-start border-r border-border/40 bg-card/10 pt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mx-auto h-7 w-7 p-0"
+              type="button"
+              title="展开左侧栏"
+              onClick={() => setShowLeftPanel(true)}
+            >
+              <PanelLeft className="h-4 w-4" />
+            </Button>
           </div>
         )}
 
         {/* Center Panel - Detail/Mindmap/WenCe */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          {activeTab === "outline" && outline.length === 0 && (
-            <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
-              <BookOpen className="h-10 w-10 opacity-40" />
-              <p>当前作品暂无卷或章节，请先在写作页或作品库中创建卷与章。</p>
-            </div>
+          {activeTab === "outline" && planningSelectedNode && (
+            <ScrollArea className="min-h-0 flex-1">
+              <TuiyanPlanningNodeCenterEditor
+                node={planningSelectedNode}
+                meta={planningMetaByNodeId[planningSelectedNode.id]}
+                structuredMeta={planningStructuredMetaByNodeId[planningSelectedNode.id]}
+                draftText={planningSelectedDraft}
+                disabled={!workId || useSamplePreview}
+                planningBusyLevel={planningBusyLevel}
+                parentChapterNode={
+                  planningSelectedNode.level === "chapter_detail" && planningSelectedNode.parentId
+                    ? (planningNodeMap.get(planningSelectedNode.parentId) ?? null)
+                    : null
+                }
+                onTitleChange={updatePlanningNodeTitle}
+                onSummaryChange={updatePlanningNodeSummary}
+                onDraftChange={updatePlanningNodeDraft}
+                onStructuredMetaChange={updatePlanningNodeStructuredMeta}
+                onRegenerateChapterDetail={(chapterNode) => void generatePlanningLevel("chapter_detail", chapterNode)}
+              />
+            </ScrollArea>
           )}
-          {activeTab === "outline" && outline.length > 0 && !selectedNode && (
-            <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
-              <List className="h-10 w-10 opacity-40" />
-              <p>请从左侧大纲中选择一个节点。</p>
-            </div>
-          )}
-          {activeTab === "outline" && selectedNode && (
-            <ScrollArea className="flex-1">
+          {activeTab === "outline" && !planningSelectedNode && useSamplePreview && selectedNode && (
+            <ScrollArea className="min-h-0 flex-1">
               <div className="max-w-3xl mx-auto p-6 space-y-6">
                 {/* Node Header */}
                 <div className="space-y-4">
@@ -2639,6 +2707,26 @@ export default function V0TuiyanPage() {
               </div>
             </ScrollArea>
           )}
+          {activeTab === "outline" && !planningSelectedNode && workId && !useSamplePreview && (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
+              <List className="h-10 w-10 opacity-40" />
+              <p>请从左侧规划树选择节点。</p>
+              <p className="max-w-sm text-xs leading-relaxed text-muted-foreground/90">
+                作品构思与「生成总纲 / 一级大纲 / 卷纲 / 章纲」在右侧辅助栏「详情」顶部；本页中间用于编辑当前选中节点的摘要与细纲。
+              </p>
+              {outline.length === 0 ? (
+                <p className="max-w-sm text-xs leading-relaxed">
+                  当前作品尚无写作卷章，不影响在此做五层规划；需要导图或推送正文时，请先在写作页创建卷与章节。
+                </p>
+              ) : null}
+            </div>
+          )}
+          {activeTab === "outline" && !planningSelectedNode && !workId && !useSamplePreview && (
+            <div className="flex flex-1 flex-col items-center justify-center gap-2 p-8 text-center text-sm text-muted-foreground">
+              <BookOpen className="h-10 w-10 opacity-40" />
+              <p>请从顶部选择作品以开始推演。</p>
+            </div>
+          )}
 
           {activeTab === "mindmap" && outline.length === 0 && (
             <div className="flex flex-1 items-center justify-center p-8 text-sm text-muted-foreground">
@@ -2720,7 +2808,7 @@ export default function V0TuiyanPage() {
           )}
 
           {activeTab === "wence" && (
-            <ScrollArea className="flex-1">
+            <ScrollArea className="min-h-0 flex-1">
               <div className="max-w-3xl mx-auto p-6 space-y-6">
                 {/* Header */}
                 <div className="flex items-center justify-between">
@@ -2790,9 +2878,37 @@ export default function V0TuiyanPage() {
 
         {/* Right Panel - Chat/Reference */}
         {showRightPanel && (
-          <div className="flex w-96 flex-col border-l border-border/40 bg-card/20 min-h-0 overflow-hidden">
+          <>
+          <div
+            className="group relative z-10 w-1.5 shrink-0 cursor-col-resize bg-transparent hover:bg-primary/30"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整右侧栏宽度"
+            title="拖拽调整宽度；双击恢复默认"
+            onMouseDown={(e) => {
+              e.preventDefault()
+              beginPanelDrag("right", e.clientX)
+            }}
+            onDoubleClick={resetRightPanelWidth}
+          />
+          <div
+            className="flex min-h-0 flex-shrink-0 flex-col border-l border-border/40 bg-card/20 overflow-hidden"
+            style={{ width: `${rightPanelWidth}px` }}
+          >
             {/* Panel Tabs */}
             <div className="flex items-center border-b border-border/40">
+              <div className="flex h-[45px] w-10 shrink-0 items-center justify-center">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 w-7 p-0"
+                  type="button"
+                  title="收起右侧栏"
+                  onClick={() => setShowRightPanel(false)}
+                >
+                  <PanelRightClose className="h-4 w-4" />
+                </Button>
+              </div>
               <button
                 className={cn(
                   "flex-1 py-3 text-sm font-medium transition-colors relative",
@@ -2839,455 +2955,108 @@ export default function V0TuiyanPage() {
 
             {/* Panel Content */}
             {rightPanelTab === "chat" && (
-              <div className="flex flex-1 flex-col min-h-0">
-                {/* Chat Messages */}
-                <ScrollArea className="flex-1 min-h-0 p-4" ref={chatScrollRef}>
-                  <div className="space-y-3">
-                    {chatHistory.length === 0 && !isGenerating && (
-                      <div className="flex flex-col items-center justify-center py-10 text-center gap-2">
-                        <Bot className="h-8 w-8 text-muted-foreground/40" />
-                        <p className="text-sm text-muted-foreground">选择一个大纲节点，<br />描述你的想法开始对话</p>
-                      </div>
-                    )}
-                    {chatHistory.map((message) => (
-                      <div
-                        key={message.id}
-                        className={cn(
-                          "flex gap-2",
-                          message.role === "user" ? "flex-row-reverse" : "flex-row"
-                        )}
-                      >
-                        {message.role === "assistant" && (
-                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 mt-1">
-                            <Bot className="h-3.5 w-3.5 text-primary" />
-                          </div>
-                        )}
-                        <div className={cn(
-                          "flex flex-col gap-1 max-w-[85%]",
-                          message.role === "user" ? "items-end" : "items-start"
-                        )}>
-                          <div className={cn(
-                            "rounded-2xl px-3 py-2 text-sm leading-relaxed",
-                            message.role === "user"
-                              ? "bg-primary text-primary-foreground rounded-tr-sm"
-                              : "bg-muted/60 text-foreground rounded-tl-sm"
-                          )}>
-                            {message.role === "assistant" ? (
-                              <ChatMessageBubble
-                                message={message}
-                                onWriteToDraft={(c) => writeToAiPanelDraftAndOpenEditor(c)}
-                                onGoWence={(c) => goWenceWithPrefill(c)}
-                                inline
-                              />
-                            ) : (
-                              <span className="whitespace-pre-wrap">{message.content}</span>
-                            )}
-                          </div>
-                          <span className="text-[10px] text-muted-foreground px-1">
-                            {message.timestamp instanceof Date
-                              ? message.timestamp.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })
-                              : ""}
-                          </span>
-                        </div>
-                      </div>
-                    ))}
-                    {isGenerating && (
-                      <div className="flex gap-2">
-                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 mt-1">
-                          <Bot className="h-3.5 w-3.5 text-primary animate-pulse" />
-                        </div>
-                        <div className="flex items-center gap-1 rounded-2xl rounded-tl-sm bg-muted/60 px-4 py-2.5">
-                          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.3s]" />
-                          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary [animation-delay:-0.15s]" />
-                          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-primary" />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </ScrollArea>
-
-                {/* Input Area */}
-                <div className="shrink-0 border-t border-border/40 p-3 space-y-2">
-                  {/* Quick Prompts */}
-                  <div className="flex flex-wrap gap-1.5">
-                    {[
-                      { icon: Zap, text: "优化节奏" },
-                      { icon: Users, text: "完善人物" },
-                      { icon: Swords, text: "强化冲突" },
-                      { icon: Brain, text: "理清逻辑" },
-                    ].map((prompt) => (
-                      <button
-                        key={prompt.text}
-                        type="button"
-                        className="flex items-center gap-1 rounded-full border border-border/60 bg-background/60 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors"
-                        onClick={() => setChatInput((prev) => prev ? prev + " " + prompt.text : prompt.text)}
-                      >
-                        <prompt.icon className="h-3 w-3" />
-                        {prompt.text}
-                      </button>
-                    ))}
-                  </div>
-
-                  {/* Textarea + Send */}
-                  <div className="relative">
-                    <Textarea
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      placeholder={selectedNode ? `对「${selectedNode.title}」提问…` : "描述你的想法，Enter 发送…"}
-                      className="min-h-[72px] max-h-[140px] resize-none pr-12 text-sm"
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault()
-                          handleSendMessage()
-                        }
-                      }}
-                    />
-                    <Button
-                      size="icon"
-                      className="absolute bottom-2 right-2 h-7 w-7 rounded-full"
-                      onClick={handleSendMessage}
-                      disabled={!chatInput.trim() || isGenerating}
-                      title="发送 (Enter)"
-                    >
-                      <Send className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-
-                  {/* Status bar */}
-                  <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                    <span>已选节点：<span className="text-foreground/70">{selectedNode?.title || "无"}</span></span>
-                    <span>Shift+Enter 换行</span>
-                  </div>
-                </div>
-              </div>
+              <TuiyanChatPanel
+                planningSelectedNode={planningSelectedNode}
+                outlineNodeTitle={selectedNode?.title ?? null}
+                chatHistory={chatHistory}
+                isGenerating={isGenerating}
+                chatInput={chatInput}
+                setChatInput={setChatInput}
+                onSend={(text) => {
+                  const msg: ChatMessage = {
+                    id: `m${Date.now()}`,
+                    role: "user",
+                    content: text,
+                    timestamp: new Date(),
+                    relatedOutlineId: selectedOutlineId ?? undefined,
+                  }
+                  setChatHistory((prev) => [...prev, msg])
+                  setChatInput("")
+                  setRightPanelTab("chat")
+                  void runBranchPredict(text, planningContext)
+                }}
+                onWriteToDraft={writeToAiPanelDraftAndOpenEditor}
+                onGoWence={goWenceWithPrefill}
+                chatScrollRef={chatScrollRef}
+              />
             )}
 
             {rightPanelTab === "reference" && (
-              <ScrollArea className="flex-1">
-                <div className="p-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-medium text-foreground">关联藏经</h3>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 gap-1.5 text-xs"
-                      onClick={() => setLinkRefOpen(true)}
-                      type="button"
-                    >
-                      <Link2 className="h-3.5 w-3.5" />
-                      关联书籍
-                    </Button>
-                  </div>
-
-                  <Dialog open={linkRefOpen} onOpenChange={setLinkRefOpen}>
-                    <DialogContent className="sm:max-w-xl">
-                      <DialogHeader>
-                        <DialogTitle>从藏经关联书籍</DialogTitle>
-                      </DialogHeader>
-                      <div className="space-y-3">
-                        <Input
-                          value={linkRefQ}
-                          onChange={(e) => setLinkRefQ(e.target.value)}
-                          placeholder="搜索书名 / 分类…"
-                          className="h-9"
-                        />
-                        <div className="max-h-[50vh] overflow-auto rounded-lg border border-border/40">
-                          {filteredRefChoices.length === 0 ? (
-                            <div className="p-4 text-sm text-muted-foreground">暂无可关联书目。</div>
-                          ) : (
-                            <div className="divide-y divide-border/30">
-                              {filteredRefChoices.map((r) => (
-                                <div key={r.id} className="flex items-center justify-between gap-3 p-3">
-                                  <div className="min-w-0">
-                                    <div className="truncate text-sm font-medium text-foreground">{r.title}</div>
-                                    <div className="mt-0.5 text-xs text-muted-foreground">
-                                      {(r.category ?? "未分类") + ` · ${r.chunkCount} 段 · ${r.chapterHeadCount} 章`}
-                                    </div>
-                                  </div>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-8"
-                                    onClick={() => linkRef(r.id)}
-                                  >
-                                    关联
-                                  </Button>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex items-center justify-between text-xs text-muted-foreground">
-                          <span>提示：更丰富的"提炼/标签/摘录"请在藏经页完成。</span>
-                          <Link to="/reference" className="text-primary hover:underline">
-                            打开藏经
-                          </Link>
-                        </div>
-                      </div>
-                    </DialogContent>
-                  </Dialog>
-
-                  {linkedRefs.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-border/40 p-4 text-center">
-                      <BookOpen className="mx-auto h-8 w-8 text-muted-foreground/50" />
-                      <p className="mt-2 text-sm text-muted-foreground">还没有关联藏经书目。</p>
-                      <div className="mt-3 flex items-center justify-center gap-2">
-                        <Button variant="outline" size="sm" className="gap-2" onClick={() => setLinkRefOpen(true)}>
-                          <Link2 className="h-4 w-4" />
-                          关联书籍
-                        </Button>
-                        <Button variant="outline" size="sm" className="gap-2" asChild>
-                          <Link to="/reference">
-                            <BookOpen className="h-4 w-4" />
-                            浏览藏经
-                          </Link>
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    linkedRefs.map((r) => (
-                      <div key={r.id} className="rounded-xl border border-border/40 bg-card/30 p-4 space-y-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <h4 className="truncate font-medium text-foreground">{r.title}</h4>
-                            <p className="mt-0.5 text-xs text-muted-foreground">
-                              {(r.category ?? "未分类") + ` · ${r.chunkCount} 段 · ${r.chapterHeadCount} 章`}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-                              asChild
-                            >
-                              <Link to={`/reference?ref=${encodeURIComponent(r.id)}&ord=0`}>
-                                <BookOpen className="mr-1.5 h-3.5 w-3.5" />
-                                打开
-                              </Link>
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 px-2 text-xs text-destructive hover:text-destructive"
-                              onClick={() => unlinkRef(r.id)}
-                            >
-                              解除
-                            </Button>
-                          </div>
-                        </div>
-
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="w-full gap-2 text-xs"
-                          onClick={() => void applyRefToOutline(r)}
-                          type="button"
-                        >
-                          <Sparkles className="h-3.5 w-3.5" />
-                          应用到当前大纲（写入文策）
-                        </Button>
-                      </div>
-                    ))
-                  )}
-
-                </div>
-              </ScrollArea>
+              <TuiyanReferencePanel
+                linkedRefWorkIds={linkedRefWorkIds}
+                refLibrary={refLibrary}
+                currentNodeKeywords={planningSelectedNode?.title ?? selectedNode?.title ?? ""}
+                onLinkRef={(id) => setLinkedRefWorkIds((prev) => (prev.includes(id) ? prev : [...prev, id]))}
+                onUnlinkRef={(id) => setLinkedRefWorkIds((prev) => prev.filter((x) => x !== id))}
+                onApplyToOutline={(r) => { void applyRefToOutline(r) }}
+                onInjectToChat={(text) => {
+                  setChatInput((prev) => prev ? `${prev}\n\n【参考段落】\n${text}` : `【参考段落】\n${text}`)
+                  setRightPanelTab("chat")
+                }}
+              />
             )}
 
-            {rightPanelTab === "detail" && selectedNode && (
-              <ScrollArea className="flex-1">
+            {rightPanelTab === "detail" && (
+              <ScrollArea className="min-h-0 flex-1">
                 <div className="p-4 space-y-4">
-                  {/* Quick Edit */}
-                  <div className="space-y-3">
-                    <h3 className="text-sm font-medium text-foreground">快速编辑</h3>
-                    <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">标题</label>
-                      <Input
-                        value={quickEditTitle}
-                        onChange={(e) => setQuickEditTitle(e.target.value)}
-                        className="h-9"
-                        onBlur={() => void flushQuickEdit()}
-                        disabled={!workId || useSamplePreview}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">摘要</label>
-                      <Textarea
-                        value={quickEditSummary}
-                        onChange={(e) => setQuickEditSummary(e.target.value)}
-                        className="min-h-[100px] resize-none"
-                        placeholder="描述这一部分的核心内容..."
-                        onBlur={() => void flushQuickEdit()}
-                        disabled={!workId || useSamplePreview}
-                      />
-                    </div>
-                  </div>
-
-                  {selectedNode.type === "chapter" && (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-sm font-medium text-foreground">关联场景</h3>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-8 gap-2"
-                          type="button"
-                          onClick={() => setSceneLinkOpen(true)}
-                        >
-                          <Link2 className="h-4 w-4" />
-                          关联场景
-                        </Button>
-                      </div>
-                      {linkedScenesForSelectedChapter.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-border/40 bg-card/20 p-3 text-xs text-muted-foreground">
-                          暂无关联场景。可用于"场景作为独立节点"，并与章节建立归属/引用关系。
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {linkedScenesForSelectedChapter.map((s) => (
-                            <div
-                              key={s.id}
-                              className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-card/20 p-3"
-                            >
-                              <button
-                                className="min-w-0 text-left"
-                                onClick={() => setSelectedOutlineId(s.id)}
-                                type="button"
-                              >
-                                <div className="truncate text-sm font-medium text-foreground">{s.title}</div>
-                                <div className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-                                  {(s.summary ?? "").trim() || "（暂无摘要）"}
-                                </div>
-                              </button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 text-xs text-destructive hover:text-destructive"
-                                type="button"
-                                onClick={() => unlinkSceneFromChapter(s.id, selectedNode.id)}
-                              >
-                                解除
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      <Dialog
-                        open={sceneLinkOpen}
-                        onOpenChange={(v) => {
-                          setSceneLinkOpen(v)
-                          if (!v) setSceneQ("")
-                        }}
-                      >
-                        <DialogContent className="sm:max-w-xl">
-                          <DialogHeader>
-                            <DialogTitle>选择要关联的场景</DialogTitle>
-                          </DialogHeader>
-                          <div className="space-y-3">
-                            <Input
-                              value={sceneQ}
-                              onChange={(e) => setSceneQ(e.target.value)}
-                              placeholder="搜索场景标题/摘要…"
-                              className="h-9"
-                            />
-                            <div className="max-h-[50vh] overflow-auto rounded-lg border border-border/40">
-                              {filteredSceneChoicesForLink.length === 0 ? (
-                                <div className="p-4 text-sm text-muted-foreground">暂无可关联场景。</div>
-                              ) : (
-                                <div className="divide-y divide-border/30">
-                                  {filteredSceneChoicesForLink.map((s) => (
-                                    <div key={s.id} className="flex items-center justify-between gap-3 p-3">
-                                      <div className="min-w-0">
-                                        <div className="truncate text-sm font-medium text-foreground">{s.title}</div>
-                                        <div className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
-                                          {(s.summary ?? "").trim() || "（暂无摘要）"}
-                                        </div>
-                                      </div>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-8"
-                                        onClick={() => {
-                                          linkSceneToChapter(s.id, selectedNode.id)
-                                          setSceneLinkOpen(false)
-                                          setSceneQ("")
-                                        }}
-                                      >
-                                        关联
-                                      </Button>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                            <div className="flex items-center justify-between text-xs text-muted-foreground">
-                              <span>没有合适的？可以先在左侧「新建场景」。</span>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-8 gap-2 text-xs"
-                                type="button"
-                                onClick={() => {
-                                  setSceneLinkOpen(false)
-                                  createScene()
-                                }}
-                              >
-                                <Plus className="h-4 w-4" />
-                                新建场景
-                              </Button>
-                            </div>
-                          </div>
-                        </DialogContent>
-                      </Dialog>
-                    </div>
-                  )}
-
-                  {selectedNode.type === "scene" && selectedScene && (
-                    <div className="space-y-3">
-                      <h3 className="text-sm font-medium text-foreground">关联章节</h3>
-                      {selectedScene.linkedChapterIds.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-border/40 bg-card/20 p-3 text-xs text-muted-foreground">
-                          该场景尚未关联任何章节。可在章节详情里「关联场景」。
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {selectedScene.linkedChapterIds.map((cid) => {
-                            const ch = chapters.find((c) => c.id === cid)
-                            return (
-                              <div
-                                key={cid}
-                                className="flex items-center justify-between gap-3 rounded-lg border border-border/40 bg-card/20 p-3"
-                              >
-                                <button
-                                  className="min-w-0 text-left"
-                                  onClick={() => setSelectedOutlineId(cid)}
-                                  type="button"
-                                >
-                                  <div className="truncate text-sm font-medium text-foreground">
-                                    {ch?.title ?? "（章节已删）"}
-                                  </div>
-                                </button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-8 text-xs text-destructive hover:text-destructive"
-                                  type="button"
-                                  onClick={() => unlinkSceneFromChapter(selectedScene.id, cid)}
-                                >
-                                  解除
-                                </Button>
-                              </div>
-                            )
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Children Preview */}
-                  {selectedNode.children && selectedNode.children.length > 0 && (
+                  <TuiyanPlanningUnifiedPanel
+                    workId={workId}
+                    useSamplePreview={useSamplePreview}
+                    planningMode={planningMode}
+                    onPlanningModeChange={setPlanningMode}
+                    planningIdea={planningIdea}
+                    onPlanningIdeaChange={setPlanningIdea}
+                    onOpenBigIdeaDialog={() => setPlanningIdeaDialogOpen(true)}
+                    selectedPromptTemplate={selectedPromptTemplate}
+                    onPickPromptTemplate={setSelectedPromptTemplate}
+                    onClearPromptTemplate={() => setSelectedPromptTemplate(null)}
+                    planningBusyLevel={planningBusyLevel}
+                    planningError={planningError}
+                    planningMasterTotal={planningMasterTotal}
+                    planningOutlineNodesLength={planningOutlineNodes.length}
+                    planningVolumeTotal={planningVolumeTotal}
+                    planningChapterOutlineTotal={planningChapterOutlineTotal}
+                    planningSelectedNode={planningSelectedNode}
+                    planningSelectedMeta={planningSelectedNode ? planningMetaByNodeId[planningSelectedNode.id] : undefined}
+                    planningActiveOutline={planningActiveOutline}
+                    planningActiveVolume={planningActiveVolume}
+                    onUpdateSelectedNodeSummary={updatePlanningNodeSummary}
+                    onOpenPushDialog={() => setPlanningPushDialogOpen(true)}
+                    onGenerateMasterOutline={() => void generatePlanningLevel("master_outline", null)}
+                    onGenerateOutline={() => {
+                      if (planningActiveMaster) void generatePlanningLevel("outline", planningActiveMaster)
+                    }}
+                    onGenerateVolumeForActiveOutline={() => {
+                      if (planningActiveOutline) void generatePlanningLevel("volume", planningActiveOutline)
+                    }}
+                    onGenerateChapterOutlinesForActiveVolume={() => {
+                      if (planningActiveVolume) void generatePlanningLevel("chapter_outline", planningActiveVolume)
+                    }}
+                    planningScale={planningScale}
+                    onPlanningScaleChange={handlePlanningScaleChange}
+                    volumeCountForActiveOutline={volumeCountForActiveOutline}
+                    onGenerateVolume={(node) => void generatePlanningLevel("volume", node)}
+                    onRegenerateMasterOutline={() => void generatePlanningLevel("master_outline", null)}
+                    onRegenerateOutlineRoot={() => {
+                      if (planningActiveMaster) void generatePlanningLevel("outline", planningActiveMaster)
+                    }}
+                    onGenerateChapterOutlines={(node) => void generatePlanningLevel("chapter_outline", node)}
+                    onRegenerateVolume={() => void regenerateCurrentVolume()}
+                    onGenerateChapterDetail={(node) => void generatePlanningLevel("chapter_detail", node)}
+                    onRegenerateChapterOutlines={() => {
+                      if (planningActiveVolume) void generatePlanningLevel("chapter_outline", planningActiveVolume)
+                    }}
+                    onDeleteSelectedNode={() => {
+                      if (!planningSelectedNode) return
+                      setPlanningDeleteTarget({
+                        type: "node",
+                        nodeId: planningSelectedNode.id,
+                        nodeTitle: planningSelectedNode.title || PLANNING_LEVEL_LABEL[planningSelectedNode.level],
+                      })
+                    }}
+                    onClearAllPlanning={() => setPlanningDeleteTarget({ type: "all" })}
+                  />
+                  {selectedNode && selectedNode.children && selectedNode.children.length > 0 && (
                     <div className="space-y-3">
                       <h3 className="text-sm font-medium text-foreground">
                         子项 ({selectedNode.children.length})
@@ -3309,64 +3078,38 @@ export default function V0TuiyanPage() {
                       </div>
                     </div>
                   )}
-
-                  {/* Actions */}
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-medium text-foreground">操作</h3>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-2"
-                        type="button"
-                        disabled={isGenerating || !workId}
-                        onClick={() =>
-                          handleAiShortcut(
-                            "请围绕当前节点，给出三条可扩写或延展的正向剧情分支（每条含标题与走向）。",
-                          )
-                        }
-                      >
-                        <Sparkles className="h-4 w-4" />
-                        AI 扩写
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-2"
-                        type="button"
-                        disabled={isGenerating || !workId}
-                        onClick={() =>
-                          handleAiShortcut(
-                            "请为当前节点生成细纲要点（场景或节拍列点，三条并列方向）。",
-                          )
-                        }
-                      >
-                        <GitMerge className="h-4 w-4" />
-                        生成细纲
-                      </Button>
-                      <Button variant="outline" size="sm" className="gap-2" type="button">
-                        <CheckCircle className="h-4 w-4" />
-                        标记定稿
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-2"
-                        type="button"
-                        disabled={!workId}
-                        onClick={() => workId && navigate(`/work/${workLinkSeg ?? workId}`)}
-                      >
-                        <ArrowRight className="h-4 w-4" />
-                        进入生辉
-                      </Button>
-                    </div>
-                  </div>
                 </div>
               </ScrollArea>
             )}
           </div>
+          </>
+        )}
+
+        {!showRightPanel && (
+          <div className="flex w-8 shrink-0 items-start border-l border-border/40 bg-card/10 pt-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mx-auto h-7 w-7 p-0"
+              type="button"
+              title="展开右侧栏"
+              onClick={() => setShowRightPanel(true)}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+          </div>
         )}
       </div>
     </div>
+
+    <PlanningDeleteConfirmDialog
+      target={planningDeleteTarget}
+      onConfirm={(target) => {
+        executePlanningDelete(target)
+        setPlanningDeleteTarget(null)
+      }}
+      onCancel={() => setPlanningDeleteTarget(null)}
+    />
+    </>
   )
 }

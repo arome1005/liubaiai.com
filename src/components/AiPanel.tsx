@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { exportBibleMarkdown } from "../db/repo";
 import type {
@@ -27,6 +28,7 @@ import {
 } from "../ai/assemble-context";
 import { filterWorkBibleMarkdownBySections } from "../ai/work-bible-sections";
 import { generateWithProviderStream, isFirstAiGateCancelledError } from "../ai/client";
+import { ownerModeWillBypassBudget } from "../util/owner-mode";
 import {
   getProviderConfig,
   getProviderTemperature,
@@ -55,11 +57,16 @@ import { AiPanelWritingPromptsRow } from "./ai-panel/AiPanelWritingPromptsRow";
 import { renderPromptTemplate } from "../util/render-prompt-template";
 import { cn } from "../lib/utils";
 import { listModelPersonas } from "../util/model-personas";
-import { aiPanelDraftStorageKey, pushDraftHistory, readDraftHistory, deleteDraftHistoryEntry, type AiDraftHistoryEntry } from "../util/ai-panel-draft";
+import { aiPanelDraftStorageKey, pushDraftHistory, readDraftHistory, type AiDraftHistoryEntry } from "../util/ai-panel-draft";
+import { loadChapterTargetWordCount, saveChapterTargetWordCount } from "../util/chapter-target-wordcount-storage";
 import { isLocalAiProvider } from "../ai/local-provider";
 import { doubaoModelDisplayLabel } from "../util/doubao-ui";
 import { AiPanelRagSection, runAiPanelRagPreview } from "./ai-panel/AiPanelRagSection";
 import { AiPanelStudyChapterSection } from "./ai-panel/AiPanelStudyChapterSection";
+import { useGenPhase } from "./ai-panel/useGenPhase";
+import { useOutlineSource } from "./ai-panel/useOutlineSource";
+import { OutlineGenerationDialog } from "./ai-panel/OutlineGenerationDialog";
+import { AiPanelHistoryDialog } from "./ai-panel/AiPanelHistoryDialog";
 import { LINKED_CHAPTERS_UPDATED_EVENT, loadLinkedChapters } from "../util/linked-chapters-storage";
 import {
   CHAPTER_OUTLINE_PASTE_UPDATED_EVENT,
@@ -196,11 +203,24 @@ export const AiPanel = memo(function AiPanelBase(props: {
   insertAtCursor: (text: string) => void;
   appendToEnd: (text: string) => void;
   replaceSelection: (text: string) => void;
+  /**
+   * 在「插入正文 / 追加章尾 / 替换选区」之前调用：
+   * 若左侧侧栏当前在「章纲」页签，则切到「章节正文」以确保中部正文区可见。
+   */
+  ensureChapterViewBeforeInsert?: () => void;
   /** 同步「本次生成 · 使用材料（简版）」行，供正文工具栏悬停简报 */
   onMaterialsSummaryLinesChange?: (lines: string[]) => void;
   /** 运行模式由侧栏「设定」托管，与 `EditorPage` 状态同步 */
   writingSkillMode: WritingSkillMode;
   onWritingSkillModeChange: (m: WritingSkillMode) => void;
+  /**
+   * 点击「从章纲拉取」时请求父组件打开选择弹窗（父组件拥有章纲树 + 弹窗）。
+   * 确认拉取后父组件会调用 `saveChapterOutlinePaste` 并派发
+   * `CHAPTER_OUTLINE_PASTE_UPDATED_EVENT`，本面板监听事件自动回填输入框。
+   */
+  onRequestPullOutline?: () => void;
+  /** 章纲树是否为空：用于让「从章纲拉取」按钮禁用并给出提示。 */
+  outlineEntriesCount?: number;
 }) {
   const navigate = useNavigate();
   const {
@@ -409,6 +429,16 @@ export const AiPanel = memo(function AiPanelBase(props: {
       meters: { prose: 3, follow: 4, cost: 2 },
       note: "Base URL 填官方 api.mimo-v2.com/v1 即可。本地开发请用 npm run dev，已走同源代理避免浏览器跨域拦截；静态部署或遇 Failed to fetch 时需后端转发。",
     },
+    // owner-only：不出现在选择器（picker 数组里被排除），保留键以满足 Record 类型
+    "claude-code-local": {
+      label: "Claude Code（订阅）",
+      subtitle: "Owner · 本机 sidecar",
+      tip: "Claude Code 本地直连",
+      quote: '"我自用我的订阅。"',
+      core: "通过本机 sidecar（127.0.0.1:7788）调 Claude Pro/Max 订阅，不计入 API 计费。仅作者本人可见。",
+      meters: { prose: 5, follow: 4, cost: 1, costText: "订阅" },
+      note: "需在终端 npm run sidecar 启动本机 sidecar，并在「Owner 模式」粘贴 Token。",
+    },
   };
 
   const [settings, setSettings] = useState<AiSettings>(() => loadAiSettings());
@@ -511,6 +541,12 @@ export const AiPanel = memo(function AiPanelBase(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onPrefillUserHintConsumed intentionally omitted
   }, [props.prefillUserHint]);
 
+  /** 「本章正文生成」状态机（preparing → streaming → done/error/aborted），见 useGenPhase */
+  const { phase: genPhase, dispatch: dispatchGenPhase, reset: resetGenPhase } = useGenPhase();
+  /** 细纲来源（manual_paste / outline_pull / mixed / unknown），按章持久化 */
+  const { source: outlineSource, markManual: markOutlineSourceManual, markPull: markOutlineSourcePull } =
+    useOutlineSource(props.workId, props.chapter?.id ?? null);
+
   // per-chapter outline/plot paste (manual)
   useEffect(() => {
     if (!props.workId || !props.chapter) {
@@ -526,11 +562,12 @@ export const AiPanel = memo(function AiPanelBase(props: {
       if (!props.chapter) return;
       if (ev.detail?.workId === props.workId && ev.detail?.chapterId === props.chapter.id) {
         setChapterOutlinePaste(loadChapterOutlinePaste(props.workId, props.chapter.id));
+        markOutlineSourcePull();
       }
     };
     window.addEventListener(CHAPTER_OUTLINE_PASTE_UPDATED_EVENT, on as EventListener);
     return () => window.removeEventListener(CHAPTER_OUTLINE_PASTE_UPDATED_EVENT, on as EventListener);
-  }, [props.workId, props.chapter?.id]);
+  }, [props.workId, props.chapter?.id, markOutlineSourcePull]);
 
   const [sessionBudgetUiTick, setSessionBudgetUiTick] = useState(0);
   /** P1-04：今日用量刷新触发器（发送完成后 +1） */
@@ -552,19 +589,14 @@ export const AiPanel = memo(function AiPanelBase(props: {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [draftDialogOpen, setDraftDialogOpen] = useState(false);
-  /** P0-D：草稿元信息（最近一次生成） */
-  const [draftMeta, setDraftMeta] = useState<{
-    provider: string;
-    mode: string;
-    roughTokens: number;
-    generatedAt: number;
-  } | null>(null);
-  /** P0-D：元信息卡是否展开 */
-  const [draftMetaOpen, setDraftMetaOpen] = useState(false);
+  /** 生成弹窗当前是否处于「细纲已带入、待点击生成正文」模式 */
+  const [draftSeedMode, setDraftSeedMode] = useState(false);
   /** P1-C：草稿历史列表 */
   const [draftHistory, setDraftHistory] = useState<AiDraftHistoryEntry[]>([]);
-  /** P1-C：历史区是否展开 */
-  const [historyOpen, setHistoryOpen] = useState(false);
+  /** AI 侧栏「历史」独立弹窗开关（弹窗内部管理选中态/排序，见 AiPanelHistoryDialog） */
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  /** 用户自定义的本章正文字数（0/空 → 不约束）。包含标点。 */
+  const [targetWordCount, setTargetWordCount] = useState<number>(0);
   const [biblePreview, setBiblePreview] = useState<{ text: string; chars: number } | null>(null);
   const [bibleLoading, setBibleLoading] = useState(false);
   void bibleLoading;
@@ -577,6 +609,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
     window.addEventListener(LINKED_CHAPTERS_UPDATED_EVENT, onLinked as EventListener);
     return () => window.removeEventListener(LINKED_CHAPTERS_UPDATED_EVENT, onLinked as EventListener);
   }, []);
+
   const [ragQuery, setRagQuery] = useState("");
   const [ragHits, setRagHits] = useState<ReferenceSearchHit[]>([]);
   const [ragLoading, setRagLoading] = useState(false);
@@ -618,6 +651,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
   useLayoutEffect(() => {
     if (!draftStorageKey) {
       setDraft("");
+      setDraftSeedMode(false);
       setDraftHistory([]);
       return;
     }
@@ -627,8 +661,17 @@ export const AiPanel = memo(function AiPanelBase(props: {
     } catch {
       setDraft("");
     }
+    setDraftSeedMode(false);
     setDraftHistory(props.workId && props.chapter ? readDraftHistory(props.workId, props.chapter.id) : []);
+    setTargetWordCount(
+      props.workId && props.chapter ? loadChapterTargetWordCount(props.workId, props.chapter.id) : 0,
+    );
   }, [draftStorageKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!props.workId || !props.chapter) return;
+    saveChapterTargetWordCount(props.workId, props.chapter.id, targetWordCount);
+  }, [targetWordCount, props.workId, props.chapter]);
 
   useEffect(() => {
     if (!draftStorageKey) return;
@@ -694,8 +737,16 @@ export const AiPanel = memo(function AiPanelBase(props: {
     const reqText = reqMode === "custom" ? reqCustomText : writingReqInject;
     if (styleText.trim()) parts.push(`【文风】\n${styleText.trim()}`);
     if (reqText.trim()) parts.push(`【要求】\n${reqText.trim()}`);
+    if (targetWordCount > 0) {
+      // 包含标点；给一个 ±10% 的容忍带，避免模型为了贴字数硬凑或截断
+      const lo = Math.max(1, Math.floor(targetWordCount * 0.9));
+      const hi = Math.ceil(targetWordCount * 1.1);
+      parts.push(
+        `【字数】\n请生成约 ${targetWordCount} 字（含中文标点；可在 ${lo}–${hi} 字区间内浮动）的本章正文，不要明显短于该区间。`,
+      );
+    }
     return parts.join("\n\n");
-  }, [writingReqInject, writingStyleInject, styleMode, reqMode, styleCustomText, reqCustomText]);
+  }, [writingReqInject, writingStyleInject, styleMode, reqMode, styleCustomText, reqCustomText, targetWordCount]);
 
   const onStyleTemplatePick = useCallback(
     (t: GlobalPromptTemplate | null) => {
@@ -1065,6 +1116,37 @@ export const AiPanel = memo(function AiPanelBase(props: {
 
   const approxInjectChars = useMemo(() => injectBlocks.reduce((s, b) => s + (b.chars ?? 0), 0), [injectBlocks]);
 
+  /**
+   * 注入量预览（点击「本章细纲」标签旁的 tokens 标签时展示）。
+   * 不会阻断生成；只是把原阻断式弹窗改成按需查看。
+   * 注意：这里用与真实请求相同的装配函数，但 bibleMarkdown 仅在用户已加载时才有；
+   * 在用户尚未点过生成时，bible 部分体积可能略偏小，仅作为粗估即可。
+   */
+  const previewMessagesForInjection = useMemo(() => {
+    if (!sidepanelAssembleInput) return null;
+    try {
+      return buildWritingSidepanelMessages(sidepanelAssembleInput);
+    } catch {
+      return null;
+    }
+  }, [sidepanelAssembleInput]);
+
+  const previewInjectionPrompt = useMemo(() => {
+    if (!previewMessagesForInjection) return null;
+    const willSendBibleToCloud =
+      settings.includeBible &&
+      isCloudProvider &&
+      settings.privacy.allowBible &&
+      !!biblePreview?.text?.trim();
+    return resolveInjectionConfirmPrompt({
+      messages: previewMessagesForInjection,
+      settings,
+      willSendBibleToCloud,
+    });
+  }, [previewMessagesForInjection, settings, isCloudProvider, biblePreview?.text]);
+
+  const [tokenInfoOpen, setTokenInfoOpen] = useState(false);
+
   const approxInjectTokens = useMemo(() => {
     // Bible size is unknown until fetched; we keep it as a small constant signal.
     const s = settings.includeBible ? `${approxInjectChars}\n[BIBLE]` : String(approxInjectChars);
@@ -1163,7 +1245,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
 
   async function run(
     input?: { provider: AiProviderId; providerCfg: AiProviderConfig; messages: AiChatMessage[] },
-    opts?: { mode?: WritingSkillMode; fromDegrade?: boolean },
+    opts?: { mode?: WritingSkillMode; fromDegrade?: boolean; outlineOverride?: string },
   ) {
     if (!props.chapter) {
       setError("请先选择章节。");
@@ -1179,11 +1261,13 @@ export const AiPanel = memo(function AiPanelBase(props: {
     abortRef.current = ac;
     setBusy(true);
     setError(null);
+    setDraftSeedMode(false);
     setDraft("");
-    setDraftMeta(null);
-    setDraftMetaOpen(false);
     setShowDegradeRetry(false);
     if (!opts?.fromDegrade) degradeAttemptedRef.current = false;
+    // 打开「本章正文生成」弹窗，进入可见状态机
+    dispatchGenPhase({ type: "start" });
+    setDraftDialogOpen(true);
     const modeForAssemble: WritingSkillMode = opts?.mode ?? props.writingSkillMode;
     try {
       if (!input && modeForAssemble === "draw") {
@@ -1274,6 +1358,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
         const linkedChapterSummariesForAssemble = linkedChapterSummaryText;
         const linkedChapterFullForAssemble = linkedChapterFullText;
 
+        const chapterOutlineForAssemble = opts?.outlineOverride ?? chapterOutlinePaste;
         const assembleInput: WritingSidepanelAssembleInput = {
           workStyle: props.workStyle,
           tagProfileText,
@@ -1312,7 +1397,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
           userHint: composedUserHint,
           mode: modeForAssemble,
           recentN,
-          chapterOutlinePaste,
+          chapterOutlinePaste: chapterOutlineForAssemble,
           styleSamples: props.styleSampleSlices,
           glossaryTerms: glossarySlices,
           chapterStudyCharacterCards: studyCharacterCardSlices,
@@ -1324,36 +1409,19 @@ export const AiPanel = memo(function AiPanelBase(props: {
         usedProvider = settings.provider;
         usedProviderCfg = providerCfg;
 
-        const willSendBibleToCloud =
-          effIncludeBible &&
-          isCloudProvider &&
-          settings.privacy.allowBible &&
-          bibleForPrompt.trim().length > 0;
-        const injPrompt = resolveInjectionConfirmPrompt({
-          messages,
-          settings,
-          willSendBibleToCloud,
-        });
-        if (injPrompt.shouldPrompt) {
-          const ok = await new Promise<boolean>((resolve) => {
-            setCostGatePending({
-              reasons: injPrompt.reasons,
-              tokensApprox: injPrompt.tokensApprox,
-              dailyUsed: readTodayApproxTokens(),
-              dailyBudget: settings.dailyTokenBudget,
-              triggerLabel: "注入量确认",
-              resolve,
-            });
-          });
-          if (!ok) return;
-        }
+        // 注入量确认改为「细纲标签旁内联展示 + 点击查看详情」，不再阻断生成流程。
+        // 仍保留下方的「单次调用预警」与「日预算预警」作为硬护栏。
+        // 历史路径：见 design/editor-outline-generate-dialog-implementation-plan-2026-04-26.md。
       }
 
       const sessionBudgetCap = settings.aiSessionApproxTokenBudget;
       const requestTokApprox = messages.reduce((sum, m) => sum + approxRoughTokenCount(m.content), 0);
 
+      // Owner 模式：调用走本机 sidecar → Pro 订阅，不计入 API token 预算。跳过下方所有预算 / 预警检查。
+      const skipBudget = ownerModeWillBypassBudget();
+
       // P1-04：单次调用预警（singleCallWarnTokens）—— 低于 injectConfirmOnOversizeTokens 才生效
-      if (settings.singleCallWarnTokens > 0 && requestTokApprox >= settings.singleCallWarnTokens) {
+      if (!skipBudget && settings.singleCallWarnTokens > 0 && requestTokApprox >= settings.singleCallWarnTokens) {
         const ok = await new Promise<boolean>((resolve) => {
           setCostGatePending({
             reasons: [`本次请求粗估约 ${requestTokApprox.toLocaleString()} tokens，已超过单次预警阈值 ${settings.singleCallWarnTokens.toLocaleString()}。`],
@@ -1368,7 +1436,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
       }
 
       // P1-04：日预算超出预警
-      if (settings.dailyTokenBudget > 0) {
+      if (!skipBudget && settings.dailyTokenBudget > 0) {
         const todayUsed = readTodayApproxTokens();
         if (todayUsed + requestTokApprox > settings.dailyTokenBudget) {
           const ok = await new Promise<boolean>((resolve) => {
@@ -1385,7 +1453,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
         }
       }
 
-      if (sessionBudgetCap > 0) {
+      if (!skipBudget && sessionBudgetCap > 0) {
         const used = readSessionApproxTokens();
         if (used + requestTokApprox > sessionBudgetCap) {
           setError(
@@ -1401,33 +1469,40 @@ export const AiPanel = memo(function AiPanelBase(props: {
         config: usedProviderCfg,
         messages,
         signal: ac.signal,
-        onDelta: (d) => setDraft((prev) => prev + d),
+        onDelta: (d) => {
+          dispatchGenPhase({ type: "delta" });
+          setDraft((prev) => prev + d);
+        },
         temperature: !isLocalAiProvider(usedProvider) ? getProviderTemperature(settings, usedProvider) : undefined,
       });
       if (!draft.trim() && (r.text ?? "").trim()) {
         setDraft((r.text ?? "").trim());
       }
       const outTok = approxRoughTokenCount((r.text ?? "").trim());
-      addSessionApproxTokens(requestTokApprox + Math.max(0, outTok));
-      addTodayApproxTokens(requestTokApprox + Math.max(0, outTok));
-      setDraftMeta({
-        provider: usedProvider,
-        mode: modeForAssemble,
-        roughTokens: requestTokApprox + Math.max(0, outTok),
-        generatedAt: Date.now(),
-      });
+      // Owner 模式不累计 token：sidecar 走的是 Pro session 配额，metering 维度不同
+      if (!skipBudget) {
+        addSessionApproxTokens(requestTokApprox + Math.max(0, outTok));
+        addTodayApproxTokens(requestTokApprox + Math.max(0, outTok));
+      }
       if (props.workId && props.chapter && (r.text ?? "").trim()) {
         pushDraftHistory(props.workId, props.chapter.id, (r.text ?? "").trim());
         setDraftHistory(readDraftHistory(props.workId, props.chapter.id));
       }
       setSessionBudgetUiTick((x) => x + 1);
       setDailyUsageTick((x) => x + 1);
+      dispatchGenPhase({ type: "done" });
     } catch (e) {
-      if (isFirstAiGateCancelledError(e)) return;
+      if (isFirstAiGateCancelledError(e)) {
+        dispatchGenPhase({ type: "abort" });
+        return;
+      }
       const aborted = e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message));
-      if (!aborted) {
+      if (aborted) {
+        dispatchGenPhase({ type: "abort" });
+      } else {
         const msg = e instanceof Error ? e.message : "AI 调用失败";
         setError(msg);
+        dispatchGenPhase({ type: "error" });
         if (errorSuggestsContextDegrade(msg) && !degradeAttemptedRef.current) {
           setShowDegradeRetry(true);
         }
@@ -1456,6 +1531,14 @@ export const AiPanel = memo(function AiPanelBase(props: {
 
   const runRef = useRef(run);
   runRef.current = run;
+
+  function openDraftDialogWithOutlineSeed() {
+    const seed = chapterOutlinePaste.trim();
+    setDraft(seed);
+    setDraftSeedMode(true);
+    resetGenPhase();
+    setDraftDialogOpen(true);
+  }
   /** 防 StrictMode / 重挂载对同一 tick 重复 run；与父级 `lastContinueConsumedTick` 配合 */
   const continueLocalStartedRef = useRef(0);
   useEffect(() => {
@@ -1900,13 +1983,92 @@ export const AiPanel = memo(function AiPanelBase(props: {
       />
 
       <label className="ai-panel-field">
-        <span className="small muted">本章细纲 / 剧情构思</span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
+            <span className="small muted">剧情/细纲/tokens：</span>
+            {previewInjectionPrompt ? (
+              <button
+                type="button"
+                onClick={() => setTokenInfoOpen(true)}
+                title={
+                  previewInjectionPrompt.shouldPrompt
+                    ? "本次注入量已触发提示，点击查看详情"
+                    : "本次注入量预估，点击查看详情"
+                }
+                className="small"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: 0,
+                  border: "none",
+                  borderRadius: 0,
+                  background: "transparent",
+                  color: previewInjectionPrompt.shouldPrompt
+                    ? "var(--destructive)"
+                    : "var(--muted-foreground)",
+                  cursor: "pointer",
+                  lineHeight: 1.2,
+                }}
+              >
+                <strong>{previewInjectionPrompt.tokensApprox.toLocaleString()}</strong>
+                <span aria-hidden style={{ opacity: 0.7 }}>/次</span>
+                {previewInjectionPrompt.shouldPrompt ? (
+                  <span aria-hidden style={{ marginLeft: 2 }}>⚠</span>
+                ) : null}
+              </button>
+            ) : null}
+          </div>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+            <button
+              type="button"
+              className="small"
+              disabled={draftHistory.length === 0}
+              title={
+                draftHistory.length === 0
+                  ? "暂无生成历史（生成完成后会自动留存最近 5 条）"
+                  : `查看本章最近 ${draftHistory.length} 条生成历史`
+              }
+              onClick={() => {
+                if (draftHistory.length === 0) return;
+                setHistoryDialogOpen(true);
+              }}
+              style={{
+                padding: 0,
+                border: "none",
+                borderRadius: 0,
+                background: "transparent",
+                color: draftHistory.length === 0 ? "var(--muted-foreground)" : "var(--foreground)",
+                cursor: draftHistory.length === 0 ? "not-allowed" : "pointer",
+                opacity: draftHistory.length === 0 ? 0.6 : 1,
+              }}
+            >
+              历史{draftHistory.length > 0 ? `（${draftHistory.length}）` : ""}
+            </button>
+            {props.onRequestPullOutline ? (
+              <button
+                type="button"
+                className="wprow-tab wprow-tab--active"
+                disabled={(props.outlineEntriesCount ?? 0) === 0}
+                title={
+                  (props.outlineEntriesCount ?? 0) === 0
+                    ? "章纲树为空。请先到「推演」页生成并推送到写作章纲。"
+                    : "从章纲树选一个节点的内容灌到本框（推荐「详细细纲」，约 500–1200 字）"
+                }
+                onClick={() => props.onRequestPullOutline?.()}
+              >
+                从章纲拉取
+              </button>
+            ) : null}
+          </div>
+        </div>
         <textarea
           name="chapterOutlinePaste"
           value={chapterOutlinePaste}
           onChange={(e) => {
             const v = e.target.value;
             setChapterOutlinePaste(v);
+            markOutlineSourceManual();
             if (!props.chapter) return;
             saveChapterOutlinePaste(props.workId, props.chapter.id, v);
           }}
@@ -1916,40 +2078,36 @@ export const AiPanel = memo(function AiPanelBase(props: {
       </label>
 
       <div className="ai-panel-actions" style={{ justifyContent: "flex-start" }}>
-        <button type="button" className="btn primary" disabled={busy} onClick={() => void run()}>
-          {busy ? "生成中…" : "生成"}
+        <button
+          type="button"
+          className="btn primary"
+          disabled={busy}
+          title={
+            props.writingSkillMode === "outline" && !chapterOutlinePaste.trim()
+              ? "细纲为空 · 建议先「从章纲拉取」或粘贴细纲再生成"
+              : undefined
+          }
+          onClick={() => openDraftDialogWithOutlineSeed()}
+        >
+          {busy ? "去生成正文中…" : "去生成正文"}
         </button>
         <button
           type="button"
           className="btn"
-          disabled={!busy}
+          title="打开「本章正文生成」弹窗（查看上一次生成结果或历史草稿）"
           onClick={() => {
-            abortRef.current?.abort();
+            setDraftSeedMode(false);
+            setDraftDialogOpen(true);
           }}
         >
-          取消
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={busy || !lastReqRef.current}
-          onClick={() => {
-            const last = lastReqRef.current;
-            if (!last) return;
-            void run({ provider: last.provider, providerCfg: last.providerCfg, messages: last.messages });
-          }}
-        >
-          重试
-        </button>
-        <button
-          type="button"
-          className="btn"
-          title="打开草稿弹窗"
-          onClick={() => setDraftDialogOpen(true)}
-        >
-          草稿
+          生成结果
         </button>
       </div>
+      {props.writingSkillMode === "outline" && !chapterOutlinePaste.trim() ? (
+        <div className="muted small" style={{ marginTop: 6, color: "var(--warning, #b48510)" }}>
+          扩写模式下细纲为空 · 建议先「从章纲拉取」或粘贴细纲，否则生成会缺少剧情依据
+        </div>
+      ) : null}
       {error ? <AiInlineErrorNotice message={error} /> : null}
       {showDegradeRetry ? (
         <div className="rr-block" style={{ marginTop: 8 }}>
@@ -1962,154 +2120,53 @@ export const AiPanel = memo(function AiPanelBase(props: {
         </div>
       ) : null}
 
-      <Dialog open={draftDialogOpen} onOpenChange={setDraftDialogOpen}>
-        <DialogContent
-          overlayClassName="work-form-modal-overlay"
-          showCloseButton={false}
-          aria-describedby={undefined}
-          className={cn(
-            "z-[var(--z-modal-app-content)] max-h-[min(92vh,920px)] w-full max-w-[min(980px,100vw-2rem)] gap-0 overflow-hidden border-border bg-[var(--surface)] p-0 shadow-lg",
-          )}
-        >
-          <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-3 sm:px-5">
-            <DialogTitle className="text-left text-lg font-semibold">AI 草稿</DialogTitle>
-            <button type="button" className="icon-btn" title="关闭" onClick={() => setDraftDialogOpen(false)}>
-              ×
-            </button>
-          </div>
-          <div className="p-4 sm:p-5" style={{ overflow: "auto" }}>
-            <div className="muted small" style={{ marginBottom: 10, lineHeight: 1.55 }}>
-              与正文分离、不自动写入；合并前会弹出对比确认。切换章节草稿按章分别保存在本会话内。
-            </div>
-            {draftMeta && (
-              <div className="draft-meta-card">
-                <button
-                  type="button"
-                  className="draft-meta-card__toggle"
-                  onClick={() => setDraftMetaOpen((v) => !v)}
-                  aria-expanded={draftMetaOpen}
-                >
-                  {draftMetaOpen ? "▾" : "▸"}{" "}来源信息
-                </button>
-                {draftMetaOpen && (
-                  <dl className="draft-meta-card__body">
-                    <div className="draft-meta-row">
-                      <dt>模型</dt>
-                      <dd>{draftMeta.provider}</dd>
-                    </div>
-                    <div className="draft-meta-row">
-                      <dt>模式</dt>
-                      <dd>{{
-                        continue: "续写",
-                        outline: "扩写",
-                        summarize: "概要",
-                        rewrite: "改写",
-                        draw: "抽卡",
-                      }[draftMeta.mode] ?? draftMeta.mode}</dd>
-                    </div>
-                    <div className="draft-meta-row">
-                      <dt>粗估消耗</dt>
-                      <dd>~{draftMeta.roughTokens.toLocaleString()} tokens</dd>
-                    </div>
-                    <div className="draft-meta-row">
-                      <dt>生成时间</dt>
-                      <dd>{new Date(draftMeta.generatedAt).toLocaleTimeString()}</dd>
-                    </div>
-                  </dl>
-                )}
-              </div>
-            )}
-            {draftHistory.length > 0 && (
-              <div className="draft-history-section">
-                <button
-                  type="button"
-                  className="draft-history-toggle"
-                  onClick={() => setHistoryOpen((v) => !v)}
-                  aria-expanded={historyOpen}
-                >
-                  {historyOpen ? "▾" : "▸"}{" "}历史草稿（{draftHistory.length}）
-                </button>
-                {historyOpen && (
-                  <ul className="draft-history-list">
-                    {draftHistory.map((entry) => (
-                      <li key={entry.savedAt} className="draft-history-item">
-                        <div className="draft-history-item-head">
-                          <span className="draft-history-item-time muted small">
-                            {new Date(entry.savedAt).toLocaleTimeString()}
-                          </span>
-                          <div className="draft-history-item-actions">
-                            <button
-                              type="button"
-                              className="btn small"
-                              onClick={() => setDraft(entry.content)}
-                              title="恢复此版本到草稿框"
-                            >
-                              恢复
-                            </button>
-                            <button
-                              type="button"
-                              className="btn small secondary"
-                              onClick={() => {
-                                if (!props.workId || !props.chapter) return;
-                                deleteDraftHistoryEntry(props.workId, props.chapter.id, entry.savedAt);
-                                setDraftHistory(readDraftHistory(props.workId, props.chapter.id));
-                              }}
-                              title="删除此条历史"
-                            >
-                              删除
-                            </button>
-                          </div>
-                        </div>
-                        <div className="draft-history-item-preview muted small">{entry.preview}</div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-            <label className="ai-panel-field ai-panel-field--draft">
-              <textarea name="aiDraft" value={draft} onChange={(e) => setDraft(e.target.value)} rows={12} />
-            </label>
-            <div className="ai-panel-actions" style={{ justifyContent: "flex-start", marginTop: 10 }}>
-              <button
-                type="button"
-                className="btn"
-                disabled={!draft.trim()}
-                onClick={() => {
-                  const t = draft.trim();
-                  if (!t) return;
-                  setMergePayload({ kind: "insert", payload: t + "\n\n" });
-                }}
-              >
-                插入到光标
-              </button>
-              <button
-                type="button"
-                className="btn"
-                disabled={!draft.trim()}
-                onClick={() => {
-                  const t = draft.trim();
-                  if (!t) return;
-                  setMergePayload({ kind: "append", payload: "\n\n" + t + "\n" });
-                }}
-              >
-                追加到章尾
-              </button>
-              <button
-                type="button"
-                className="btn"
-                disabled={!draft.trim() || !selectedText.trim()}
-                title={selectedText.trim() ? "" : "请先选中要替换的文本"}
-                onClick={() => {
-                  const t = draft.trim();
-                  const before = props.getSelectedText().trim();
-                  if (!t || !before) return;
-                  setMergePayload({ kind: "replace", before, after: t });
-                }}
-              >
-                替换选区
-              </button>
-            </div>
+      <OutlineGenerationDialog
+        open={draftDialogOpen}
+        onOpenChange={setDraftDialogOpen}
+        busy={busy}
+        phase={genPhase}
+        outlineSource={outlineSource}
+        providerLabel={PROVIDER_UI[settings.provider]?.label ?? settings.provider}
+        draft={draft}
+        onDraftChange={(next) => {
+          setDraft(next);
+          if (draftSeedMode) {
+            setChapterOutlinePaste(next);
+            if (props.chapter) {
+              saveChapterOutlinePaste(props.workId, props.chapter.id, next);
+            }
+          }
+        }}
+        seedMode={draftSeedMode}
+        onStartGenerate={() => {
+          const outlineForRun = draft.trim();
+          setChapterOutlinePaste(outlineForRun);
+          if (props.chapter) {
+            saveChapterOutlinePaste(props.workId, props.chapter.id, outlineForRun);
+          }
+          void run(undefined, { outlineOverride: outlineForRun });
+        }}
+        targetWordCount={targetWordCount}
+        onTargetWordCountChange={setTargetWordCount}
+        error={error}
+        selectedText={selectedText}
+        canRetry={!!lastReqRef.current}
+        onAbort={() => abortRef.current?.abort()}
+        onRetry={() => {
+          const last = lastReqRef.current;
+          if (!last) return;
+          void run({ provider: last.provider, providerCfg: last.providerCfg, messages: last.messages });
+        }}
+        onInsertToCursor={props.insertAtCursor}
+        onAppendToEnd={props.appendToEnd}
+        onReplaceSelection={(text) => {
+          const before = props.getSelectedText().trim();
+          if (!before) return;
+          setMergePayload({ kind: "replace", before, after: text });
+        }}
+        ensureChapterViewBeforeInsert={props.ensureChapterViewBeforeInsert}
+        extraSlot={
+          <>
             {/* P1-04：今日已用 token 始终显示 */}
             <p className="muted small ai-panel-session-budget" style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
               <span>
@@ -2203,9 +2260,9 @@ export const AiPanel = memo(function AiPanelBase(props: {
                 </ul>
               </div>
             ) : null}
-          </div>
-        </DialogContent>
-      </Dialog>
+          </>
+        }
+      />
 
       <AiPanelRagSection
         variant="sessionOnly"
@@ -2229,6 +2286,20 @@ export const AiPanel = memo(function AiPanelBase(props: {
         onRunPreview={runRagPreview}
       />
 
+      <AiPanelHistoryDialog
+        open={historyDialogOpen}
+        onOpenChange={setHistoryDialogOpen}
+        entries={draftHistory}
+        workId={props.workId}
+        chapterId={props.chapter?.id ?? null}
+        onRestore={(content) => {
+          setDraft(content);
+          setDraftSeedMode(false);
+          setDraftDialogOpen(true);
+        }}
+        onEntriesChanged={setDraftHistory}
+      />
+
       <AiDraftMergeDialog
         open={mergePayload !== null}
         payload={mergePayload}
@@ -2237,8 +2308,9 @@ export const AiPanel = memo(function AiPanelBase(props: {
         onConfirm={confirmDraftMerge}
       />
 
-      {/* P1-04：成本门控弹窗 */}
-      {costGatePending && (
+      {/* P1-04：成本门控弹窗。用 createPortal 渲染到 body 顶层，避免被 Radix Dialog 的
+           pointer-events 拦截层或 <aside> 的 stacking context 盖住无法点击。 */}
+      {costGatePending && createPortal(
         <CostGateModal
           reasons={costGatePending.reasons}
           tokensApprox={costGatePending.tokensApprox}
@@ -2247,7 +2319,23 @@ export const AiPanel = memo(function AiPanelBase(props: {
           triggerLabel={costGatePending.triggerLabel}
           onConfirm={() => { costGatePending.resolve(true); setCostGatePending(null); }}
           onCancel={() => { costGatePending.resolve(false); setCostGatePending(null); }}
-        />
+        />,
+        document.body,
+      )}
+
+      {/* 「本章细纲」标签旁的 tokens 标签点击后展示的注入量详情（info 模式，仅展示） */}
+      {tokenInfoOpen && previewInjectionPrompt && createPortal(
+        <CostGateModal
+          mode="info"
+          reasons={previewInjectionPrompt.reasons}
+          tokensApprox={previewInjectionPrompt.tokensApprox}
+          dailyUsed={readTodayApproxTokens()}
+          dailyBudget={settings.dailyTokenBudget}
+          triggerLabel="本次注入量预估"
+          onConfirm={() => setTokenInfoOpen(false)}
+          onCancel={() => setTokenInfoOpen(false)}
+        />,
+        document.body,
       )}
     </aside>
   );

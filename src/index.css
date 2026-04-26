@@ -184,6 +184,7 @@ body {
 .login-hero-page__right {
   flex: 1;
   min-width: 0;
+  position: relative;
   display: flex;
   flex-direction: column;
   justify-content: center;
@@ -448,12 +449,43 @@ body {
 /* 主按钮下方：Google / 手机验证码 / 微信等，后续只在此栈内扩展 */
 .login-v2-alt-logins {
   display: flex;
-  flex-direction: column;
-  gap: 0.65rem;
+  flex-direction: row;
+  gap: 0.75rem;
 }
 
-.login-v2-alt-logins .login-v2-btn {
-  margin-bottom: 0;
+.login-v2-icon-btn {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  padding: 0.6rem 0.5rem;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  cursor: not-allowed;
+  opacity: 0.55;
+  transition: opacity 0.15s;
+}
+
+.login-v2-icon-btn:hover,
+.login-v2-icon-btn:active {
+  opacity: 0.85;
+}
+
+.login-v2-icon-btn span {
+  font-size: 0.65rem;
+  color: #666;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.login-v2-icon-btn:hover span,
+.login-v2-icon-btn:active span {
+  opacity: 1;
 }
 
 .login-v2-footer {
@@ -558,6 +590,75 @@ body {
 
 .login-v2-modal-actions .login-v2-btn {
   margin-bottom: 0;
+}
+
+/* —— 全局闪屏：宣纸留白风格 —— */
+.login-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  /* 宣纸暖白底：中心偏亮，四角微微泛黄 */
+  background: radial-gradient(ellipse at 52% 46%, #fdfaf3 0%, #f5ede0 55%, #ece0cc 100%);
+  opacity: 1;
+  transition: opacity 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
+}
+
+
+.login-splash--fading {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.login-splash__inner {
+  position: relative;
+  z-index: 1;
+  text-align: center;
+  padding: 2rem 3rem;
+  animation: login-splash-rise 0.75s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes login-splash-rise {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.login-splash__main {
+  font-size: clamp(1.6rem, 4.5vw, 2.6rem);
+  font-weight: 500;
+  color: #1c1208;
+  letter-spacing: 0.12em;
+  margin: 0 0 0.8rem;
+  line-height: 1.35;
+}
+
+.login-splash__sub {
+  font-size: clamp(0.85rem, 1.8vw, 1rem);
+  color: rgba(28, 18, 8, 0.48);
+  margin: 0;
+  letter-spacing: 0.06em;
+}
+
+.login-splash__brand {
+  position: absolute;
+  bottom: 2.5rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1;
+  font-size: 0.78rem;
+  color: rgba(28, 18, 8, 0.3);
+  letter-spacing: 0.15em;
+  white-space: nowrap;
 }
 
 /* 写作全屏壳：顶栏通栏，其下为主区 + 右侧栏（与章栏同处于顶栏分隔线之下） */
@@ -8063,6 +8164,7 @@ select {
   position: relative;
   min-width: 0;
   width: 100%;
+  padding-top: 16px;
 }
 
 .editor-page--xy-frame .editor-scroll-inner {
@@ -8091,6 +8193,8 @@ select {
 }
 
 .editor-page--xy-frame .editor-chapter-title {
+  margin: 0 0 0.2rem;
+  padding-bottom: 0.2rem;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.45rem 0.65rem;

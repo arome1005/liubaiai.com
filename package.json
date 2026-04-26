@@ -16,7 +16,10 @@
     "db:migrate": "node --env-file=backend/.env backend/migrate.js",
     "api:dev": "node --env-file=backend/.env backend/server.js",
     "docker:up": "docker compose up -d --build",
-    "docker:down": "docker compose down"
+    "docker:down": "docker compose down",
+    "sidecar": "npm --prefix tools/sidecar run dev",
+    "sidecar:start": "npm --prefix tools/sidecar run start",
+    "sidecar:install": "npm --prefix tools/sidecar install"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.1",

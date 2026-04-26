@@ -1,0 +1,52 @@
+---
+description: 写作编辑页 EditorPage：行数预算、与推演页对齐的拆分落点（useEditor* / Editor* 壳层）
+globs:
+  - src/pages/EditorPage.tsx
+  - src/components/Editor*.tsx
+  - src/hooks/useEditor*.ts
+alwaysApply: false
+---
+
+# 写作编辑（Editor）功能页 · 拆分与行数 / Editor page budget & split map
+
+适用于编辑 **`src/pages/EditorPage.tsx`** 及写作域抽出的子模块。与 `v0-tuiyan-page.mdc` **同一套原则**：**页面 = 组合与接线**；持久化/副作用 → **`useEditor*.ts`**；大块 UI → **`Editor*` 组件或未来 `src/components/editor/**`**；纯逻辑 → **`src/util/`** / **`src/ai/`**。
+
+## 行数与增长策略 / Line budget (anti-bloat)
+
+- **现状参照**：`EditorPage.tsx` 已处于**超大体量**区间；**默认只减不增**——新行为应以 **抽 hook / 抽子组件** 方式接入，避免在页面内再贴数十行。  
+- **软目标**：长期将 `EditorPage.tsx` **收束到约 ≤3500 行**（或持续拆分到单文件不再承担「全功能堆叠」）。  
+- **与全局规则对齐**：向本页一次新增 **> ~50 行** 可抽离逻辑时，**先拆分再继续**；若当次仅改bug且必须 <50 行 patch，在收工说明里标出**下次应迁出的锚点**。
+
+## 已有基线 / Existing modules（优先复用而非平移重写）
+
+- **章持久与队列**：`src/hooks/useEditorPersist.ts`（保存状态、冲突、串行写）  
+- **壳与侧栏体系**：`src/components/EditorShell.tsx`、与编辑页强绑定的 `EditorWritingSettingsSheet`、`EditorZenContext` 等 **Editor* 前缀** 组件  
+- **右栏/面板**：`RightRailPanels` / `RightRailContext` 等与写作台绑定的现有模块  
+- **纯工具**：`draftRecovery`、`wordCount`、`lineEnding`、导出 `storage/export-txt-docx` 等——**能进 util 的不要回到页面**  
+
+**禁止**：在 `EditorPage.tsx` 里继续堆「可命名业务块」（例如独立弹窗管线的完整状态机、可复用搜索/导出步进）而不下沉。
+
+## 推荐新目录与命名 / Where new code should go
+
+| 类别 | 路径 | 内容示例 |
+|------|------|----------|
+| 页面 | `src/pages/EditorPage.tsx` | 路由级状态、**薄**的组装；行数**应随重构下降** |
+| 写作子组件 | `src/components/Editor*.tsx` 或 `src/components/editor/*.tsx` | 侧栏块、模态、工具条区域等 **可限界 UI**（与 `tuiyan/` 的拆分方式一致） |
+| 状态与副作用 | `src/hooks/useEditor*.ts` | 与章/作品/右栏/快捷键绑定的**可单测**逻辑；**优先**在现有 `useEditorPersist` 上扩展前，先判断是否应 **新 hook** 以免单文件参数爆炸 |
+| 纯工具 | `src/util/*` 或 `src/storage/*` | 与 React 解耦的格式化、导入导出选项、key 与常量 |
+
+## 大改时的推荐顺序 / Refactor order (incremental)
+
+1) **无 DOM 的纯逻辑** → `util` / `ai`  
+2) **有 UI 无复杂副作用** → `Editor*` 组件或 `components/editor/`  
+3) **副作用 + 多状态** → 新 `useEditor*.ts`，页面仅 `const x = useEditor...(...)`  
+
+**与推演页共用的心智**：`liubai-react-structure.mdc`（全局）+ 各页的 narrow rule；不要两套风格。
+
+## 每次小改动后的自检 / Self-check (agent)
+
+1) 本改动是**让页面更薄**还是**更肥**？若更肥，能否拆出一针尖文件（哪怕 TODO）？  
+2) 新 `useEffect` / 监听器 / 定时器是否**成对清理**？  
+3) 若本次动到 **> ~50 行** 的 `EditorPage.tsx` 本体：是**数据迁移**（可接受短窗）还是**新功能**（新功能应默认不落在页面中央）？  
+
+**Note**：`globs` 已覆盖 `EditorPage.tsx`、`Editor*.tsx` 组件、`useEditor*.ts`。

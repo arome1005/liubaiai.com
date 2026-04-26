@@ -22,6 +22,7 @@ import {
   getChapterBible,
   getWorkStyleCard,
   getWork,
+  getTuiyanState,
   listAllReferenceExcerpts,
   listBibleCharacters,
   listBibleGlossaryTerms,
@@ -49,15 +50,14 @@ import type {
   BibleCharacter,
   BibleGlossaryTerm,
   BookSearchHit,
-  BookSearchScope,
   Chapter,
   ChapterSnapshot,
   ReferenceExcerpt,
+  TuiyanPushedOutlineEntry,
   Volume,
   Work,
   WritingStyleSample,
 } from "../db/types";
-import { SNAPSHOT_CAP_PER_CHAPTER, SNAPSHOT_MAX_AGE_MS } from "../db/types";
 import {
   buildBookDocx,
   buildBookTxt,
@@ -67,7 +67,6 @@ import {
 } from "../storage/export-txt-docx";
 import { exitDocumentFullscreen, requestDocumentFullscreen } from "../util/browser-fullscreen";
 import { aiPanelDraftStorageKey } from "../util/ai-panel-draft";
-import { addDailyWordsFromDelta } from "../util/dailyWords";
 import { clearDraft, readDraft, writeDraftDebounced } from "../util/draftRecovery";
 import { LAST_CHAPTER_SESSION_KEY_PREFIX } from "../util/last-chapter-session";
 import { readLineEndingMode } from "../util/lineEnding";
@@ -100,6 +99,7 @@ import { clearEditorRefsImport, readEditorRefsImport, type EditorRefsImportItem 
 import { CodeMirrorEditor, type CodeMirrorEditorHandle } from "../components/CodeMirrorEditor";
 import { AiPanel } from "../components/AiPanel";
 import { useEditorZen } from "../components/EditorZenContext";
+import { useImperativeDialog } from "../components/ImperativeDialog";
 import { useRightRail, type RightRailTabId } from "../components/RightRailContext";
 import { KnowledgeBaseRightPanel, RefRightPanel } from "../components/RightRailPanels";
 import { WritingSettingsRightPanel } from "../components/WritingSettingsRightPanel";
@@ -115,16 +115,27 @@ import { EDITOR_TYPOGRAPHY_EVENT, loadEditorTypography, type EditorPaperTint } f
 import { useResolvedWorkFromRoute } from "../hooks/useResolvedWorkFromRoute";
 import { workPathSegment } from "../util/work-url";
 import { HOTKEY_EVENT, matchHotkey, readZenToggleHotkey } from "../util/hotkey-config";
-import { loadChapterNote, saveChapterNote, hasChapterNote } from "../util/chapter-notes-storage";
+import { loadChapterNote, saveChapterNote, hasChapterNote, warmChapterNoteCache } from "../util/chapter-notes-storage";
+import { useEditorPersist, useAutoSave } from "../hooks/useEditorPersist";
+import { downloadBlob, safeFilename } from "../util/download";
+import { ExportBookDialog } from "../components/ExportBookDialog";
+import { ChapterSnapshotDialog } from "../components/ChapterSnapshotDialog";
+import { BookSearchDialog } from "../components/BookSearchDialog";
+import { PushedOutlineTree } from "../components/editor/PushedOutlineTree";
+import { PullOutlineDialog } from "../components/editor/PullOutlineDialog";
+import { FullscreenLoader } from "../components/FullscreenLoader";
+import { PLANNING_LEVEL_LABEL } from "../util/tuiyan-planning";
+import { saveChapterOutlinePaste } from "../util/chapter-outline-paste-storage";
+import {
+  EDITOR_AUTO_MAX_CAP_PX,
+  EDITOR_AUTO_WIDTH_KEY,
+  EDITOR_DEFAULT_MAX_WIDTH_PX,
+  EDITOR_WIDTH_KEY,
+} from "../util/editor-layout-prefs";
 
 const SIDEBAR_KEY = "liubai:editorSidebarCollapsed";
 const CHAPTER_LIST_KEY = "liubai:chapterListCollapsed";
 const CHAPTER_SORT_DIR_KEY_PREFIX = "liubai:chapterListSortDir:";
-const EDITOR_WIDTH_KEY = "liubai:editorMaxWidthPx";
-const EDITOR_AUTO_WIDTH_KEY = "liubai:editorAutoWidth";
-/** 与星月类沉浸式写作对齐：默认用「自适应宽」，避免中间一条窄纸 */
-const EDITOR_DEFAULT_MAX_WIDTH_PX = 1200;
-const EDITOR_AUTO_MAX_CAP_PX = 1600;
 
 /** P1-A：防抖 hook，用于降低高频 state 变化（如正文 content）对 setTabContent 等副作用的触发频率 */
 function useDebouncedValue<T>(value: T, delay: number): T {
@@ -150,6 +161,7 @@ export function EditorPage() {
     setActiveTab: setRightRailActiveTab,
   } = rightRail;
   const { zenWrite, setZenWrite } = useEditorZen();
+  const imperativeDialog = useImperativeDialog();
 
   useEffect(() => {
     if (phase === "notfound") {
@@ -170,13 +182,19 @@ export function EditorPage() {
 
   // 沉浸模式可配置快捷键监听
   const zenWriteRef = useRef(zenWrite);
-  zenWriteRef.current = zenWrite;
+  useEffect(() => {
+    zenWriteRef.current = zenWrite;
+  }, [zenWrite]);
   useEffect(() => {
     let combo = readZenToggleHotkey();
+    const isHandledByShell = (c: { alt: boolean; shift: boolean; ctrl: boolean; meta: boolean; code: string }) =>
+      c.alt && !c.shift && !c.ctrl && !c.meta && c.code === "KeyZ";
     const onHotkeyChanged = () => { combo = readZenToggleHotkey(); };
     window.addEventListener(HOTKEY_EVENT, onHotkeyChanged);
     const onKeyDown = (e: KeyboardEvent) => {
       if (matchHotkey(e, combo)) {
+        // Alt+Z is already handled in EditorShell; skip here to avoid double-toggle.
+        if (isHandledByShell(combo)) return;
         e.preventDefault();
         const next = !zenWriteRef.current;
         setZenWrite(next);
@@ -198,12 +216,12 @@ export function EditorPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [content, setContent] = useState("");
   const [liuguangReturnVisible, setLiuguangReturnVisible] = useState(false);
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error" | "conflict">("idle");
-  /** 离章后台保存失败（不阻塞当前章顶栏「保存冲突」语义） */
-  const [bgSaveIssue, setBgSaveIssue] = useState<null | { chapterId: string; title: string; kind: "conflict" | "error" }>(
-    null,
-  );
   const [loading, setLoading] = useState(true);
+  const [loaderExited, setLoaderExited] = useState(false);
+  // loading 变 true（新作品加载）时复位，让全屏 loader 重新出现
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { if (loading) setLoaderExited(false); }, [loading]);
+  const handleLoaderExited = useCallback(() => setLoaderExited(true), []);
   const [findQ, setFindQ] = useState("");
   const [incomingHit, setIncomingHit] = useState<{ title: string; hint?: string } | null>(null);
   const [incomingRefs, setIncomingRefs] = useState<EditorRefsImportItem[]>([]);
@@ -232,6 +250,7 @@ export function EditorPage() {
   });
   const sidebarDragRef = useRef<{ startX: number; startW: number } | null>(null);
   const [sidebarTab, setSidebarTab] = useState<"outline" | "chapter">("chapter");
+  const [selectedOutlineEntryId, setSelectedOutlineEntryId] = useState<string | null>(null);
   const [chapterListSortDir, setChapterListSortDir] = useState<"asc" | "desc">(() => {
     try {
       const key = `${CHAPTER_SORT_DIR_KEY_PREFIX}${routeParam ?? ""}`;
@@ -251,29 +270,15 @@ export function EditorPage() {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreWrapRef = useRef<HTMLDivElement | null>(null);
   const [bookSearchOpen, setBookSearchOpen] = useState(false);
-  const [bookSearchQ, setBookSearchQ] = useState("");
-  const [bookSearchLoading, setBookSearchLoading] = useState(false);
-  /** null 表示尚未执行过本次会话的搜索 */
-  const [bookSearchHits, setBookSearchHits] = useState<BookSearchHit[] | null>(null);
-  const [bookSearchRegex, setBookSearchRegex] = useState(false);
   /** 跳转后自动高亮：存储 { query, isRegex, offset } */
   const pendingScrollRef = useRef<{ query: string; isRegex: boolean; offset: number } | null>(null);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
   const [snapshotList, setSnapshotList] = useState<ChapterSnapshot[]>([]);
-  /** P2-B：当前展开对比的快照 ID */
-  const [diffSnapshotId, setDiffSnapshotId] = useState<string | null>(null);
   /** P2-C/E：导出选项弹窗 */
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
-  const [exportForeword, setExportForeword] = useState("");
-  const [exportAfterword, setExportAfterword] = useState("");
-  /** "all" | "range" */
-  const [exportRangeMode, setExportRangeMode] = useState<"all" | "range">("all");
-  const [exportFromOrder, setExportFromOrder] = useState(0);
-  const [exportToOrder, setExportToOrder] = useState(0);
-  /** "txt" | "docx"：触发导出弹窗时记录格式 */
   const [exportFormat, setExportFormat] = useState<"txt" | "docx">("txt");
   const [volumes, setVolumes] = useState<Volume[]>([]);
-  const [bookSearchScope, setBookSearchScope] = useState<BookSearchScope>("full");
+  const [pushedOutlines, setPushedOutlines] = useState<TuiyanPushedOutlineEntry[]>([]);
   const [dragChapterId, setDragChapterId] = useState<string | null>(null);
   const [inspirationOpen, setInspirationOpen] = useState(false);
   const [inspirationList, setInspirationList] = useState<
@@ -336,6 +341,9 @@ export function EditorPage() {
   /** P1-A：稳定的 AiPanel / 右侧栏回调引用，防止 setTabContent 副作用因函数引用变化而重触发 */
   const insertAtCursor = useCallback((t: string) => editorRef.current?.insertTextAtCursor(t), []);
   const appendToEnd = useCallback((t: string) => editorRef.current?.appendTextToEnd(t), []);
+  const ensureChapterViewBeforeInsert = useCallback(() => {
+    setSidebarTab("chapter");
+  }, []);
   const onAiPanelClose = useCallback(() => {
     setAiOpen(false);
     setRightRailOpen(false);
@@ -473,9 +481,26 @@ export function EditorPage() {
   /** 与存储层 `updatedAt` 对齐，供步 25 正文保存乐观锁 */
   const chapterServerUpdatedAtRef = useRef<Map<string, number>>(new Map());
   const chapterOrderRef = useRef<Map<string, number>>(new Map());
-  const persistInFlightRef = useRef(false);
-  /** 章节正文写入串行队列，避免离章后台保存与防抖保存交错导致乱序 */
-  const persistQueueRef = useRef(Promise.resolve());
+  const {
+    saveState,
+    bgSaveIssue,
+    setBgSaveIssue,
+    persistInFlightRef,
+    resolveSaveConflict,
+    enqueueChapterPersist,
+    runPersistChapter,
+    persistContent,
+  } = useEditorPersist({
+    workId,
+    lastPersistedRef,
+    chapterServerUpdatedAtRef,
+    chapterTitleRef,
+    chapterOrderRef,
+    workTitleRef,
+    autoSummaryQueueRef,
+    setChapters,
+  });
+
   /** 供早于 `switchChapter` 声明的 effect / 侧栏 JSX 调用，避免 TDZ */
   const switchChapterRef = useRef<(id: string) => Promise<void>>(async () => {});
   const contentRef = useRef(content);
@@ -523,6 +548,46 @@ export function EditorPage() {
   const activeChapter = useMemo(
     () => chapters.find((c) => c.id === activeId) ?? null,
     [chapters, activeId],
+  );
+
+  const selectedOutlineEntry = useMemo(
+    () => pushedOutlines.find((e) => e.id === selectedOutlineEntryId) ?? null,
+    [pushedOutlines, selectedOutlineEntryId],
+  );
+
+  useEffect(() => {
+    if (selectedOutlineEntryId && !pushedOutlines.some((e) => e.id === selectedOutlineEntryId)) {
+      setSelectedOutlineEntryId(null);
+    }
+  }, [pushedOutlines, selectedOutlineEntryId]);
+
+  useEffect(() => {
+    if (sidebarTab !== "outline") return;
+    if (selectedOutlineEntryId) return;
+    if (pushedOutlines.length === 0) return;
+    const firstRoot = pushedOutlines.find((e) => !e.parentId) ?? pushedOutlines[0];
+    if (firstRoot) setSelectedOutlineEntryId(firstRoot.id);
+  }, [sidebarTab, selectedOutlineEntryId, pushedOutlines]);
+
+  const outlineMode = sidebarTab === "outline";
+  const [pullOutlineDialogOpen, setPullOutlineDialogOpen] = useState(false);
+
+  const openPullOutlineDialog = useCallback(() => {
+    setPullOutlineDialogOpen(true);
+  }, []);
+
+  const handleConfirmPullOutline = useCallback(
+    (entry: TuiyanPushedOutlineEntry) => {
+      if (!workId) return;
+      if (!activeChapter) {
+        toast.error("请先在「章节正文」标签页打开一个章节，再拉取内容。");
+        return;
+      }
+      const content = (entry.content ?? "").trim();
+      if (!content) return;
+      saveChapterOutlinePaste(workId, activeChapter.id, content);
+    },
+    [workId, activeChapter],
   );
 
   const neighborPoolForAiSettings = useMemo(
@@ -671,6 +736,22 @@ export function EditorPage() {
     setChapterTitleDraft(activeChapter?.title ?? "");
   }, [activeChapter?.id, activeChapter?.title]);
 
+  async function commitChapterTitle(id: string, nextTitle: string): Promise<boolean> {
+    const exp = chapterServerUpdatedAtRef.current.get(id);
+    const t =
+      (await updateChapter(
+        id,
+        { title: nextTitle },
+        exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
+      )) ?? Date.now();
+    chapterServerUpdatedAtRef.current.set(id, t);
+    chapterTitleRef.current.set(id, nextTitle);
+    setChapters((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, title: nextTitle, updatedAt: t } : c)),
+    );
+    return true;
+  }
+
   const saveChapterTitle = useCallback(async () => {
     if (!activeChapter) return;
     const next = chapterTitleDraft.trim();
@@ -680,18 +761,7 @@ export function EditorPage() {
       return;
     }
     try {
-      const exp = chapterServerUpdatedAtRef.current.get(activeChapter.id);
-      const t =
-        (await updateChapter(
-          activeChapter.id,
-          { title: next },
-          exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
-        )) ?? Date.now();
-      chapterServerUpdatedAtRef.current.set(activeChapter.id, t);
-      chapterTitleRef.current.set(activeChapter.id, next);
-      setChapters((prev) =>
-        prev.map((c) => (c.id === activeChapter.id ? { ...c, title: next, updatedAt: t } : c)),
-      );
+      await commitChapterTitle(activeChapter.id, next);
       setChapterTitleEditing(false);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "章节标题保存失败");
@@ -845,6 +915,9 @@ export function EditorPage() {
         insertAtCursor={insertAtCursor}
         appendToEnd={appendToEnd}
         replaceSelection={replaceSelection}
+        ensureChapterViewBeforeInsert={ensureChapterViewBeforeInsert}
+        onRequestPullOutline={openPullOutlineDialog}
+        outlineEntriesCount={pushedOutlines.length}
       />,
     );
     setRightRailTabEnabled("summary", true);
@@ -921,12 +994,16 @@ export function EditorPage() {
     onAiPrefillUserHintConsumed,
     onAiMaterialsSummaryLinesChange,
     writingSkillMode,
+    autoSummaryStatus,
     onAiPanelClose,
     insertAtCursor,
     appendToEnd,
+    ensureChapterViewBeforeInsert,
     onSummaryJumpToChapter,
     onSummaryChapterPatch,
     onRefInsert,
+    openPullOutlineDialog,
+    pushedOutlines.length,
   ]);
 
   const glossaryHits = useMemo(() => {
@@ -1033,46 +1110,57 @@ export function EditorPage() {
   const load = useCallback(async () => {
     if (!workId) return;
     setLoading(true);
-    const w = await getWork(workId);
-    if (!w) {
-      setWork(null);
-      setChapters([]);
-      setActiveId(null);
-      setContent("");
-      setLoading(false);
-      return;
-    }
-    setWork(w);
-    const list = await listChapters(workId);
-    setChapters(list);
-    const vols = await listVolumes(workId);
-    setVolumes(vols);
-    lastPersistedRef.current.clear();
-    for (const c of list) {
-      lastPersistedRef.current.set(c.id, c.content);
-    }
-    const stored = sessionStorage.getItem(LAST_CHAPTER_SESSION_KEY_PREFIX + workId);
-    const pick =
-      (stored && list.some((c) => c.id === stored) && stored) ||
-      list[0]?.id ||
-      null;
-    setActiveId(pick);
-    const first = list.find((c) => c.id === pick);
-    const initial = first?.content ?? "";
-    setContent(initial);
-    if (workId && pick && first) {
-      const dr = readDraft(workId, pick);
-      if (dr && dr.savedAt > first.updatedAt && dr.content !== initial) {
-        if (window.confirm("检测到未同步的本地草稿（如异常关闭前）。是否用草稿覆盖当前正文？")) {
-          setContent(dr.content);
-          lastPersistedRef.current.set(pick, first.content);
-        } else {
-          clearDraft(workId, pick);
+    try {
+      const w = await getWork(workId);
+      if (!w) {
+        setWork(null);
+        setChapters([]);
+        setPushedOutlines([]);
+        setActiveId(null);
+        setContent("");
+        return;
+      }
+      setWork(w);
+      const list = await listChapters(workId);
+      setChapters(list);
+      void warmChapterNoteCache(list.map((c) => c.id));
+      const vols = await listVolumes(workId);
+      setVolumes(vols);
+      try {
+        const tuiyanState = await getTuiyanState(workId);
+        setPushedOutlines(tuiyanState?.planningPushedOutlines ?? []);
+      } catch {
+        setPushedOutlines([]);
+      }
+      lastPersistedRef.current.clear();
+      for (const c of list) {
+        lastPersistedRef.current.set(c.id, c.content);
+      }
+      const stored = sessionStorage.getItem(LAST_CHAPTER_SESSION_KEY_PREFIX + workId);
+      const pick =
+        (stored && list.some((c) => c.id === stored) && stored) ||
+        list[0]?.id ||
+        null;
+      setActiveId(pick);
+      const first = list.find((c) => c.id === pick);
+      const initial = first?.content ?? "";
+      setContent(initial);
+      if (workId && pick && first) {
+        const dr = readDraft(workId, pick);
+        if (dr && dr.savedAt > first.updatedAt && dr.content !== initial) {
+          const ok = await imperativeDialog.confirm("检测到未同步的本地草稿（如异常关闭前）。是否用草稿覆盖当前正文？");
+          if (ok) {
+            setContent(dr.content);
+            lastPersistedRef.current.set(pick, first.content);
+          } else {
+            clearDraft(workId, pick);
+          }
         }
       }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
-  }, [workId]);
+  }, [workId, imperativeDialog]);
 
   /* 挂载时从 IndexedDB 拉取作品与章节 */
   useEffect(() => {
@@ -1167,7 +1255,7 @@ export function EditorPage() {
   // 全书搜索跳转后自动高亮定位（P0-E：同时写入持久装饰高亮）
   useEffect(() => {
     const ps = pendingScrollRef.current;
-    if (!ps || !activeId || !content) return;
+    if (!ps || !activeId) return;
     pendingScrollRef.current = null;
     // setTimeout 给 CM 多一点时间稳定文档，避免内容更新 effect 与 scrollToMatch 竞争
     const t = window.setTimeout(() => {
@@ -1209,23 +1297,21 @@ export function EditorPage() {
       setRightRailOpen(true);
       setRightRailActiveTab("ai");
     });
-    const tryInsert = (n: number) => {
+    const tryInsert = async (n: number): Promise<void> => {
       if (n <= 0) return;
-      const ok = !!editorRef.current;
-      if (ok) {
-        // 冲突提示：若正文已包含该段（或高度相似片段），提示用户避免重复插入
-        const cur = contentRef.current ?? "";
-        const needle = text.trim().slice(0, 80);
-        if (needle && cur.includes(needle)) {
-          if (!window.confirm("检测到正文中可能已存在相同片段，仍要在光标处插入吗？")) return;
-        }
-        editorRef.current?.insertTextAtCursor(text);
-        setLiuguangReturnVisible(true);
-        return;
+      if (!editorRef.current) {
+        await new Promise((r) => window.setTimeout(r, 60));
+        return tryInsert(n - 1);
       }
-      window.setTimeout(() => tryInsert(n - 1), 60);
+      const cur = contentRef.current ?? "";
+      const needle = text.trim().slice(0, 80);
+      if (needle && cur.includes(needle)) {
+        if (!(await imperativeDialog.confirm("检测到正文中可能已存在相同片段，仍要在光标处插入吗？"))) return;
+      }
+      editorRef.current?.insertTextAtCursor(text);
+      setLiuguangReturnVisible(true);
     };
-    tryInsert(12);
+    void tryInsert(12);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workId, activeId]);
 
@@ -1256,19 +1342,21 @@ export function EditorPage() {
       const text = payload.text;
       const cur = contentRef.current ?? "";
       const needle = text.trim().slice(0, 80);
-      if (needle && cur.includes(needle)) {
-        if (!window.confirm("检测到正文中可能已存在相同片段，仍要追加到章末吗？")) return;
-      }
-      const tryAppend = (n: number) => {
-        if (n <= 0) return;
-        if (editorRef.current) {
-          editorRef.current.appendTextToEnd(text);
-          setLiuguangReturnVisible(true);
-          return;
+      void (async () => {
+        if (needle && cur.includes(needle)) {
+          if (!(await imperativeDialog.confirm("检测到正文中可能已存在相同片段，仍要追加到章末吗？"))) return;
         }
-        window.setTimeout(() => tryAppend(n - 1), 60);
-      };
-      tryAppend(12);
+        const tryAppend = (n: number) => {
+          if (n <= 0) return;
+          if (editorRef.current) {
+            editorRef.current.appendTextToEnd(text);
+            setLiuguangReturnVisible(true);
+            return;
+          }
+          window.setTimeout(() => tryAppend(n - 1), 60);
+        };
+        tryAppend(12);
+      })();
       return;
     }
 
@@ -1278,16 +1366,15 @@ export function EditorPage() {
       setRightRailOpen(true);
       setRightRailActiveTab("ai");
     });
-    const tryDraft = (n: number) => {
+    const tryDraft = async (n: number): Promise<void> => {
       if (n <= 0) return;
       if (activeChapter && workId) {
-        // AiPanel 自己从 sessionStorage 读；这里直接走它的草稿 key 约定
         const key = aiPanelDraftStorageKey(workId, activeChapter.id);
         try {
           const prev = sessionStorage.getItem(key) ?? "";
           const needle = draftText.trim().slice(0, 80);
           if (needle && prev.includes(needle)) {
-            if (!window.confirm("检测到 AI 侧栏草稿里可能已存在相同片段，仍要合并写入吗？")) return;
+            if (!(await imperativeDialog.confirm("检测到 AI 侧栏草稿里可能已存在相同片段，仍要合并写入吗？"))) return;
           }
           const merged = prev.trim().length ? `${prev.trim()}\n\n${draftText.trim()}\n` : `${draftText.trim()}\n`;
           sessionStorage.setItem(key, merged);
@@ -1297,9 +1384,10 @@ export function EditorPage() {
         setLiuguangReturnVisible(true);
         return;
       }
-      window.setTimeout(() => tryDraft(n - 1), 60);
+      await new Promise((r) => window.setTimeout(r, 60));
+      return tryDraft(n - 1);
     };
-    tryDraft(12);
+    void tryDraft(12);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workId, activeId, activeChapter]);
 
@@ -1314,7 +1402,6 @@ export function EditorPage() {
         setFindOpen(false);
         setMoreOpen(false);
         setBookSearchOpen(false);
-        setBookSearchHits(null);
         setSnapshotOpen(false);
       }
     }
@@ -1452,101 +1539,11 @@ export function EditorPage() {
     };
   }, [moreOpen]);
 
-  const resolveSaveConflict = useCallback(async () => {
-    if (!workId || !activeId) return;
-    setSaveState("saving");
-    try {
-      const list = await listChapters(workId);
-      setChapters(list);
-      const c = list.find((x) => x.id === activeId);
-      if (c) {
-        setContent(c.content);
-        lastPersistedRef.current.set(c.id, c.content);
-        clearDraft(workId, c.id);
-      }
-      setSaveState("saved");
-      setBgSaveIssue((cur) => (cur?.chapterId === activeId ? null : cur));
-    } catch {
-      setSaveState("error");
-    }
-  }, [workId, activeId]);
-
-  const enqueueChapterPersist = useCallback((task: () => Promise<void>) => {
-    const p = persistQueueRef.current.then(task);
-    persistQueueRef.current = p.catch(() => {});
-    return p;
-  }, []);
-
-  const runPersistChapter = useCallback(
-    async (chapterId: string, text: string, mode: "active" | "silent"): Promise<boolean> => {
-      if (!workId) return false;
-      persistInFlightRef.current = true;
-      const showUi = mode === "active";
-      if (showUi) setSaveState("saving");
-      let ok = false;
-      try {
-        const prev = lastPersistedRef.current.get(chapterId) ?? "";
-        addDailyWordsFromDelta(prev, text);
-        const expected = chapterServerUpdatedAtRef.current.get(chapterId);
-        const newAt = await updateChapter(
-          chapterId,
-          { content: text },
-          expected !== undefined ? { expectedUpdatedAt: expected } : undefined,
-        );
-        lastPersistedRef.current.set(chapterId, text);
-        clearDraft(workId, chapterId);
-        const t = newAt ?? Date.now();
-        chapterServerUpdatedAtRef.current.set(chapterId, t);
-        setChapters((prevCh) =>
-          prevCh.map((c) =>
-            c.id === chapterId ? { ...c, content: text, updatedAt: t, wordCountCache: wordCount(text) } : c,
-          ),
-        );
-        const chapterTitle = chapterTitleRef.current.get(chapterId) ?? "未命名章节";
-        const chapterOrder = chapterOrderRef.current.get(chapterId) ?? 0;
-        const workTitle = workTitleRef.current.trim();
-        if (workTitle) {
-          autoSummaryQueueRef.current?.enqueue({
-            workId,
-            workTitle,
-            chapterId,
-            chapterTitle,
-            chapterOrder,
-            chapterContent: text,
-            expectedUpdatedAt: t,
-          });
-        }
-        if (showUi) {
-          setSaveState("saved");
-        }
-        setBgSaveIssue((cur) => (cur?.chapterId === chapterId ? null : cur));
-        ok = true;
-      } catch (e) {
-        if (showUi) {
-          if (isChapterSaveConflictError(e)) setSaveState("conflict");
-          else setSaveState("error");
-        } else {
-          const title = chapterTitleRef.current.get(chapterId) ?? "未命名章节";
-          setBgSaveIssue({
-            chapterId,
-            title,
-            kind: isChapterSaveConflictError(e) ? "conflict" : "error",
-          });
-        }
-      } finally {
-        persistInFlightRef.current = false;
-      }
-      return ok;
-    },
-    [workId],
-  );
-
-  const persistContent = useCallback(
-    async (chapterId: string, text: string) => {
-      return enqueueChapterPersist(() => runPersistChapter(chapterId, text, "active"));
-    },
-    [enqueueChapterPersist, runPersistChapter],
-  );
+  const handleResolveSaveConflict = useCallback(async () => {
+    await resolveSaveConflict(activeId, (c) => {
+      if (c) setContent(c.content);
+    });
+  }, [activeId, resolveSaveConflict]);
 
   const switchChapter = useCallback(
     async (nextId: string) => {
@@ -1603,13 +1600,7 @@ export function EditorPage() {
   );
   switchChapterRef.current = switchChapter;
 
-  useEffect(() => {
-    if (!activeId) return;
-    const t = window.setTimeout(() => {
-      void persistContent(activeId, content);
-    }, 700);
-    return () => window.clearTimeout(t);
-  }, [content, activeId, persistContent]);
+  useAutoSave(content, activeId, persistContent);
 
   const handleManualSnapshot = useCallback(async () => {
     if (!activeId) return;
@@ -1858,7 +1849,7 @@ export function EditorPage() {
                       variant="outline"
                       size="sm"
                       className="save-conflict-reload"
-                      onClick={() => void resolveSaveConflict()}
+                      onClick={() => void handleResolveSaveConflict()}
                     >
                       重新载入本章
                     </Button>
@@ -1906,7 +1897,7 @@ export function EditorPage() {
     rightRail.activeTab,
     setRightRailActiveTab,
     setRightRailOpen,
-    resolveSaveConflict,
+    handleResolveSaveConflict,
     handleManualSnapshot,
     bgSaveIssue,
     switchChapter,
@@ -1962,7 +1953,7 @@ export function EditorPage() {
 
   async function handleRestoreSnapshot(snap: ChapterSnapshot) {
     if (!activeChapter || snap.chapterId !== activeChapter.id) return;
-    if (!window.confirm("用此历史版本覆盖当前正文？")) return;
+    if (!(await imperativeDialog.confirm("用此历史版本覆盖当前正文？"))) return;
     await persistContent(activeChapter.id, content);
     await addChapterSnapshot(activeChapter.id, content);
     setContent(snap.content);
@@ -2013,7 +2004,7 @@ export function EditorPage() {
     setFindStep(0);
   }
 
-  function handleReplaceAll() {
+  async function handleReplaceAll() {
     if (!findQ) {
       toast.info("请先输入查找内容。");
       return;
@@ -2023,38 +2014,18 @@ export function EditorPage() {
       toast.info("未找到匹配内容。");
       return;
     }
-    if (!window.confirm(`将本章中全部「${findQ}」替换为「${replaceQ}」？`)) return;
+    if (!(await imperativeDialog.confirm(`将本章中全部「${findQ}」替换为「${replaceQ}」？`))) return;
     setContent((prev) => replaceAllLiteral(prev, findQ, replaceQ));
     setFindStep(0);
     toast.success(`已替换 ${count} 处`);
   }
 
-  async function runBookSearch() {
-    if (!workId) return;
-    const q = bookSearchQ.trim();
-    if (!q) {
-      setBookSearchHits([]);
-      return;
-    }
-    setBookSearchLoading(true);
-    try {
-      if (activeId) await persistContent(activeId, content);
-      const hits = await searchWork(workId, q, bookSearchScope, bookSearchRegex);
-      setBookSearchHits(hits);
-    } finally {
-      setBookSearchLoading(false);
-    }
-  }
-
   function openBookSearch() {
-    setBookSearchQ(findQ);
-    setBookSearchHits(null);
     setBookSearchOpen(true);
   }
 
   function closeBookSearch() {
     setBookSearchOpen(false);
-    setBookSearchHits(null);
   }
 
   function toggleRightRailTab(tab: RightRailTabId) {
@@ -2068,16 +2039,14 @@ export function EditorPage() {
     if (tab === "ai") setAiOpen(true);
   }
 
-  async function jumpToSearchHit(hit: BookSearchHit) {
-    // Store pending scroll before switching so the effect can apply it
+  async function jumpToSearchHit(hit: BookSearchHit, query: string, isRegex: boolean) {
     pendingScrollRef.current = {
-      query: bookSearchQ.trim(),
-      isRegex: bookSearchRegex,
+      query,
+      isRegex,
       offset: hit.firstMatchOffset ?? 0,
     };
     if (hit.chapterId === activeId) {
       closeBookSearch();
-      // Same chapter: apply immediately
       const ps = pendingScrollRef.current;
       pendingScrollRef.current = null;
       requestAnimationFrame(() => {
@@ -2088,7 +2057,6 @@ export function EditorPage() {
     }
     await switchChapter(hit.chapterId);
     closeBookSearch();
-    // Effect below will fire once content settles
   }
 
   async function navigateToStudyMention(chapterId: string, query: string) {
@@ -2155,7 +2123,7 @@ export function EditorPage() {
 
   async function handleNewVolume() {
     if (!workId) return;
-    const t = window.prompt("新卷标题", "新卷");
+    const t = await imperativeDialog.prompt("新卷标题", "新卷");
     if (t === null) return;
     try {
       setChapterListMutating(true);
@@ -2170,7 +2138,7 @@ export function EditorPage() {
 
   async function handleRenameVolume(volId: string) {
     const vol = volumes.find((v) => v.id === volId);
-    const t = window.prompt("卷名", vol?.title ?? "");
+    const t = await imperativeDialog.prompt("卷名", vol?.title ?? "");
     if (t === null) return;
     if (!vol) return;
     const nextTitle = t.trim() || vol.title;
@@ -2204,7 +2172,7 @@ export function EditorPage() {
   async function handleMoveChapterToVolume(chapterId: string) {
     if (volumes.length < 2) return;
     const lines = volumes.map((v, i) => `${i + 1}. ${v.title}`).join("\n");
-    const n = window.prompt(`移到哪一卷？\n${lines}`, "1");
+    const n = await imperativeDialog.prompt(`移到哪一卷？\n${lines}`, "1");
     if (n === null) return;
     const idx = Number.parseInt(n, 10) - 1;
     if (idx < 0 || idx >= volumes.length) return;
@@ -2237,18 +2205,20 @@ export function EditorPage() {
   async function handleAttachOrphansToFirstVolume() {
     if (!workId || volumes.length === 0 || orphanChapters.length === 0) return;
     const firstVol = volumes[0]!;
-    const ok = window.confirm(
+    const ok = await imperativeDialog.confirm(
       `将 ${orphanChapters.length} 个未匹配到当前卷的章节并入「${firstVol.title}」？`,
     );
     if (!ok) return;
-    for (const c of orphanChapters) {
-      const exp = c.updatedAt;
-      await updateChapter(
-        c.id,
-        { volumeId: firstVol.id },
-        exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
-      );
-    }
+    await Promise.all(
+      orphanChapters.map((c) => {
+        const exp = c.updatedAt;
+        return updateChapter(
+          c.id,
+          { volumeId: firstVol.id },
+          exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
+        );
+      }),
+    );
     await load();
   }
 
@@ -2291,26 +2261,14 @@ export function EditorPage() {
 
   async function handleRename(id: string) {
     const ch = chapters.find((c) => c.id === id);
-    const t = window.prompt("章节标题", ch?.title ?? "");
-    if (t === null) return;
-    if (!ch) return;
+    const t = await imperativeDialog.prompt("章节标题", ch?.title ?? "");
+    if (t === null || !ch) return;
     const nextTitle = t.trim() || ch.title;
     if (nextTitle === ch.title) return;
     const prevChapters = chapters;
     try {
       setChapterListMutating(true);
-      // 本地先改标题（不全量 load）
-      setChapters((prev) => prev.map((c) => (c.id === id ? { ...c, title: nextTitle } : c)));
-      chapterTitleRef.current.set(id, nextTitle);
-      const exp = chapterServerUpdatedAtRef.current.get(id) ?? ch.updatedAt;
-      const newAt = await updateChapter(
-        id,
-        { title: nextTitle },
-        exp !== undefined ? { expectedUpdatedAt: exp } : undefined,
-      );
-      const tNow = newAt ?? Date.now();
-      chapterServerUpdatedAtRef.current.set(id, tNow);
-      setChapters((prev) => prev.map((c) => (c.id === id ? { ...c, updatedAt: tNow } : c)));
+      await commitChapterTitle(id, nextTitle);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "重命名失败");
       setChapters(prevChapters);
@@ -2321,7 +2279,7 @@ export function EditorPage() {
   }
 
   async function handleDeleteChapter(id: string) {
-    if (!window.confirm("删除本章？（可先从设置导出备份）")) return;
+    if (!(await imperativeDialog.confirm("删除本章？（可先从设置导出备份）"))) return;
     if (!workId) return;
     const prevChapters = chapters;
     const wasActive = activeId === id;
@@ -2385,9 +2343,8 @@ export function EditorPage() {
 
   async function setProgressChapter(id: string) {
     if (!workId) return;
+    setWork((prev) => (prev ? { ...prev, progressCursor: id } : prev));
     await updateWork(workId, { progressCursor: id });
-    const w = await getWork(workId);
-    if (w) setWork(w);
   }
 
   async function exportChapterTxt() {
@@ -2400,11 +2357,6 @@ export function EditorPage() {
 
   async function exportBookTxt() {
     if (!work || !workId || !activeId) return;
-    // 先让用户配置导出选项
-    const minO = chapters.length ? Math.min(...chapters.map((c) => c.order)) : 0;
-    const maxO = chapters.length ? Math.max(...chapters.map((c) => c.order)) : 0;
-    setExportFromOrder(minO);
-    setExportToOrder(maxO);
     setExportFormat("txt");
     setExportDialogOpen(true);
   }
@@ -2413,7 +2365,7 @@ export function EditorPage() {
     if (!work || !workId || !activeId) return;
     await persistContent(activeId, content);
     const list = await listChapters(workId);
-    for (const c of list) await addChapterSnapshot(c.id, c.content);
+    await Promise.all(list.map((c) => addChapterSnapshot(c.id, c.content)));
     const merged = list.map((c) => ({ title: c.title, content: c.content, order: c.order }));
     const blob = buildBookTxt(work.title, merged, readLineEndingMode(), opts);
     downloadBlob(blob, `${safeFilename(work.title)}.txt`);
@@ -2433,10 +2385,6 @@ export function EditorPage() {
 
   async function exportBookDocx() {
     if (!work || !workId || !activeId) return;
-    const minO = chapters.length ? Math.min(...chapters.map((c) => c.order)) : 0;
-    const maxO = chapters.length ? Math.max(...chapters.map((c) => c.order)) : 0;
-    setExportFromOrder(minO);
-    setExportToOrder(maxO);
     setExportFormat("docx");
     setExportDialogOpen(true);
   }
@@ -2446,7 +2394,7 @@ export function EditorPage() {
     try {
       await persistContent(activeId, content);
       const list = await listChapters(workId);
-      for (const c of list) await addChapterSnapshot(c.id, c.content);
+      await Promise.all(list.map((c) => addChapterSnapshot(c.id, c.content)));
       const merged = list.map((c) => ({ title: c.title, content: c.content, order: c.order }));
       const blob = await buildBookDocx(work.title, merged, opts);
       downloadBlob(blob, `${safeFilename(work.title)}.docx`);
@@ -2601,18 +2549,28 @@ export function EditorPage() {
     );
   }
 
-  if (!workId) {
-    return <p className="muted">无效地址</p>;
-  }
+  const isRouteLoading = phase === "loading";
+  const isDataLoading = !!workId && loading;
+  const isLoading = isRouteLoading || isDataLoading;
 
-  if (loading) {
+  // 根据阶段给目标进度：路由解析 → 35%；数据加载 → 85%；完成 → 100%
+  const loaderTargetPct = isRouteLoading ? 35 : isDataLoading ? 85 : 100;
+
+  // 阻断正文渲染：还在加载 OR exit 动画未跑完（loaderExited 由 FullscreenLoader 回调写入）
+  // 这样保证 loader 能完整播放淡出，再切入内容
+  const blockContent = isLoading || !loaderExited;
+
+  if (blockContent) {
+    // notfound 时 useEffect 已触发 navigate，此处只需维持 loader 直到跳转
     return (
-      <div className="page editor-page flex min-h-[40vh] flex-col items-center justify-center px-4 py-16">
-        <p className="text-sm text-muted-foreground">加载中…</p>
-      </div>
+      <FullscreenLoader
+        targetPercent={loaderTargetPct}
+        onExited={handleLoaderExited}
+      />
     );
   }
 
+  // 到达此处 workId 必然有效且 work 已加载，但保留防御性检查
   if (!work) {
     return (
       <div className="page editor-page flex min-h-[40vh] flex-col items-center justify-center gap-3 px-4 py-16 text-center">
@@ -2883,17 +2841,11 @@ export function EditorPage() {
 
           <div className="chapter-sidebar__body">
           {sidebarTab === "outline" ? (
-            <div className="p-3 text-sm text-foreground">
-              {chapters.map(c => c.outlineDraft ? (
-                <div key={c.id} className="mb-4">
-                  <div className="font-medium text-foreground mb-1 sticky top-0 z-10 py-1 border-b border-border/20 chapter-sidebar__outline-sticky-title">{c.title}</div>
-                  <pre className="text-xs text-muted-foreground whitespace-pre-wrap font-sans">{c.outlineDraft}</pre>
-                </div>
-              ) : null)}
-              {chapters.filter(c => c.outlineDraft).length === 0 && (
-                <p className="text-muted-foreground text-center py-6">暂无已推送的章纲。</p>
-              )}
-            </div>
+            <PushedOutlineTree
+              entries={pushedOutlines}
+              selectedId={selectedOutlineEntryId}
+              onSelect={(id) => setSelectedOutlineEntryId(id)}
+            />
           ) : (
             <>
           {work.progressCursor && (
@@ -2919,7 +2871,7 @@ export function EditorPage() {
                       if (!item) return null;
                       if (item.kind === "chapter" || item.kind === "orphan-chapter") {
                         return renderChapterSidebarItem(item.chapter, {
-                          key: vItem.key,
+                          key: String(vItem.key),
                           dataIndex: vItem.index,
                           measureRef: virtualizer.measureElement,
                           style: { position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vItem.start}px)` },
@@ -2927,7 +2879,7 @@ export function EditorPage() {
                       }
                       return (
                         <li
-                          key={vItem.key}
+                          key={String(vItem.key)}
                           data-index={vItem.index}
                           ref={virtualizer.measureElement}
                           style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vItem.start}px)` }}
@@ -3361,102 +3313,153 @@ export function EditorPage() {
               aria-label="正文纸面"
               data-paper-tint={paperTint}
             >
-              {activeChapter ? (
-                <div className="editor-chapter-title" aria-label="当前章节标题">
-                  {chapterTitleEditing ? (
-                    <input
-                      className="editor-chapter-title-text"
-                      value={chapterTitleDraft}
-                      autoFocus
-                      onChange={(e) => setChapterTitleDraft(e.target.value)}
-                      onBlur={() => void saveChapterTitle()}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                          e.preventDefault();
-                          void saveChapterTitle();
-                          return;
-                        }
-                        if (e.key === "Escape") {
-                          e.preventDefault();
-                          setChapterTitleDraft(activeChapter.title);
-                          setChapterTitleEditing(false);
-                        }
+              {outlineMode ? (
+                selectedOutlineEntry ? (
+                  <>
+                    <div className="editor-chapter-title" aria-label="当前章纲节点标题">
+                      <span className="editor-chapter-title-text" style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+                        <span
+                          className="inline-flex items-center rounded-full border border-border/40 bg-background/40 px-2 py-0.5 text-[10px] font-normal text-muted-foreground"
+                        >
+                          {PLANNING_LEVEL_LABEL[selectedOutlineEntry.level]}
+                        </span>
+                        {selectedOutlineEntry.title || "未命名"}
+                      </span>
+                    </div>
+                    <div
+                      className="editor-outline-readonly"
+                      style={{
+                        padding: "16px 4px 24px",
+                        color: "var(--foreground, #e4e4e7)",
+                        fontSize: 14,
+                        lineHeight: 1.8,
+                        whiteSpace: "pre-wrap",
+                        overflowY: "auto",
                       }}
-                      aria-label="编辑章节标题"
+                      aria-label="章纲节点内容（只读）"
+                    >
+                      {selectedOutlineEntry.content?.trim()
+                        ? selectedOutlineEntry.content
+                        : "（该节点暂无内容）"}
+                    </div>
+                    <div className="editor-xy-wc-corner" title="章纲字数">
+                      {(selectedOutlineEntry.content ?? "").length.toLocaleString()}
+                    </div>
+                  </>
+                ) : (
+                  <div className="editor-xy-empty">
+                    <div className="editor-xy-empty__card">
+                      <p className="editor-xy-empty__title">
+                        {pushedOutlines.length > 0 ? "请选择一个章纲节点" : "暂无推演章纲"}
+                      </p>
+                      <p className="editor-xy-empty__hint">
+                        {pushedOutlines.length > 0
+                          ? "在左侧章纲树中点击「总纲 / 大纲 / 卷纲 / 章细纲 / 详细细纲」任一节点即可查看内容。"
+                          : "请到「推演」页生成规划后点击右侧「推送到写作章纲」。"}
+                      </p>
+                    </div>
+                  </div>
+                )
+              ) : (
+                <>
+                  {activeChapter ? (
+                    <div className="editor-chapter-title" aria-label="当前章节标题">
+                      {chapterTitleEditing ? (
+                        <input
+                          className="editor-chapter-title-text"
+                          value={chapterTitleDraft}
+                          autoFocus
+                          onChange={(e) => setChapterTitleDraft(e.target.value)}
+                          onBlur={() => void saveChapterTitle()}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void saveChapterTitle();
+                              return;
+                            }
+                            if (e.key === "Escape") {
+                              e.preventDefault();
+                              setChapterTitleDraft(activeChapter.title);
+                              setChapterTitleEditing(false);
+                            }
+                          }}
+                          aria-label="编辑章节标题"
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          className="editor-chapter-title-text"
+                          title="点击改标题"
+                          onClick={() => {
+                            setChapterTitleDraft(activeChapter.title);
+                            setChapterTitleEditing(true);
+                          }}
+                          style={{ cursor: "text", background: "transparent", border: "none", padding: 0 }}
+                        >
+                          {activeChapter.title}
+                        </button>
+                      )}
+                      {!editorAutoWidth ? (
+                        <span className="editor-chapter-title-tools">
+                          <button
+                            type="button"
+                            className="editor-width-reset"
+                            title="恢复默认宽度（铺满中间栏）"
+                            onClick={() => {
+                              setEditorMaxWidthPx(EDITOR_DEFAULT_MAX_WIDTH_PX);
+                              setEditorAutoWidth(true);
+                              try {
+                                localStorage.setItem(EDITOR_WIDTH_KEY, String(EDITOR_DEFAULT_MAX_WIDTH_PX));
+                                localStorage.setItem(EDITOR_AUTO_WIDTH_KEY, "1");
+                              } catch {
+                                /* ignore */
+                              }
+                            }}
+                          >
+                            默认
+                          </button>
+                          <span
+                            className="editor-width-handle"
+                            title="拖动调整正文宽度"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              widthDragRef.current = { startX: e.clientX, startW: editorMaxWidthPx };
+                            }}
+                          >
+                            ↔
+                          </span>
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {activeChapter ? (
+                    <CodeMirrorEditor
+                      key={activeChapter.id}
+                      ref={editorRef}
+                      className="editor-textarea cm6-editor"
+                      value={content}
+                      onChange={setContent}
+                      ariaLabel="正文编辑器"
+                      placeholderText="请输入章节内容"
                     />
                   ) : (
-                    <button
-                      type="button"
-                      className="editor-chapter-title-text"
-                      title="点击改标题"
-                      onClick={() => {
-                        setChapterTitleDraft(activeChapter.title);
-                        setChapterTitleEditing(true);
-                      }}
-                      style={{ cursor: "text", background: "transparent", border: "none", padding: 0 }}
-                    >
-                      {activeChapter.title}
-                    </button>
+                    <div className="editor-xy-empty">
+                      <div className="editor-xy-empty__card">
+                        <p className="editor-xy-empty__title">请选择或新建章节</p>
+                        <p className="editor-xy-empty__hint">在左侧目录中选一章，或使用下方按钮新建。</p>
+                        <Button type="button" className="editor-xy-empty__cta" onClick={() => void handleNewChapter()}>
+                          + 新建章节
+                        </Button>
+                      </div>
+                    </div>
                   )}
-                  {!editorAutoWidth ? (
-                    <span className="editor-chapter-title-tools">
-                      <button
-                        type="button"
-                        className="editor-width-reset"
-                        title="恢复默认宽度（铺满中间栏）"
-                        onClick={() => {
-                          setEditorMaxWidthPx(EDITOR_DEFAULT_MAX_WIDTH_PX);
-                          setEditorAutoWidth(true);
-                          try {
-                            localStorage.setItem(EDITOR_WIDTH_KEY, String(EDITOR_DEFAULT_MAX_WIDTH_PX));
-                            localStorage.setItem(EDITOR_AUTO_WIDTH_KEY, "1");
-                          } catch {
-                            /* ignore */
-                          }
-                        }}
-                      >
-                        默认
-                      </button>
-                      <span
-                        className="editor-width-handle"
-                        title="拖动调整正文宽度"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          widthDragRef.current = { startX: e.clientX, startW: editorMaxWidthPx };
-                        }}
-                      >
-                        ↔
-                      </span>
-                    </span>
+                  {activeChapter ? (
+                    <div className="editor-xy-wc-corner" title="本章字数">
+                      {chapterWords.toLocaleString()}
+                    </div>
                   ) : null}
-                </div>
-              ) : null}
-              {activeChapter ? (
-                <CodeMirrorEditor
-                  key={activeChapter.id}
-                  ref={editorRef}
-                  className="editor-textarea cm6-editor"
-                  value={content}
-                  onChange={setContent}
-                  ariaLabel="正文编辑器"
-                  placeholderText="请输入章节内容"
-                />
-              ) : (
-                <div className="editor-xy-empty">
-                  <div className="editor-xy-empty__card">
-                    <p className="editor-xy-empty__title">请选择或新建章节</p>
-                    <p className="editor-xy-empty__hint">在左侧目录中选一章，或使用下方按钮新建。</p>
-                    <Button type="button" className="editor-xy-empty__cta" onClick={() => void handleNewChapter()}>
-                      + 新建章节
-                    </Button>
-                  </div>
-                </div>
+                </>
               )}
-              {activeChapter ? (
-                <div className="editor-xy-wc-corner" title="本章字数">
-                  {chapterWords.toLocaleString()}
-                </div>
-              ) : null}
             </div>
             </div>
             </div>
@@ -3621,398 +3624,49 @@ export function EditorPage() {
         </>
       )}
 
-      {bookSearchOpen && (
-        <div
-          className="modal-overlay"
-          role="presentation"
-          onClick={() => closeBookSearch()}
-        >
-          <div
-            className="modal-card"
-            role="dialog"
-            aria-labelledby="book-search-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 id="book-search-title">全书搜索</h3>
-            <p className="small muted">点击结果可跳转并高亮定位。搜索前自动保存当前章。</p>
-            <div className="modal-row modal-row--wrap book-search-scope">
-              <label className="radio-label">
-                <input
-                  type="radio"
-                  name="bookSearchScope"
-                  checked={bookSearchScope === "full"}
-                  onChange={() => setBookSearchScope("full")}
-                />
-                全书
-              </label>
-              <label className="radio-label">
-                <input
-                  type="radio"
-                  name="bookSearchScope"
-                  checked={bookSearchScope === "beforeProgress"}
-                  onChange={() => setBookSearchScope("beforeProgress")}
-                />
-                仅进度前
-              </label>
-              <label className="radio-label" title="将搜索词作为正则表达式解析">
-                <input
-                  type="checkbox"
-                  checked={bookSearchRegex}
-                  onChange={(e) => {
-                    setBookSearchRegex(e.target.checked);
-                    setBookSearchHits(null);
-                  }}
-                />
-                正则
-              </label>
-            </div>
-            <div className="modal-row">
-              <input
-                type="search"
-                className="modal-input"
-                placeholder={bookSearchRegex ? "正则表达式，如 他[^，]*说" : "关键词"}
-                value={bookSearchQ}
-                onChange={(e) => { setBookSearchQ(e.target.value); setBookSearchHits(null); }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void runBookSearch();
-                }}
-              />
-              <button type="button" className="btn primary small" onClick={() => void runBookSearch()}>
-                搜索
-              </button>
-            </div>
-            {bookSearchLoading ? (
-              <p className="muted small">搜索中…</p>
-            ) : bookSearchHits === null ? null : bookSearchHits.length === 0 && bookSearchQ.trim() ? (
-              <p className="muted small">无匹配。</p>
-            ) : (
-              <ul className="book-search-list">
-                {bookSearchHits.map((h) => (
-                  <li key={h.chapterId}>
-                    <button
-                      type="button"
-                      className="book-search-hit"
-                      onClick={() => void jumpToSearchHit(h)}
-                    >
-                      <span className="book-search-hit-title">{h.chapterTitle}</span>
-                      <span className="book-search-hit-meta">{h.matchCount} 处</span>
-                      {(h.contexts ?? [h.preview]).map((ctx, i) => (
-                        <span key={i} className="book-search-hit-preview">{ctx}</span>
-                      ))}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="modal-footer">
-              <button type="button" className="btn ghost small" onClick={() => closeBookSearch()}>
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <BookSearchDialog
+        open={bookSearchOpen}
+        initialQuery={findQ}
+        onSearch={async (q, scope, isRegex) => {
+          if (activeId) await persistContent(activeId, content);
+          return searchWork(workId!, q, scope, isRegex);
+        }}
+        onJumpToHit={(hit, q, isRegex) => void jumpToSearchHit(hit, q, isRegex)}
+        onClose={closeBookSearch}
+      />
 
-      {snapshotOpen && activeChapter && (
-        <div
-          className="modal-overlay"
-          role="presentation"
-          onClick={() => setSnapshotOpen(false)}
-        >
-          <div
-            className="modal-card modal-card--wide"
-            role="dialog"
-            aria-labelledby="snap-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 id="snap-title">章节历史 · {activeChapter.title}</h3>
-            <p className="small muted">
-              切换章节、手动保存（⌘S）、导出文件或备份 zip
-              时会自动记录。每章最多 {SNAPSHOT_CAP_PER_CHAPTER}{" "}
-              条；超过 {SNAPSHOT_MAX_AGE_MS / (24 * 60 * 60 * 1000)} 天的记录会自动删除，超出条数删最旧。
-            </p>
-            <div className="modal-footer modal-footer--start">
-              <button type="button" className="btn primary small" onClick={() => void handleManualSnapshot()}>
-                保存当前版本
-              </button>
-            </div>
-            {snapshotList.length === 0 ? (
-              <p className="muted small">暂无历史版本。</p>
-            ) : (
-              <ul className="snapshot-list">
-                {snapshotList.map((s, idx) => (
-                  <li key={s.id} className="snapshot-item">
-                    <div className="snapshot-item-head">
-                      <div className="snapshot-item-time-row">
-                        <time dateTime={new Date(s.createdAt).toISOString()}>
-                          {new Date(s.createdAt).toLocaleString()}
-                        </time>
-                        {idx === 0 && (
-                          <span className="snapshot-badge-latest">最新</span>
-                        )}
-                        <span className="snapshot-wc">{wordCount(s.content).toLocaleString()} 字</span>
-                      </div>
-                      <div className="snapshot-item-actions">
-                        <button type="button" className="btn small" onClick={() => void handleRestoreSnapshot(s)}>
-                          恢复
-                        </button>
-                        <button
-                          type="button"
-                          className={"btn ghost small" + (diffSnapshotId === s.id ? " is-active" : "")}
-                          onClick={() => setDiffSnapshotId((v) => (v === s.id ? null : s.id))}
-                        >
-                          {diffSnapshotId === s.id ? "收起对比" : "对比"}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn ghost small"
-                          onClick={() => void handleDeleteSnapshot(s.id)}
-                        >
-                          删除
-                        </button>
-                      </div>
-                    </div>
-                    <pre className="snapshot-preview">{s.content.slice(0, 120)}{s.content.length > 120 ? "…" : ""}</pre>
-                    {diffSnapshotId === s.id && (() => {
-                      const diffLines = collapseDiff(simpleDiffLines(s.content, content));
-                      return (
-                        <div className="snapshot-diff" aria-label="历史版本与当前版本对比">
-                          <div className="snapshot-diff-legend">
-                            <span className="snapshot-diff-legend-del">红 = 历史有、当前无</span>
-                            <span className="snapshot-diff-legend-add">绿 = 历史无、当前有</span>
-                          </div>
-                          <pre className="snapshot-diff-body" aria-live="polite">
-                            {diffLines.map((line, li) => (
-                              <span
-                                key={li}
-                                className={
-                                  line.kind === "del"
-                                    ? "snapshot-diff-del"
-                                    : line.kind === "add"
-                                      ? "snapshot-diff-add"
-                                      : line.text.startsWith("···")
-                                        ? "snapshot-diff-fold"
-                                        : "snapshot-diff-same"
-                                }
-                              >
-                                {line.kind === "del" ? "- " : line.kind === "add" ? "+ " : "  "}
-                                {line.text}
-                                {"\n"}
-                              </span>
-                            ))}
-                          </pre>
-                        </div>
-                      );
-                    })()}
-                  </li>
-                ))}
-              </ul>
-            )}
-            <div className="modal-footer">
-              <button type="button" className="btn ghost small" onClick={() => setSnapshotOpen(false)}>
-                关闭
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ChapterSnapshotDialog
+        open={snapshotOpen && !!activeChapter}
+        chapterTitle={activeChapter?.title ?? ""}
+        snapshots={snapshotList}
+        currentContent={content}
+        onManualSnapshot={() => void handleManualSnapshot()}
+        onRestore={(s) => void handleRestoreSnapshot(s)}
+        onDelete={(id) => void handleDeleteSnapshot(id)}
+        onClose={() => setSnapshotOpen(false)}
+      />
 
       {/* P2-C/E：导出选项弹窗 */}
-      {exportDialogOpen && work && (
-        <div
-          className="modal-overlay"
-          role="presentation"
-          onClick={() => setExportDialogOpen(false)}
-        >
-          <div
-            className="modal-card modal-card--wide"
-            role="dialog"
-            aria-labelledby="export-dialog-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 id="export-dialog-title">导出全书（{exportFormat.toUpperCase()}）</h3>
+      <ExportBookDialog
+        open={exportDialogOpen && !!work}
+        format={exportFormat}
+        chapters={chapters}
+        onExport={(opts) => {
+          if (exportFormat === "txt") void doExportBookTxt(opts);
+          else void doExportBookDocx(opts);
+        }}
+        onClose={() => setExportDialogOpen(false)}
+      />
 
-            <div className="export-dialog-section">
-              <div className="export-dialog-label">导出范围</div>
-              <div className="export-dialog-range-row">
-                <label className="export-dialog-radio">
-                  <input
-                    type="radio"
-                    checked={exportRangeMode === "all"}
-                    onChange={() => setExportRangeMode("all")}
-                  />
-                  全书（{chapters.length} 章）
-                </label>
-                <label className="export-dialog-radio">
-                  <input
-                    type="radio"
-                    checked={exportRangeMode === "range"}
-                    onChange={() => setExportRangeMode("range")}
-                  />
-                  自定义章节范围
-                </label>
-              </div>
-              {exportRangeMode === "range" && (
-                <div className="export-dialog-range-inputs">
-                  <label>
-                    从 order
-                    <input
-                      type="number"
-                      className="export-dialog-num"
-                      value={exportFromOrder}
-                      min={0}
-                      onChange={(e) => setExportFromOrder(Number(e.target.value) || 0)}
-                    />
-                  </label>
-                  <span>—</span>
-                  <label>
-                    到 order
-                    <input
-                      type="number"
-                      className="export-dialog-num"
-                      value={exportToOrder}
-                      min={0}
-                      onChange={(e) => setExportToOrder(Number(e.target.value) || 0)}
-                    />
-                  </label>
-                  <span className="muted small">
-                    （匹配 {chapters.filter((c) => c.order >= exportFromOrder && c.order <= exportToOrder).length} 章）
-                  </span>
-                </div>
-              )}
-            </div>
-
-            <div className="export-dialog-section">
-              <label className="export-dialog-label" htmlFor="export-foreword">
-                前言（可空）
-              </label>
-              <textarea
-                id="export-foreword"
-                value={exportForeword}
-                onChange={(e) => setExportForeword(e.target.value)}
-                rows={4}
-                placeholder="在书名后、正文前插入前言文字…"
-                style={{ width: "100%", resize: "vertical" }}
-              />
-            </div>
-
-            <div className="export-dialog-section">
-              <label className="export-dialog-label" htmlFor="export-afterword">
-                后记（可空）
-              </label>
-              <textarea
-                id="export-afterword"
-                value={exportAfterword}
-                onChange={(e) => setExportAfterword(e.target.value)}
-                rows={4}
-                placeholder="在正文后插入后记文字…"
-                style={{ width: "100%", resize: "vertical" }}
-              />
-            </div>
-
-            <div className="modal-footer">
-              <button
-                type="button"
-                className="btn primary"
-                onClick={() => {
-                  const opts: ExportBookOptions = {
-                    foreword: exportForeword || undefined,
-                    afterword: exportAfterword || undefined,
-                    fromOrder: exportRangeMode === "range" ? exportFromOrder : undefined,
-                    toOrder: exportRangeMode === "range" ? exportToOrder : undefined,
-                  };
-                  setExportDialogOpen(false);
-                  if (exportFormat === "txt") void doExportBookTxt(opts);
-                  else void doExportBookDocx(opts);
-                }}
-              >
-                确认导出
-              </button>
-              <button
-                type="button"
-                className="btn ghost small"
-                onClick={() => setExportDialogOpen(false)}
-              >
-                取消
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <PullOutlineDialog
+        open={pullOutlineDialogOpen}
+        onOpenChange={setPullOutlineDialogOpen}
+        entries={pushedOutlines}
+        initialSelectedId={selectedOutlineEntryId}
+        onConfirm={handleConfirmPullOutline}
+        hasActiveChapter={!!activeChapter}
+      />
     </div>
   );
 }
 
-/** P2-B：行级对比 diff（LCS 算法，上限 400 行） */
-type DiffLine = { kind: "same" | "del" | "add"; text: string };
-
-function simpleDiffLines(oldText: string, newText: string): DiffLine[] {
-  const a = oldText.split("\n").slice(0, 400);
-  const b = newText.split("\n").slice(0, 400);
-  const m = a.length;
-  const n = b.length;
-  // DP for LCS lengths
-  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
-    }
-  }
-  // Backtrace
-  const result: DiffLine[] = [];
-  let i = m, j = n;
-  while (i > 0 || j > 0) {
-    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
-      result.unshift({ kind: "same", text: a[i - 1] });
-      i--; j--;
-    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-      result.unshift({ kind: "add", text: b[j - 1] });
-      j--;
-    } else {
-      result.unshift({ kind: "del", text: a[i - 1] });
-      i--;
-    }
-  }
-  return result;
-}
-
-/** P2-B：折叠连续 same 行，保留每段变更前后各 3 行上下文 */
-function collapseDiff(lines: DiffLine[], ctx = 3): DiffLine[] {
-  const out: DiffLine[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    if (lines[i].kind !== "same") {
-      out.push(lines[i++]);
-    } else {
-      // 找出这段 same 的长度
-      let end = i;
-      while (end < lines.length && lines[end].kind === "same") end++;
-      const len = end - i;
-      if (len <= ctx * 2) {
-        // 短段全显
-        for (let k = i; k < end; k++) out.push(lines[k]);
-      } else {
-        // 头 ctx 行
-        for (let k = 0; k < ctx; k++) out.push(lines[i + k]);
-        // 折叠提示
-        out.push({ kind: "same", text: `\u00b7\u00b7\u00b7 折叠 ${len - ctx * 2} 行未变更内容 \u00b7\u00b7\u00b7` });
-        // 尾 ctx 行
-        for (let k = end - ctx; k < end; k++) out.push(lines[k]);
-      }
-      i = end;
-    }
-  }
-  return out;
-}
-
-function downloadBlob(blob: Blob, filename: string) {
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(a.href);
-}
-
-function safeFilename(s: string) {
-  return s.replace(/[/\\?%*:|"<>]/g, "_").slice(0, 80) || "export";
-}

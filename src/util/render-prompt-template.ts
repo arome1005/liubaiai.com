@@ -33,6 +33,10 @@ export type PromptTemplateContext = {
   chapter_content?: string;
   outline_node_title?: string;
   outline_node_summary?: string;
+  parent_context?: string;
+  lineage_context?: string;
+  planning_level?: string;
+  idea_text?: string;
 };
 
 /** 已知变量白名单（用于 UI 提示，非运行时过滤） */
@@ -44,6 +48,10 @@ export const PROMPT_TEMPLATE_VARS: Array<{ key: keyof PromptTemplateContext; lab
   { key: "chapter_content",      label: "章节正文（节选）" },
   { key: "outline_node_title",   label: "大纲节点标题" },
   { key: "outline_node_summary", label: "大纲节点概要" },
+  { key: "parent_context",       label: "父层上下文" },
+  { key: "lineage_context",      label: "完整上层链路" },
+  { key: "planning_level",       label: "规划层级" },
+  { key: "idea_text",            label: "作品构思" },
 ];
 
 const CHAPTER_CONTENT_LIMIT = 500;
@@ -65,6 +73,10 @@ export function renderPromptTemplate(
     chapter_content:      truncateContent(ctx.chapter_content ?? ""),
     outline_node_title:   (ctx.outline_node_title ?? "").trim(),
     outline_node_summary: (ctx.outline_node_summary ?? "").trim(),
+    parent_context:       (ctx.parent_context ?? "").trim(),
+    lineage_context:      (ctx.lineage_context ?? "").trim(),
+    planning_level:       (ctx.planning_level ?? "").trim(),
+    idea_text:            (ctx.idea_text ?? "").trim(),
   };
 
   // 替换所有 {{任意变量名}}，白名单外的也替换为空字符串

@@ -1,0 +1,47 @@
+---
+description: 推演页 V0TuiyanPage：模块边界、文件落点、大改时拆分顺序（与 src/util/v0-tuiyan-outline / ai/tuiyan-planning-generate 对齐）
+globs:
+  - src/pages/V0TuiyanPage.tsx
+  - src/components/tuiyan/**
+  - src/hooks/useTuiyan*.ts
+alwaysApply: false
+---
+
+# 推演（V0Tuiyan）功能页 · 拆分与落点 / Tuiyan page split map
+
+适用于编辑 **`src/pages/V0TuiyanPage.tsx`** 及为其抽出的子模块。目标：**页面只做组合与导航**，复杂状态进 **hook**，重 UI 进 **components**，纯算法与类型进 **util** / **types**，生成管线留在 **ai**。
+
+## 已有基线 / Existing modules（勿重复造轮）
+
+- **大纲与树逻辑**：`src/util/v0-tuiyan-outline.ts`（`V0OutlineNode`、`buildV0TuiyanOutline` 等）  
+- **四层规划生成**：`src/ai/tuiyan-planning-generate.ts`（`generateTuiyanPlanningList` / `Detail`、错误类型）  
+- **提示词与槽位渲染**：`src/util/render-prompt-template.ts`、`src/components/PromptPicker.tsx`  
+- **域模型类型**：`src/db/types.ts` 中的 `Tuiyan*`、`TuiyanPlanning*`  
+
+## 推荐新目录与命名 / Where new code should go
+
+| 类别 | 路径 | 内容示例 |
+|------|------|----------|
+| 页面 | `src/pages/V0TuiyanPage.tsx` | 布局组合、route 级 state 接线；**单文件行数应逐步下降** |
+| 推演 UI 子组件 | `src/components/tuiyan/*.tsx` | 左栏「四层规划」块、右栏 Tab 内容、空状态、顶栏工作区条等 **纯展示或轻交互** |
+| 状态与副作用 | `src/hooks/useTuiyan*.ts` | 持久化防抖、作品切换加载、`planning`/`mindmap`/`chat` 等 **可单测的 state 机**；命名示例：`useTuiyanWorkLoader`、`useTuiyanPlanningState`、`useTuiyanLayoutPanels` |
+| 纯工具 | `src/util/tuiyan-*.ts` 或扩展现有 `v0-tuiyan-*.ts` | localStorage key、树遍历、与 React 无关的归约函数 |
+
+**禁止**：在 `V0TuiyanPage.tsx` 内再写一长串与「单块 UI 区域」无关的业务（应下沉到上表路径）。
+
+## 大改时的推荐顺序 / Refactor order (incremental)
+
+1) **只搬无副作用的纯函数** → `util`（行为不变、易 diff）  
+2) **搬 UI 块** → `src/components/tuiyan/`（props 清晰、不夹带全页 state）  
+3) **再搬「状态 + 副作用」** → `useTuiyan*.ts`（用参数/返回值显式化依赖，如 `workId`、`repo` 方法）  
+
+每一步：**先结构对齐、再改细节**；小步提交，避免与行为改动混在大 diff 里。
+
+## 每次小改动后的自检 / Self-check (agent)
+
+改完先自问三句并能在回复中交代：  
+1) 这段逻辑的「唯一职责」是否仍在一个函数/一个 hook 里？  
+2) 新代码是否落在上表**合理路径**？有没有更短的接线路径但会更耦合？  
+3) 若本次新增 **> ~50 行** 在页面文件：是否应本次就抽，还是记作下一步拆分的明确 TODO？  
+
+**Note**：`globs` 已覆盖页面、`src/components/tuiyan/**`、`useTuiyan*.ts`。

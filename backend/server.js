@@ -220,14 +220,14 @@ export async function buildServer() {
       return reply.send(Buffer.from(buf));
     }
   }
+  // 通配：覆盖 chat / embeddings 及火山后续路径，避免漏配子路径导致 404
+  app.get("/api/proxy/doubao-ark/health", async () => ({
+    ok: true,
+    doubaoArkProxy: true,
+  }));
   app.post(
-    "/api/proxy/doubao-ark/api/v3/chat/completions",
+    "/api/proxy/doubao-ark/*",
     { bodyLimit: 32 * 1024 * 1024 },
-    proxyDoubaoArkToVolc,
-  );
-  app.post(
-    "/api/proxy/doubao-ark/api/v3/embeddings",
-    { bodyLimit: 8 * 1024 * 1024 },
     proxyDoubaoArkToVolc,
   );
 

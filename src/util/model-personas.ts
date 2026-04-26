@@ -252,6 +252,8 @@ const PERSONAS: Record<AiProviderId, ModelPersona[]> = {
       costStars: 1,
     },
   ],
+  // owner-only：不出现在选择 UI；保留键以满足 Record<AiProviderId> 类型要求
+  "claude-code-local": [],
 };
 
 type ModelVerdict = "ok" | "err";

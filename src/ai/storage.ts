@@ -68,6 +68,8 @@ export function defaultAiSettings(): AiSettings {
     kimi: { id: "kimi", label: "Kimi", model: "moonshot-v1-8k", baseUrl: "https://api.moonshot.cn/v1" },
     // 小米 MiMo：OpenAI 兼容，官方 Base 为 https://api.mimo-v2.com/v1（文档见 mimo-v2.com）
     xiaomi: { id: "xiaomi", label: "小米", model: "mimo-v2-flash", baseUrl: "https://api.mimo-v2.com/v1" },
+    // Owner 模式：本机 sidecar（127.0.0.1:7788）走 Claude Pro 订阅。apiKey 字段在 owner 模式下临时塞 sidecar token。
+    claudeCodeLocal: { id: "claude-code-local", label: "Claude Code（订阅）", model: "sonnet", baseUrl: "http://127.0.0.1:7788" },
     privacy: {
       consentAccepted: false,
       allowCloudProviders: false,
@@ -124,6 +126,13 @@ export function loadAiSettings(): AiSettings {
         return zp;
       })(),
       kimi: { ...d.kimi, ...(parsed.kimi ?? {}) },
+      claudeCodeLocal: (() => {
+        const cc = { ...d.claudeCodeLocal, ...(parsed.claudeCodeLocal ?? {}) };
+        // baseUrl/model 留空时回退到默认（避免迁移坏数据）
+        if (!(cc.baseUrl ?? "").trim()) cc.baseUrl = d.claudeCodeLocal.baseUrl;
+        if (!(cc.model ?? "").trim()) cc.model = d.claudeCodeLocal.model;
+        return cc;
+      })(),
       xiaomi: (() => {
         const xm = { ...d.xiaomi, ...(parsed.xiaomi ?? {}) };
         if (!(xm.baseUrl ?? "").trim()) xm.baseUrl = d.xiaomi.baseUrl;
@@ -208,6 +217,7 @@ export function getBackendConfig(): BackendModelConfig {
     xiaomi: { baseUrl: s.xiaomi.baseUrl, apiKey: s.xiaomi.apiKey },
     ollama: { baseUrl: s.ollama.baseUrl, apiKey: s.ollama.apiKey },
     mlx: { baseUrl: s.mlx.baseUrl, apiKey: s.mlx.apiKey },
+    "claude-code-local": { baseUrl: s.claudeCodeLocal.baseUrl, apiKey: s.claudeCodeLocal.apiKey },
   };
 }
 
@@ -231,12 +241,17 @@ export function getProviderConfig(s: AiSettings, id: AiProviderId): AiProviderCo
       return s.ollama;
     case "mlx":
       return s.mlx;
+    case "claude-code-local":
+      return s.claudeCodeLocal;
   }
 }
 
 export function patchProviderConfig(s: AiSettings, id: AiProviderId, patch: Partial<AiProviderConfig>): AiSettings {
   const cur = getProviderConfig(s, id);
   const next = { ...cur, ...patch };
+  // 关键：provider id 是 kebab-case（如 "claude-code-local"），但 AiSettings 字段是 camelCase。
+  // 显式映射避免写出无效字段。
+  if (id === "claude-code-local") return { ...s, claudeCodeLocal: next };
   return { ...s, [id]: next } as AiSettings;
 }
 

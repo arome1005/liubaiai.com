@@ -1,8 +1,7 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { Toaster } from "./components/ui/sonner";
 import { LibraryPage } from "./pages/LibraryPage";
-import { LogicPage as _LogicPageDeprecated } from "./pages/LogicPage"; // @deprecated — replaced by V0TuiyanPage at /logic
 import { InspirationPage } from "./pages/InspirationPage";
 import { ChatPage } from "./pages/ChatPage";
 import { ShengHuiPage } from "./pages/ShengHuiPage";
@@ -26,11 +25,13 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { FirstAiGateHost } from "./components/FirstAiGateHost";
 import { InspirationGlobalCapture } from "./components/InspirationGlobalCapture";
 import { RegisterDemoPackEffect } from "./components/RegisterDemoPackEffect";
+import { OwnerSidecarBadge } from "./components/OwnerSidecarBadge";
 import { AppShell } from "./components/AppShell";
 import { EditorShell } from "./components/EditorShell";
 import { applyThemePreference, readThemePreference, THEME_KEY } from "./theme";
 import { applyEditorTypographyCssVars, loadEditorTypography } from "./util/editor-typography";
 import { useAuthUserState } from "./hooks/useAuthUserState";
+import { AppSplash } from "./components/AppSplash";
 
 const FONT_KEY = "liubai:fontSizePx";
 
@@ -52,6 +53,39 @@ function RequireAuth(props: { authUser: unknown }) {
 
 export default function App() {
   const { authUser } = useAuthUserState();
+
+  // Global splash: show while auth is resolving, minimum 1.5s display
+  const [splashPhase, setSplashPhase] = useState<"show" | "fading" | "done">("show");
+  const minElapsedRef = useRef(false);
+  const authResolvedRef = useRef(false);
+
+  const tryFade = useCallback(() => {
+    if (minElapsedRef.current && authResolvedRef.current) {
+      setSplashPhase("fading");
+    }
+  }, []);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      minElapsedRef.current = true;
+      tryFade();
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [tryFade]);
+
+  useEffect(() => {
+    if (authUser !== undefined) {
+      authResolvedRef.current = true;
+      tryFade();
+    }
+  }, [authUser, tryFade]);
+
+  useEffect(() => {
+    if (splashPhase !== "fading") return;
+    const t = window.setTimeout(() => setSplashPhase("done"), 580);
+    return () => clearTimeout(t);
+  }, [splashPhase]);
+
   useEffect(() => {
     const n = Number(localStorage.getItem(FONT_KEY));
     if (!Number.isNaN(n) && n >= 12 && n <= 28) {
@@ -75,11 +109,17 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      {splashPhase !== "done" && <AppSplash fading={splashPhase === "fading"} />}
       <Toaster position="top-center" richColors />
       <FirstAiGateHost />
       <InspirationGlobalCapture />
       <RegisterDemoPackEffect />
+      <OwnerSidecarBadge />
       <Routes>
+        <Route element={<RequireAuth authUser={authUser} />}>
+          <Route path="/logic" element={<V0TuiyanPage />} />
+          <Route path="/v0/tuiyan" element={<Navigate to="/logic" replace />} />
+        </Route>
         <Route element={<EditorShell />}>
           <Route path="/work/:workId" element={<EditorPage />} />
           <Route path="/work/:workId/reshape" element={<ReshapePage />} />
@@ -101,8 +141,6 @@ export default function App() {
           {/* 未登录默认进入登录/注册页；业务页需先登录 */}
           <Route element={<RequireAuth authUser={authUser} />}>
             <Route path="/library" element={<LibraryPage />} />
-            <Route path="/logic" element={<V0TuiyanPage />} />
-            <Route path="/v0/tuiyan" element={<Navigate to="/logic" replace />} />
             <Route path="/v0/test" element={<V0TestPage />} />
             <Route path="/inspiration" element={<InspirationPage />} />
             <Route path="/chat" element={<ChatPage />} />

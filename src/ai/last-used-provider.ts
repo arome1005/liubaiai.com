@@ -15,6 +15,9 @@ const ALL: AiProviderId[] = [
 ];
 
 export function rememberLastUsedAiProvider(id: AiProviderId): void {
+  // Owner 模式的 sidecar provider 不持久化为"上次使用"——它只在 owner 模式开启时才存在，
+  // 写进 lastUsed 会让 owner 关闭后留下一个用户选不到的 ghost provider。
+  if (id === "claude-code-local") return;
   try {
     localStorage.setItem(KEY, id);
   } catch {

@@ -34,6 +34,8 @@ import { listRecentDailyApproxTokens, readTodayApproxTokens, resetTodayApproxTok
 import { loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiProviderConfig, AiSettings } from "../ai/types";
 import { BackendModelConfigModal } from "../components/BackendModelConfigModal";
+import { OwnerModeSection } from "../components/OwnerModeSection";
+import { useAuthUserState } from "../hooks/useAuthUserState";
 import { persistThemePreference, readThemePreference, type ThemePreference } from "../theme";
 import {
   BACKUP_NUDGE_INTERVAL_MS,
@@ -198,6 +200,11 @@ export function SettingsPage() {
   const [hotkeyMsg, setHotkeyMsg] = useState<string | null>(null);
   const [zenHotkey, setZenHotkey] = useState<HotkeyCombo>(() => readZenToggleHotkey());
   const [zenHotkeyMsg, setZenHotkeyMsg] = useState<string | null>(null);
+  const { authUser } = useAuthUserState();
+  const currentEmail =
+    authUser && typeof authUser === "object" && "email" in authUser
+      ? (authUser as { email: string }).email
+      : null;
 
   useEffect(() => {
     const bump = () => setSidepanelUsageTick((n) => n + 1);
@@ -1005,7 +1012,7 @@ export function SettingsPage() {
 
         {/* ── 后端模型配置行 ── */}
         {(() => {
-          const pCfg = (aiSettings as Record<string, AiProviderConfig>)[aiSettings.provider];
+          const pCfg = (aiSettings as unknown as Record<string, AiProviderConfig>)[aiSettings.provider];
           const pLabel = pCfg?.label ?? aiSettings.provider;
           const pModel = pCfg?.model?.trim();
           return (
@@ -1114,6 +1121,9 @@ export function SettingsPage() {
             写作侧栏底部始终显示「今日已用 N tokens」，方便实时感知消耗。粗估仅供参考，非厂商计费凭证。
           </p>
         </div>
+
+        {/* ── Owner 模式（仅作者本人可见） ── */}
+        <OwnerModeSection currentEmail={currentEmail} />
 
         {/* ── 预算与趋势 ── */}
         <div className="settings-ai-usage" role="region" aria-label="预算与趋势" style={{ marginTop: 14 }}>

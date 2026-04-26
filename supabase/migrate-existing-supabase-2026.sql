@@ -103,6 +103,10 @@ alter table public.tuiyan_state
   add column if not exists mindmap jsonb not null default '{}'::jsonb;
 alter table public.tuiyan_state
   add column if not exists scenes jsonb not null default '[]'::jsonb;
+alter table public.tuiyan_state
+  add column if not exists planning_pushed_outlines jsonb not null default '[]'::jsonb;
+alter table public.tuiyan_state
+  add column if not exists planning_structured_meta_by_node_id jsonb not null default '{}'::jsonb;
 
 create index if not exists idx_tuiyan_state_user_work
   on public.tuiyan_state (user_id, work_id);

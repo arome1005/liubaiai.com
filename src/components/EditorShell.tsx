@@ -9,15 +9,37 @@ import { resolveWorkIdFromRouteParam } from "../db/repo";
 import { shortcutModifierSymbol } from "../util/keyboardHints";
 import { EditorZenProvider } from "./EditorZenContext";
 import { GlobalCommandPalette } from "./GlobalCommandPalette";
+import { ImperativeDialogProvider } from "./ImperativeDialog";
 import { RightRailContext, type RightRailTab, type RightRailTabId } from "./RightRailContext";
 import { TopbarContext } from "./TopbarContext";
-import { UserAccountMenu } from "./UserAccountMenu";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
 
 const LS_RIGHT_OPEN = "liubai:rightRailOpen";
 const LS_RIGHT_TAB = "liubai:rightRailTab";
 const LS_RIGHT_W_PX = "liubai:rightRailWidthPx";
+
+function safeGetLocalStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeSetLocalStorage(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Keep existing UX when storage is unavailable.
+  }
+}
+
+function useLocalStorageSync(key: string, value: string) {
+  useEffect(() => {
+    safeSetLocalStorage(key, value);
+  }, [key, value]);
+}
 
 /** 返回主页 + 沉浸写作 + 写作设置 三个图标按钮（写作顶栏右侧） */
 function TopbarIconGroup({
@@ -79,7 +101,7 @@ export function EditorShell() {
   const { pathname } = useLocation();
   /** 重塑独立页自带顶栏，不重复渲染写作顶栏（搜索/辅助/沉浸等） */
   const hideWritingTopbar = Boolean(matchPath({ path: "/work/:workId/reshape", end: true }, pathname));
-  const { authUser, refreshAuth } = useAuthUserState(pathname);
+  useAuthUserState(pathname);
   const [commandOpen, setCommandOpen] = useState(false);
   const commandOpenRef = useRef(false);
   const paletteWorkPathSeg = useMemo(() => {
@@ -92,27 +114,35 @@ export function EditorShell() {
     }
   }, [pathname]);
   const [paletteWorkUuid, setPaletteWorkUuid] = useState<string | null>(null);
+  const paletteResolveTokenRef = useRef(0);
   useEffect(() => {
+    const token = ++paletteResolveTokenRef.current;
     if (!paletteWorkPathSeg) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clear stale work context when route has no work segment
       setPaletteWorkUuid(null);
       return;
     }
+    let cancelled = false;
     void (async () => {
       const internal = (await resolveWorkIdFromRouteParam(paletteWorkPathSeg)) ?? paletteWorkPathSeg;
+      if (cancelled || paletteResolveTokenRef.current !== token) return;
       setPaletteWorkUuid(internal);
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [paletteWorkPathSeg]);
   const cmdModKey = useMemo(() => shortcutModifierSymbol(), []);
   const [writingSettingsOpen, setWritingSettingsOpen] = useState(false);
-  const [rightOpen, setRightOpen] = useState<boolean>(() => safeBool(localStorage.getItem(LS_RIGHT_OPEN), false));
+  const [rightOpen, setRightOpen] = useState<boolean>(() => safeBool(safeGetLocalStorage(LS_RIGHT_OPEN), false));
   const [rightWidthPx, setRightWidthPx] = useState<number>(() => {
-    const n = Number(localStorage.getItem(LS_RIGHT_W_PX));
+    const n = Number(safeGetLocalStorage(LS_RIGHT_W_PX));
     if (!Number.isFinite(n)) return 360;
     return Math.max(280, Math.min(560, Math.floor(n)));
   });
 
   const [activeTab, setActiveTab] = useState<RightRailTabId>(() => {
-    const v = localStorage.getItem(LS_RIGHT_TAB) as RightRailTabId | null;
+    const v = safeGetLocalStorage(LS_RIGHT_TAB) as RightRailTabId | null;
     return v === "ai" || v === "summary" || v === "bible" || v === "ref" ? v : "ai";
   });
   const [tabs, setTabs] = useState<RightRailTab[]>(() => [
@@ -127,26 +157,17 @@ export function EditorShell() {
   const [topbarActionsNode, setTopbarActionsNode] = useState<React.ReactNode | null>(null);
   const [zenWrite, setZenWrite] = useState(false);
   const zenWriteRef = useRef(zenWrite);
-  const rightOpenRef = useRef(rightOpen);
-  zenWriteRef.current = zenWrite;
 
   useEffect(() => {
     commandOpenRef.current = commandOpen;
   }, [commandOpen]);
+  useEffect(() => {
+    zenWriteRef.current = zenWrite;
+  }, [zenWrite]);
 
-  useEffect(() => {
-    rightOpenRef.current = rightOpen;
-  }, [rightOpen]);
-
-  useEffect(() => {
-    localStorage.setItem(LS_RIGHT_OPEN, rightOpen ? "1" : "0");
-  }, [rightOpen]);
-  useEffect(() => {
-    localStorage.setItem(LS_RIGHT_TAB, activeTab);
-  }, [activeTab]);
-  useEffect(() => {
-    localStorage.setItem(LS_RIGHT_W_PX, String(rightWidthPx));
-  }, [rightWidthPx]);
+  useLocalStorageSync(LS_RIGHT_OPEN, rightOpen ? "1" : "0");
+  useLocalStorageSync(LS_RIGHT_TAB, activeTab);
+  useLocalStorageSync(LS_RIGHT_W_PX, String(rightWidthPx));
 
   const draggingRef = useRef<null | { startX: number; startW: number }>(null);
   useEffect(() => {
@@ -167,40 +188,34 @@ export function EditorShell() {
     };
   }, []);
 
+  // Unified keyboard & fullscreen listeners for the editor shell.
+  // All key bindings and fullscreen-sync in one place for maintainability;
+  // actual keys/behavior unchanged.
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key !== "Escape") return;
-      if (commandOpenRef.current) return;
-      if (zenWrite) {
-        e.preventDefault();
-        void exitDocumentFullscreen().finally(() => setZenWrite(false));
+    function onKeyBubble(e: KeyboardEvent) {
+      const key = e.key?.toLowerCase();
+
+      if (key === "escape") {
+        if (commandOpenRef.current) return;
+        if (zenWriteRef.current) {
+          e.preventDefault();
+          void exitDocumentFullscreen().finally(() => setZenWrite(false));
+          return;
+        }
+        setRightOpen(false);
         return;
       }
-      setRightOpen(false);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [zenWrite]);
 
-  /** 与 AppShell 一致：码字区为 contenteditable 时不抢键；顶栏/失焦时 ⌘K 可开面板 */
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key?.toLowerCase() !== "k") return;
-      if (!e.metaKey && !e.ctrlKey) return;
-      const t = e.target as HTMLElement | null;
-      if (t?.closest("input, textarea, select, [contenteditable=true]")) return;
-      e.preventDefault();
-      setCommandOpen((o) => !o);
+      if (key === "k" && (e.metaKey || e.ctrlKey)) {
+        const t = e.target as HTMLElement | null;
+        if (t?.closest("input, textarea, select, [contenteditable=true]")) return;
+        e.preventDefault();
+        setCommandOpen((o) => !o);
+      }
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (!e.altKey) return;
-      if (e.key?.toLowerCase() !== "z") return;
-      if (e.repeat) return;
+    function onKeyCapture(e: KeyboardEvent) {
+      if (!e.altKey || e.key?.toLowerCase() !== "z" || e.repeat) return;
       const t = e.target as HTMLElement | null;
       if (t?.closest("input, textarea, select")) return;
       e.preventDefault();
@@ -211,8 +226,23 @@ export function EditorShell() {
         return next;
       });
     }
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+
+    function onFsChange() {
+      if (!getFullscreenElement() && zenWriteRef.current) {
+        setZenWrite(false);
+      }
+    }
+
+    window.addEventListener("keydown", onKeyBubble);
+    window.addEventListener("keydown", onKeyCapture, true);
+    document.addEventListener("fullscreenchange", onFsChange);
+    document.addEventListener("webkitfullscreenchange", onFsChange);
+    return () => {
+      window.removeEventListener("keydown", onKeyBubble);
+      window.removeEventListener("keydown", onKeyCapture, true);
+      document.removeEventListener("fullscreenchange", onFsChange);
+      document.removeEventListener("webkitfullscreenchange", onFsChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -221,21 +251,6 @@ export function EditorShell() {
       setZenWrite(false);
     });
   }, [pathname]);
-
-  /** 用户用浏览器手段退出全屏时，同步关闭沉浸 UI */
-  useEffect(() => {
-    function onFsChange() {
-      if (!getFullscreenElement() && zenWriteRef.current) {
-        setZenWrite(false);
-      }
-    }
-    document.addEventListener("fullscreenchange", onFsChange);
-    document.addEventListener("webkitfullscreenchange", onFsChange);
-    return () => {
-      document.removeEventListener("fullscreenchange", onFsChange);
-      document.removeEventListener("webkitfullscreenchange", onFsChange);
-    };
-  }, []);
 
   const setTabEnabled = useCallback((id: RightRailTabId, enabled: boolean) => {
     setTabs((prev) => {
@@ -281,6 +296,7 @@ export function EditorShell() {
 
   return (
     <>
+    <ImperativeDialogProvider>
     <TopbarContext.Provider value={topbarApi}>
       <RightRailContext.Provider value={rightRailApi}>
         <EditorZenProvider value={zenApi}>
@@ -429,6 +445,7 @@ export function EditorShell() {
         </EditorZenProvider>
       </RightRailContext.Provider>
     </TopbarContext.Provider>
+    </ImperativeDialogProvider>
     <EditorWritingSettingsSheet open={writingSettingsOpen} onOpenChange={setWritingSettingsOpen} />
     </>
   );

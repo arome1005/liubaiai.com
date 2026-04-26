@@ -104,6 +104,7 @@ create table if not exists public.chapter (
   outline_draft       text    null,                          -- 推演页推送的细纲快照（可空）
   outline_node_id     text    null,                          -- 推演树节点 id（可空）
   outline_pushed_at   bigint  null,                          -- 推送时间戳（毫秒；可空）
+  chapter_note        text    null,                          -- 章节轻量笔记（可空）
   "order"             integer not null,
   updated_at          bigint  not null,
   word_count_cache    integer null                           -- 字数缓存
@@ -117,6 +118,7 @@ alter table public.chapter add column if not exists summary_scope_to   integer n
 alter table public.chapter add column if not exists outline_draft     text    null;
 alter table public.chapter add column if not exists outline_node_id   text    null;
 alter table public.chapter add column if not exists outline_pushed_at bigint  null;
+alter table public.chapter add column if not exists chapter_note      text    null;
 alter table public.chapter add column if not exists word_count_cache   integer null;
 
 -- ---- 2.4 章节快照 ----
@@ -446,8 +448,25 @@ create table if not exists public.tuiyan_state (
   linked_ref_work_ids jsonb not null default '[]'::jsonb,
   mindmap jsonb not null default '{}'::jsonb,
   scenes jsonb not null default '[]'::jsonb,
+  selected_prompt_template_id text null,
+  planning_idea text null,
+  planning_tree jsonb not null default '[]'::jsonb,
+  planning_drafts_by_node_id jsonb not null default '{}'::jsonb,
+  planning_meta_by_node_id jsonb not null default '{}'::jsonb,
+  planning_pushed_outlines jsonb not null default '[]'::jsonb,
+  planning_selected_node_id text null,
+  planning_structured_meta_by_node_id jsonb not null default '{}'::jsonb,
   unique(user_id, work_id)
 );
+alter table public.tuiyan_state
+  add column if not exists selected_prompt_template_id text null,
+  add column if not exists planning_idea text null,
+  add column if not exists planning_tree jsonb not null default '[]'::jsonb,
+  add column if not exists planning_drafts_by_node_id jsonb not null default '{}'::jsonb,
+  add column if not exists planning_meta_by_node_id jsonb not null default '{}'::jsonb,
+  add column if not exists planning_pushed_outlines jsonb not null default '[]'::jsonb,
+  add column if not exists planning_selected_node_id text null,
+  add column if not exists planning_structured_meta_by_node_id jsonb not null default '{}'::jsonb;
 create index if not exists idx_tuiyan_state_user_work on public.tuiyan_state (user_id, work_id);
 alter table public.tuiyan_state            enable row level security;
 alter table public.wence_chat_session     enable row level security;

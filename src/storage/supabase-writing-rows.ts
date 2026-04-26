@@ -89,6 +89,7 @@ export function parseChapterRow(r: Json): Chapter {
     outlineDraft: typeof r.outline_draft === "string" && r.outline_draft.length > 0 ? r.outline_draft : undefined,
     outlineNodeId: typeof r.outline_node_id === "string" && r.outline_node_id.length > 0 ? r.outline_node_id : undefined,
     outlinePushedAt: r.outline_pushed_at != null ? Number(r.outline_pushed_at) : undefined,
+    chapterNote: typeof r.chapter_note === "string" && r.chapter_note.length > 0 ? r.chapter_note : undefined,
   };
 }
 
@@ -385,7 +386,7 @@ export function toVolumeInsert(v: Volume): Json {
 }
 
 export function toChapterInsert(c: Chapter): Json {
-  return {
+  const row: Json = {
     id: c.id,
     work_id: c.workId,
     volume_id: c.volumeId,
@@ -402,6 +403,8 @@ export function toChapterInsert(c: Chapter): Json {
     outline_node_id: c.outlineNodeId ?? null,
     outline_pushed_at: c.outlinePushedAt ?? null,
   };
+  if (c.chapterNote !== undefined) row.chapter_note = c.chapterNote ?? null;
+  return row;
 }
 
 export function toSnapshotInsert(s: ChapterSnapshot): Json {

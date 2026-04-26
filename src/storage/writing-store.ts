@@ -71,7 +71,7 @@ export interface WritingStore {
     patch: Partial<
       Pick<
         Chapter,
-        "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder" | "outlineDraft" | "outlineNodeId" | "outlinePushedAt"
+        "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder" | "outlineDraft" | "outlineNodeId" | "outlinePushedAt" | "chapterNote"
       >
     >,
     options?: UpdateChapterOptions,

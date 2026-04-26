@@ -939,6 +939,25 @@ export class LiubaiDB extends Dexie {
       referenceExtracts: "id, refWorkId, type, createdAt, [refWorkId+type]",
       globalPromptTemplates: "id, type, status, sortOrder, createdAt, updatedAt, [type+status]",
     });
+    // v32：章节轻量笔记字段（chapterNote）从 localStorage 迁至 Chapter 行内；无新索引
+    this.version(32).stores({}).upgrade(async (trans) => {
+      const prefix = "liubai:chapterNote:";
+      const chapters = trans.table("chapters");
+      const ids = await chapters.toCollection().primaryKeys();
+      for (const id of ids) {
+        try {
+          const v = localStorage.getItem(prefix + String(id));
+          if (v?.trim()) {
+            await chapters.update(id, { chapterNote: v });
+            localStorage.removeItem(prefix + String(id));
+          }
+        } catch {
+          // localStorage unavailable — skip, notes stay orphaned
+        }
+      }
+    });
+    // v33：推演规划字段（TuiyanState 可选字段；无新索引；v34 起 UI 语义扩展为五层）
+    this.version(33).stores({});
   }
 }
 

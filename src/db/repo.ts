@@ -131,7 +131,17 @@ export async function updateChapter(
   patch: Partial<
     Pick<
       Chapter,
-      "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder"
+      | "title"
+      | "content"
+      | "volumeId"
+      | "summary"
+      | "summaryUpdatedAt"
+      | "summaryScopeFromOrder"
+      | "summaryScopeToOrder"
+      | "outlineDraft"
+      | "outlineNodeId"
+      | "outlinePushedAt"
+      | "chapterNote"
     >
   >,
   options?: UpdateChapterOptions,

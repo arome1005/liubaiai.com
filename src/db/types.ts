@@ -101,6 +101,8 @@ export type Chapter = {
   outlineNodeId?: string;
   /** 推送时间戳（毫秒）；非 null/undefined 表示已推送，推送后禁止再次推送（409） */
   outlinePushedAt?: number;
+  /** 章节轻量笔记（从 localStorage 迁移到 IndexedDB） */
+  chapterNote?: string;
 };
 
 /** 章节正文历史快照（2.10），每章最多保留 N 条，由存储层裁剪 */
@@ -183,7 +185,7 @@ export type BookSearchHit = {
 export type BookSearchScope = "full" | "beforeProgress";
 
 export const DB_NAME = "liubai-writing";
-export const SCHEMA_VERSION = 31;
+export const SCHEMA_VERSION = 33;
 
 export type InspirationLink = {
   id: string;
@@ -335,9 +337,11 @@ export const PROMPT_SLOTS = [
   "writer_rewrite",    // 改写
   "writer_opening",    // 黄金开篇
   // 推演
+  "tuiyan_master",     // 总纲生成
   "tuiyan_outline",    // 大纲生成
   "tuiyan_volume",     // 卷纲扩展
   "tuiyan_scene",      // 细纲拆场
+  "tuiyan_detail",     // 详细细纲
   // 落笔
   "luobi_master_brief", // 构思母本
   "luobi_to_outline",   // 构思→大纲
@@ -349,9 +353,11 @@ export const PROMPT_SLOT_LABELS: Record<PromptSlot, string> = {
   writer_continue:    "写作·续写",
   writer_rewrite:     "写作·改写",
   writer_opening:     "写作·黄金开篇",
+  tuiyan_master:      "推演·总纲生成",
   tuiyan_outline:     "推演·大纲生成",
   tuiyan_volume:      "推演·卷纲扩展",
   tuiyan_scene:       "推演·细纲拆场",
+  tuiyan_detail:      "推演·详细细纲",
   luobi_master_brief: "落笔·构思母本",
   luobi_to_outline:   "落笔·构思→大纲",
 };
@@ -359,7 +365,7 @@ export const PROMPT_SLOT_LABELS: Record<PromptSlot, string> = {
 /** 按适用范围分组的槽位（供 UI 联动过滤） */
 export const PROMPT_SCOPE_SLOTS: Record<string, PromptSlot[]> = {
   writer: ["writer_continue", "writer_rewrite", "writer_opening"],
-  tuiyan: ["tuiyan_outline", "tuiyan_volume", "tuiyan_scene"],
+  tuiyan: ["tuiyan_master", "tuiyan_outline", "tuiyan_volume", "tuiyan_scene", "tuiyan_detail"],
   luobi:  ["luobi_master_brief", "luobi_to_outline"],
 };
 
@@ -510,6 +516,75 @@ export type InspirationFragment = {
   updatedAt: number;
 };
 
+export type TuiyanPlanningLevel = "master_outline" | "outline" | "volume" | "chapter_outline" | "chapter_detail";
+
+export type TuiyanPlanningNode = {
+  id: string;
+  /** 首层节点为 null；其余层引用父节点 id */
+  parentId: string | null;
+  level: TuiyanPlanningLevel;
+  title: string;
+  summary: string;
+  order: number;
+  /** 章级节点可绑定现有 Chapter.id，便于推送章纲 */
+  chapterId?: string | null;
+};
+
+export type TuiyanPlanningMeta = {
+  generatedAt: number;
+  mode: "model" | "template";
+  promptSlot: PromptSlot;
+  provider?: string;
+  modelId?: string;
+  templateId?: string | null;
+};
+
+/** 五层规划：每个节点的结构化元数据（不同层级展示不同字段集，AI 生成后用户可修改） */
+export type PlanningNodeStructuredMeta = {
+  // 总纲 (master_outline)
+  logline?: string;
+  worldSetting?: string;
+  mainConflict?: string;
+  coreCharacters?: string;
+  storyStages?: string;
+  // 一级大纲 (outline)
+  stageGoal?: string;
+  characterAllocation?: string;
+  mainFactions?: string;
+  characterArcs?: string;
+  // 卷纲 (volume)
+  mainCharacters?: string;
+  coreFactions?: string;
+  keyLocations?: string;
+  keyItems?: string;
+  volumeHook?: string;
+  // 章细纲 (chapter_outline) + 详细细纲 (chapter_detail)
+  conflictPoints?: string;
+  appearedCharacters?: string;
+  locations?: string;
+  keyBeats?: string;
+  requiredInfo?: string;
+  tags?: string;
+};
+
+/** 推演页推送给写作编辑页「章纲」栏的单个节点（按扁平节点 + parentId 组织五层树）。 */
+export type TuiyanPushedOutlineEntry = {
+  id: string;
+  /** 本层父节点 id；根节点为 null（通常为 master_outline 根） */
+  parentId: string | null;
+  level: TuiyanPlanningLevel;
+  /** 同一 parent 下的兄弟顺序 */
+  order: number;
+  /** 节点标题（左侧章纲树显示这个） */
+  title: string;
+  /** 节点内容：非详细细纲为 summary；详细细纲为规划正文 */
+  content: string;
+  /** 批次时间戳 */
+  pushedAt: number;
+  /** 推送时携带的结构化元数据（AI 生成后用户确认过的版本；可选，旧快照无此字段） */
+  structuredMeta?: PlanningNodeStructuredMeta;
+};
+
 /** 推演：与作品绑定的推演工作台状态（对话/文策/定稿标记等），用于刷新不丢与云同步 */
 export type TuiyanState = {
   /** 主键（= workId） */
@@ -562,6 +637,32 @@ export type TuiyanState = {
    * 生成时自动前置到 userHint；未选则行为与之前完全一致。
    */
   selectedPromptTemplateId?: string | null;
+  /**
+   * 五层规划：作品构思输入（总纲生成源文本）
+   */
+  planningIdea?: string;
+  /**
+   * 五层规划：扁平节点集合（通过 parentId 组织层级）
+   */
+  planningTree?: TuiyanPlanningNode[];
+  /**
+   * 五层规划：节点草稿正文（通常用于详细细纲）
+   */
+  planningDraftsByNodeId?: Record<string, string>;
+  /**
+   * 五层规划：节点生成来源（模型、模板、时间戳）
+   */
+  planningMetaByNodeId?: Record<string, TuiyanPlanningMeta>;
+  /**
+   * 五层规划：当前选中的规划节点（UI 恢复）
+   */
+  planningSelectedNodeId?: string | null;
+  /**
+   * 五层规划：节点结构化元数据（按层级不同字段集；AI 生成后用户可修改）
+   */
+  planningStructuredMetaByNodeId?: Record<string, PlanningNodeStructuredMeta>;
+  /** 推演页推送给写作编辑页「章纲」栏的只读快照；不创建正文章节。 */
+  planningPushedOutlines?: TuiyanPushedOutlineEntry[];
 };
 
 /** 参考库倒排索引：按 token 命中块，offsetsJson 为 UTF-16 偏移 JSON 数组 */

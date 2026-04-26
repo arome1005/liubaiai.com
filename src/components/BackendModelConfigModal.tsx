@@ -222,6 +222,7 @@ export function BackendModelConfigModal(props: {
     xiaomi: loadModelHealth("xiaomi"),
     ollama: loadModelHealth("ollama"),
     mlx: loadModelHealth("mlx"),
+    "claude-code-local": {},
   });
   const [modelHealthDirty, setModelHealthDirty] = useState<Record<AiProviderId, boolean>>({
     openai: false,
@@ -233,6 +234,7 @@ export function BackendModelConfigModal(props: {
     xiaomi: false,
     ollama: false,
     mlx: false,
+    "claude-code-local": false,
   });
   const [modelBatch, setModelBatch] = useState<Record<AiProviderId, { running: boolean; idx: number; total: number }>>({
     openai: { running: false, idx: 0, total: 0 },
@@ -244,6 +246,7 @@ export function BackendModelConfigModal(props: {
     xiaomi: { running: false, idx: 0, total: 0 },
     ollama: { running: false, idx: 0, total: 0 },
     mlx: { running: false, idx: 0, total: 0 },
+    "claude-code-local": { running: false, idx: 0, total: 0 },
   });
   const [showKey, setShowKey] = useState<Record<AiProviderId, boolean>>({
     openai: false,
@@ -255,6 +258,7 @@ export function BackendModelConfigModal(props: {
     xiaomi: false,
     ollama: false,
     mlx: false,
+    "claude-code-local": false,
   });
   const [testState, setTestState] = useState<Record<AiProviderId, ProviderTestState>>({
     openai: { status: "idle" },
@@ -266,6 +270,7 @@ export function BackendModelConfigModal(props: {
     xiaomi: { status: "idle" },
     ollama: { status: "idle" },
     mlx: { status: "idle" },
+    "claude-code-local": { status: "idle" },
   });
 
   /** 潜龙：/api/tags 拉取到的本机模型名（需 Ollama 已启动） */
@@ -404,6 +409,7 @@ export function BackendModelConfigModal(props: {
                   xiaomi: false,
                   ollama: false,
                   mlx: false,
+                  "claude-code-local": false,
                 });
                 props.onSave();
               }}

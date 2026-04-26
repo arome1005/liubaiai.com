@@ -31,15 +31,14 @@ export function KnowledgeBaseRightPanel(props: {
   const [linkedTick, setLinkedTick] = useState(0);
 
   useEffect(() => {
-    const on = (e: Event) => {
-      const ev = e as CustomEvent<{ workId?: string; chapterId?: string }>;
-      const wid = ev.detail?.workId;
-      const cid = ev.detail?.chapterId;
+    const on = (e: CustomEvent<{ workId?: string; chapterId?: string }>) => {
+      const wid = e.detail?.workId;
+      const cid = e.detail?.chapterId;
       if (!props.chapter) return;
       if (wid === props.workId && cid === props.chapter.id) setLinkedTick((x) => x + 1);
     };
-    window.addEventListener(LINKED_CHAPTERS_UPDATED_EVENT, on as EventListener);
-    return () => window.removeEventListener(LINKED_CHAPTERS_UPDATED_EVENT, on as EventListener);
+    window.addEventListener(LINKED_CHAPTERS_UPDATED_EVENT, on as EventListenerOrEventListenerObject);
+    return () => window.removeEventListener(LINKED_CHAPTERS_UPDATED_EVENT, on as EventListenerOrEventListenerObject);
   }, [props.workId, props.chapter?.id]);
 
   const state: LinkedChaptersState = useMemo(() => {

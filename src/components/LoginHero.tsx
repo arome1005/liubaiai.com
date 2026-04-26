@@ -53,68 +53,69 @@ type BlobConfig = {
 const CONFIG: BlobConfig[] = [
   {
     id: "blue",
-    left: 18,
+    left: 14,
     bottom: 0,
-    width: 44,
-    height: 112,
-    rx: 22,
+    width: 56,
+    height: 110,
+    rx: 28,
     fill: "#5A4FCF",
     z: 1,
     eye: "goggle",
-    eyeL: { x: 11, y: 42 },
-    eyeR: { x: 29, y: 42 },
+    eyeL: { x: 13, y: 44 },
+    eyeR: { x: 37, y: 44 },
     pupilMax: 4,
   },
   {
     id: "orange",
-    left: 6,
+    left: 4,
     bottom: 0,
-    width: 118,
-    height: 40,
+    width: 100,
+    height: 70,
     rx: 18,
     fill: "#ED7D4D",
     z: 5,
     eye: "dot",
-    eyeL: { x: 34, y: 18 },
-    eyeR: { x: 72, y: 18 },
+    eyeL: { x: 28, y: 38 },
+    eyeR: { x: 72, y: 38 },
     pupilMax: 3.2,
-    bodyPath: "M 0 22 Q 59 4 118 22 L 118 40 L 0 40 Z",
+    // 圆顶形：底部平直，顶部半圆（radius = width/2 = 50）
+    bodyPath: "M 0 70 L 0 50 A 50 50 0 0 1 100 50 L 100 70 Z",
   },
   {
     id: "black",
-    left: 64,
+    left: 68,
     bottom: 0,
-    width: 32,
+    width: 36,
     height: 76,
-    rx: 10,
+    rx: 11,
     fill: "#1A1A1A",
     z: 3,
     eye: "goggle",
-    eyeL: { x: 7.5, y: 28 },
-    eyeR: { x: 22.5, y: 28 },
+    eyeL: { x: 8, y: 28 },
+    eyeR: { x: 26, y: 28 },
     pupilMax: 3.4,
   },
   {
     id: "yellow",
-    left: 124,
+    left: 110,
     bottom: 0,
-    width: 70,
-    height: 40,
-    rx: 18,
+    width: 74,
+    height: 66,
+    rx: 26,
     fill: "#E3C552",
     z: 4,
     eye: "dot",
-    eyeL: { x: 20, y: 16 },
-    eyeR: { x: 44, y: 16 },
+    eyeL: { x: 20, y: 36 },
+    eyeR: { x: 52, y: 36 },
     pupilMax: 3.2,
-    mouthLine: { x1: 24, y: 28, x2: 46 },
+    mouthLine: { x1: 24, y: 50, x2: 50 },
   },
 ];
 
-const CLUSTER_W = 194;
+const CLUSTER_W = 184;
 const CLUSTER_H = 120;
 
-const LAYOUT_STORAGE_KEY = "login-hero-layout-v2";
+const LAYOUT_STORAGE_KEY = "login-hero-layout-v3";
 
 export type BlobLayout = {
   left: number;
@@ -142,7 +143,7 @@ const DEFAULT_BLOB_LAYOUT = (): Record<BlobId, BlobLayout> => ({
 const DEFAULT_LAYOUT: LoginHeroLayout = {
   clusterOffsetX: 0,
   clusterOffsetY: 0,
-  clusterScale: 1,
+  clusterScale: 2.2,
   blobs: DEFAULT_BLOB_LAYOUT(),
 };
 
@@ -792,7 +793,7 @@ export function LoginHero({ isEmailFocus, isPasswordVisible }: LoginHeroProps) {
           width: 100%;
           height: 100%;
           min-height: 240px;
-          background: #2b2b2b;
+          background: #363a42;
           overflow: hidden;
         }
       `}</style>
@@ -801,7 +802,7 @@ export function LoginHero({ isEmailFocus, isPasswordVisible }: LoginHeroProps) {
           style={{
             position: "absolute",
             left: "50%",
-            top: "clamp(72px, 22vh, 220px)",
+            top: "42%",
             transform: `translate(calc(-50% + ${layout.clusterOffsetX}px), ${layout.clusterOffsetY}px)`,
             width: CLUSTER_W,
             height: CLUSTER_H,

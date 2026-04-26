@@ -225,8 +225,24 @@ create table if not exists tuiyan_state (
   linked_ref_work_ids jsonb not null default '[]'::jsonb,
   mindmap jsonb not null default '{}'::jsonb,
   scenes jsonb not null default '[]'::jsonb,
+  selected_prompt_template_id text null,
+  planning_idea text null,
+  planning_tree jsonb not null default '[]'::jsonb,
+  planning_drafts_by_node_id jsonb not null default '{}'::jsonb,
+  planning_meta_by_node_id jsonb not null default '{}'::jsonb,
+  planning_selected_node_id text null,
+  planning_structured_meta_by_node_id jsonb not null default '{}'::jsonb,
   unique(user_id, work_id)
 );
+alter table tuiyan_state
+  add column if not exists selected_prompt_template_id text null,
+  add column if not exists planning_idea text null,
+  add column if not exists planning_tree jsonb not null default '[]'::jsonb,
+  add column if not exists planning_drafts_by_node_id jsonb not null default '{}'::jsonb,
+  add column if not exists planning_meta_by_node_id jsonb not null default '{}'::jsonb,
+  add column if not exists planning_pushed_outlines jsonb not null default '[]'::jsonb,
+  add column if not exists planning_selected_node_id text null,
+  add column if not exists planning_structured_meta_by_node_id jsonb not null default '{}'::jsonb;
 create index if not exists idx_tuiyan_state_user_work on tuiyan_state(user_id, work_id);
 
 -- ========= reference library (minimal storage tables; search index can be added later) =========

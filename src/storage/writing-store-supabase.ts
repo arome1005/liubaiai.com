@@ -69,6 +69,7 @@ import {
 } from "./supabase-writing-rows";
 
 type Json = Record<string, unknown>;
+const PLANNING_PUSHED_OUTLINES_META_KEY = "__planning_pushed_outlines__";
 
 function now() {
   return Date.now();
@@ -152,10 +153,28 @@ export class WritingStoreSupabase implements WritingStore {
       chatHistory: (row.chat_history as TuiyanState["chatHistory"]) ?? [],
       wenCe: (row.wence as TuiyanState["wenCe"]) ?? [],
       finalizedNodeIds: (row.finalized_node_ids as string[]) ?? [],
-      statusByNodeId: (row.status_by_node_id as Record<string, any>) ?? {},
+      statusByNodeId: (row.status_by_node_id as TuiyanState["statusByNodeId"]) ?? {},
       linkedRefWorkIds: (row.linked_ref_work_ids as string[]) ?? [],
       mindmap: (row.mindmap as TuiyanState["mindmap"]) ?? undefined,
       scenes: (row.scenes as TuiyanState["scenes"]) ?? [],
+      selectedPromptTemplateId: (row.selected_prompt_template_id as string | null | undefined) ?? null,
+      planningIdea: (row.planning_idea as string | undefined) ?? "",
+      planningTree: (row.planning_tree as TuiyanState["planningTree"]) ?? [],
+      planningDraftsByNodeId:
+        (row.planning_drafts_by_node_id as TuiyanState["planningDraftsByNodeId"]) ?? {},
+      planningMetaByNodeId:
+        (row.planning_meta_by_node_id as TuiyanState["planningMetaByNodeId"]) ?? {},
+      planningSelectedNodeId: (row.planning_selected_node_id as string | null | undefined) ?? null,
+      planningStructuredMetaByNodeId:
+        (row.planning_structured_meta_by_node_id as TuiyanState["planningStructuredMetaByNodeId"]) ?? {},
+      planningPushedOutlines: (() => {
+        const col = row.planning_pushed_outlines as TuiyanState["planningPushedOutlines"] | null | undefined;
+        if (col?.length) return col;
+        const embedded = ((row.planning_meta_by_node_id as Json | undefined)?.[
+          PLANNING_PUSHED_OUTLINES_META_KEY
+        ] as { entries?: TuiyanState["planningPushedOutlines"] } | undefined)?.entries;
+        return embedded?.length ? embedded : [];
+      })(),
     };
   }
 
@@ -179,15 +198,40 @@ export class WritingStoreSupabase implements WritingStore {
     const chatHistory = (patch.chatHistory ?? (prev?.chat_history as TuiyanState["chatHistory"]) ?? []) as TuiyanState["chatHistory"];
     const wenCe = (patch.wenCe ?? (prev?.wence as TuiyanState["wenCe"]) ?? []) as TuiyanState["wenCe"];
     const finalizedNodeIds = (patch.finalizedNodeIds ?? (prev?.finalized_node_ids as string[]) ?? []) as string[];
-    const statusByNodeId = (patch.statusByNodeId ?? (prev?.status_by_node_id as Record<string, any>) ?? {}) as Record<
-      string,
-      "draft" | "refining" | "locked"
-    >;
+    const statusByNodeId = (patch.statusByNodeId ?? (prev?.status_by_node_id as TuiyanState["statusByNodeId"]) ?? {}) as TuiyanState["statusByNodeId"];
     const linkedRefWorkIds = (patch.linkedRefWorkIds ?? (prev?.linked_ref_work_ids as string[]) ?? []) as string[];
     const mindmap = (patch.mindmap ?? (prev?.mindmap as TuiyanState["mindmap"]) ?? undefined) as
       | TuiyanState["mindmap"]
       | undefined;
     const scenes = (patch.scenes ?? (prev?.scenes as TuiyanState["scenes"]) ?? []) as TuiyanState["scenes"];
+    const selectedPromptTemplateId = (patch.selectedPromptTemplateId ??
+      (prev?.selected_prompt_template_id as string | null | undefined) ??
+      null) as string | null;
+    const planningIdea = (patch.planningIdea ?? (prev?.planning_idea as string | undefined) ?? "") as string;
+    const planningTree = (patch.planningTree ?? (prev?.planning_tree as TuiyanState["planningTree"]) ?? []) as
+      TuiyanState["planningTree"];
+    const planningDraftsByNodeId = (patch.planningDraftsByNodeId ??
+      (prev?.planning_drafts_by_node_id as TuiyanState["planningDraftsByNodeId"]) ??
+      {}) as TuiyanState["planningDraftsByNodeId"];
+    const rawPlanningMetaByNodeId = (patch.planningMetaByNodeId ??
+      (prev?.planning_meta_by_node_id as TuiyanState["planningMetaByNodeId"]) ??
+      {}) as TuiyanState["planningMetaByNodeId"];
+    const planningSelectedNodeId = (patch.planningSelectedNodeId ??
+      (prev?.planning_selected_node_id as string | null | undefined) ??
+      null) as string | null;
+    const planningStructuredMetaByNodeId = (patch.planningStructuredMetaByNodeId ??
+      (prev?.planning_structured_meta_by_node_id as TuiyanState["planningStructuredMetaByNodeId"]) ??
+      {}) as TuiyanState["planningStructuredMetaByNodeId"];
+    const planningPushedOutlines = (patch.planningPushedOutlines ??
+      (prev?.planning_pushed_outlines as TuiyanState["planningPushedOutlines"]) ??
+      ((prev?.planning_meta_by_node_id as Json | undefined)?.[PLANNING_PUSHED_OUTLINES_META_KEY] as
+        | { entries?: TuiyanState["planningPushedOutlines"] }
+        | undefined)?.entries ??
+      []) as TuiyanState["planningPushedOutlines"];
+    const planningMetaByNodeId = {
+      ...rawPlanningMetaByNodeId,
+      [PLANNING_PUSHED_OUTLINES_META_KEY]: { entries: planningPushedOutlines },
+    } as unknown as TuiyanState["planningMetaByNodeId"];
 
     const payload = {
       user_id: uid,
@@ -200,6 +244,14 @@ export class WritingStoreSupabase implements WritingStore {
       linked_ref_work_ids: linkedRefWorkIds as unknown,
       mindmap: (mindmap ?? {}) as unknown,
       scenes: (scenes ?? []) as unknown,
+      selected_prompt_template_id: selectedPromptTemplateId,
+      planning_idea: planningIdea,
+      planning_tree: (planningTree ?? []) as unknown,
+      planning_drafts_by_node_id: (planningDraftsByNodeId ?? {}) as unknown,
+      planning_meta_by_node_id: (planningMetaByNodeId ?? {}) as unknown,
+      planning_selected_node_id: planningSelectedNodeId,
+      planning_structured_meta_by_node_id: (planningStructuredMetaByNodeId ?? {}) as unknown,
+      planning_pushed_outlines: (planningPushedOutlines ?? []) as unknown,
     };
 
     const { data, error } = await sb
@@ -209,10 +261,11 @@ export class WritingStoreSupabase implements WritingStore {
       .maybeSingle();
     if (error) throw new Error(error.message);
     const row = (data ?? payload) as unknown as Json;
+    const persisted = row as { id?: unknown; updated_at?: unknown };
     return {
-      id: String((row as any).id ?? `${uid}:${workId}`),
+      id: String(persisted.id ?? `${uid}:${workId}`),
       workId,
-      updatedAt: Number((row as any).updated_at ?? t) || t,
+      updatedAt: Number(persisted.updated_at ?? t) || t,
       chatHistory,
       wenCe,
       finalizedNodeIds,
@@ -220,6 +273,14 @@ export class WritingStoreSupabase implements WritingStore {
       linkedRefWorkIds,
       mindmap: mindmap ?? undefined,
       scenes,
+      selectedPromptTemplateId,
+      planningIdea,
+      planningTree,
+      planningDraftsByNodeId,
+      planningMetaByNodeId,
+      planningSelectedNodeId,
+      planningStructuredMetaByNodeId,
+      planningPushedOutlines,
     };
   }
 
@@ -441,7 +502,7 @@ export class WritingStoreSupabase implements WritingStore {
       .order("order", { ascending: true })
       .limit(100_000);
     if (error) throw new Error(error.message);
-    return (data as Json[]).map(parseChapterRow);
+    return (data as unknown as Json[]).map(parseChapterRow);
   }
 
   async createChapter(workId: string, title?: string, volumeId?: string): Promise<Chapter> {
@@ -477,7 +538,7 @@ export class WritingStoreSupabase implements WritingStore {
     patch: Partial<
       Pick<
         Chapter,
-        "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder" | "outlineDraft" | "outlineNodeId" | "outlinePushedAt"
+        "title" | "content" | "volumeId" | "summary" | "summaryUpdatedAt" | "summaryScopeFromOrder" | "summaryScopeToOrder" | "outlineDraft" | "outlineNodeId" | "outlinePushedAt" | "chapterNote"
       >
     >,
     options?: UpdateChapterOptions,
@@ -503,6 +564,7 @@ export class WritingStoreSupabase implements WritingStore {
     if (patch.outlineDraft !== undefined) row.outline_draft = patch.outlineDraft ?? null;
     if (patch.outlineNodeId !== undefined) row.outline_node_id = patch.outlineNodeId ?? null;
     if (patch.outlinePushedAt !== undefined) row.outline_pushed_at = patch.outlinePushedAt ?? null;
+    if (patch.chapterNote !== undefined) row.chapter_note = patch.chapterNote ?? null;
     let qb = sb.from("chapter").update(row as never).eq("id", id);
     if (options?.expectedUpdatedAt !== undefined) {
       qb = qb.eq("updated_at", options.expectedUpdatedAt);
