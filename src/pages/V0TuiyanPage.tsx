@@ -45,7 +45,8 @@ import {
   TuiyanPlanningGenerateError,
 } from "../ai/tuiyan-planning-generate"
 import { extractKnowledgeFromNodes, type KnowledgeExtractInput } from "../ai/tuiyan-knowledge-extract"
-import { autoLinkChipsFromNodes, type AutoLinkItem } from "../util/tuiyan-chip-autolink"
+import type { AutoLinkItem } from "../util/tuiyan-chip-autolink"
+import { useTuiyanAutoLink } from "../hooks/useTuiyanAutoLink"
 import { useToast } from "../components/ui/use-toast"
 import type { WritingWorkStyleSlice } from "../ai/assemble-context"
 import { loadAiSettings, saveAiSettings } from "../ai/storage"
@@ -791,44 +792,7 @@ export default function V0TuiyanPage() {
   const [planningMode, setPlanningMode] = useState<"model" | "template">("model")
   const [planningBusyLevel, setPlanningBusyLevel] = useState<TuiyanPlanningLevel | null>(null)
   const [planningError, setPlanningError] = useState("")
-  /** 自动入库完成后递增，触发 StructuredMetaChips 内 useNodeChipLibrary 重载 */
-  const [chipLibRefreshKey, setChipLibRefreshKey] = useState(0)
-  /** 生成即入库开关（localStorage 持久化） */
-  const [autoLinkEnabled, setAutoLinkEnabled] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem("liubai:tuiyan:autoLink:v1") !== "false"
-    } catch { return true }
-  })
-
-  const toggleAutoLink = useCallback(() => {
-    setAutoLinkEnabled((prev) => {
-      const next = !prev
-      try { localStorage.setItem("liubai:tuiyan:autoLink:v1", String(next)) } catch { /* ignore */ }
-      return next
-    })
-  }, [])
-
-  /** 触发自动入库并展示 toast 结果（fire-and-forget） */
-  const runAutoLink = useCallback(
-    (items: AutoLinkItem[]) => {
-      if (!autoLinkEnabled || !workId) return
-      autoLinkChipsFromNodes(workId, items)
-        .then(({ characters, terms }) => {
-          setChipLibRefreshKey((k) => k + 1)
-          if (characters > 0 || terms > 0) {
-            const parts: string[] = []
-            if (characters > 0) parts.push(`人物 ${characters} 个`)
-            if (terms > 0) parts.push(`词条 ${terms} 个`)
-            toast({ title: "自动入库完成", description: parts.join(" · ") })
-          }
-        })
-        .catch((err) => {
-          console.error("[autoLink]", err)
-          toast({ title: "自动入库失败", description: err instanceof Error ? err.message : "未知错误", variant: "destructive" })
-        })
-    },
-    [autoLinkEnabled, workId, toast],
-  )
+  const { autoLinkEnabled, toggleAutoLink, runAutoLink, chipLibRefreshKey } = useTuiyanAutoLink(workId)
   const [planningIdeaDialogOpen, setPlanningIdeaDialogOpen] = useState(false)
   const [planningPushDialogOpen, setPlanningPushDialogOpen] = useState(false)
   const [planningScale, setPlanningScale] = useState<PlanningScale>(() => {
