@@ -662,7 +662,7 @@ export function AppShell() {
         </header>
 
         <Dialog open={creatorCenterOpen} onOpenChange={(o) => { setCreatorCenterOpen(o); if (o) setCreatorUsageTick((n) => n + 1); }}>
-          <DialogContent className="w-full max-w-2xl overflow-hidden p-0">
+          <DialogContent className="w-full max-w-3xl overflow-hidden p-0">
             <DialogHeader className="border-b border-border/40 bg-card/30 px-5 py-4">
               <DialogTitle className="flex items-center justify-between gap-3">
                 <span className="flex items-center gap-2">
@@ -728,71 +728,77 @@ export function AppShell() {
                   </div>
                 </div>
 
-                {/* 本机 AI 用量 */}
-                <div className="mt-4 rounded-xl border border-border/40 bg-background/40 p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-foreground">今日 AI 用量</h3>
-                    <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setCreatorUsageTick((n) => n + 1)}>刷新</button>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      { label: "本会话", value: creatorSessionTokens },
-                      { label: "今日累计", value: creatorTodayTokens, highlight: true },
-                      { label: "本机累计", value: creatorLifetimeTokens },
-                    ].map(({ label, value, highlight }) => (
-                      <div key={label} className={`rounded-lg p-2.5 ${highlight ? "bg-primary/8 border border-primary/20" : "bg-background/60"}`}>
-                        <div className="text-[10px] text-muted-foreground">{label}</div>
-                        <div className={`mt-1 text-base font-bold tabular-nums ${highlight ? "text-primary" : "text-foreground"}`}>
-                          {value >= 10_000 ? `${(value / 1_000).toFixed(0)}k` : value.toLocaleString()}
-                        </div>
-                        <div className="text-[9px] text-muted-foreground/60">tokens</div>
-                      </div>
-                    ))}
-                  </div>
-                  <p className="mt-2 text-[10px] text-muted-foreground/50">粗估本机统计，非厂商计费。</p>
-                </div>
-
-                {/* 创作资产（占位，后续接入） */}
-                <div className="mt-3 rounded-xl border border-border/40 bg-background/40 p-4">
-                  <div className="mb-3 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-foreground">创作资产</h3>
-                    <span className="text-[10px] text-muted-foreground">实时数据后续接入</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {[
-                      { label: "字数仓剩余", value: "—" },
-                      { label: "星月币可用",  value: "—" },
-                      { label: "每日免费重塑", value: "0 / 0" },
-                      { label: "会员时效",    value: "未开通" },
-                    ].map(({ label, value }) => (
-                      <div key={label} className="rounded-lg bg-background/60 p-2.5">
-                        <div className="text-[10px] text-muted-foreground">{label}</div>
-                        <div className="mt-1 text-sm font-semibold text-foreground">{value}</div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* 快捷入口 */}
-                <div className="mt-3 rounded-xl border border-border/40 bg-background/40 p-3">
-                  <h3 className="mb-2 text-xs font-semibold text-muted-foreground">快捷入口</h3>
-                  <div className="grid grid-cols-3 gap-2">
-                    <Button type="button" variant="outline" className="h-8 text-xs" asChild><Link to="/prompts">提示词库</Link></Button>
-                    <Button type="button" variant="outline" className="h-8 text-xs" asChild><Link to="/reference">藏经</Link></Button>
-                    <Button type="button" variant="outline" className="h-8 text-xs" asChild><Link to="/settings">设置</Link></Button>
-                  </div>
-                </div>
-
-                {/* 权益与服务 */}
-                <div className="mt-3 rounded-xl border border-border/40 bg-background/40 p-4">
-                  <h3 className="mb-3 text-sm font-semibold text-foreground">权益与服务</h3>
-                  <div className="space-y-2">
-                    <Button type="button" className="h-10 w-full">开通 / 升级会员</Button>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button type="button" variant="secondary" className="h-9 text-xs">获得更多字数</Button>
-                      <Button type="button" variant="outline" className="h-9 text-xs">兑换星月币</Button>
+                {/* 今日 AI 用量 + 创作资产 — 两列并排 */}
+                <div className="mt-4 grid grid-cols-2 gap-3">
+                  {/* 左：今日 AI 用量 */}
+                  <div className="rounded-xl border border-border/40 bg-background/40 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-foreground">今日 AI 用量</h3>
+                      <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setCreatorUsageTick((n) => n + 1)}>刷新</button>
                     </div>
-                    <Button type="button" variant="outline" className="h-9 w-full text-xs">个人主页</Button>
+                    <div className="grid grid-cols-1 gap-2">
+                      {[
+                        { label: "本会话",  value: creatorSessionTokens,  highlight: false },
+                        { label: "今日累计", value: creatorTodayTokens,   highlight: true  },
+                        { label: "本机累计", value: creatorLifetimeTokens, highlight: false },
+                      ].map(({ label, value, highlight }) => (
+                        <div key={label} className={`flex items-center justify-between rounded-lg px-3 py-2 ${highlight ? "bg-primary/8 border border-primary/20" : "bg-background/60"}`}>
+                          <span className="text-xs text-muted-foreground">{label}</span>
+                          <div className="text-right">
+                            <span className={`font-bold tabular-nums text-sm ${highlight ? "text-primary" : "text-foreground"}`}>
+                              {value >= 10_000 ? `${(value / 1_000).toFixed(0)}k` : value.toLocaleString()}
+                            </span>
+                            <span className="ml-1 text-[9px] text-muted-foreground/60">tokens</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-[10px] text-muted-foreground/50">粗估本机统计，非厂商计费。</p>
+                  </div>
+
+                  {/* 右：创作资产 */}
+                  <div className="rounded-xl border border-border/40 bg-background/40 p-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-sm font-semibold text-foreground">创作资产</h3>
+                      <span className="text-[10px] text-muted-foreground">后续接入</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        { label: "字数仓剩余",  value: "—" },
+                        { label: "星月币可用",   value: "—" },
+                        { label: "每日免费重塑", value: "0 / 0" },
+                        { label: "会员时效",    value: "未开通" },
+                      ].map(({ label, value }) => (
+                        <div key={label} className="rounded-lg bg-background/60 p-2.5">
+                          <div className="text-[10px] text-muted-foreground">{label}</div>
+                          <div className="mt-1 text-sm font-semibold text-foreground">{value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 快捷入口 + 权益 — 两列并排 */}
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  {/* 快捷入口 */}
+                  <div className="rounded-xl border border-border/40 bg-background/40 p-4">
+                    <h3 className="mb-3 text-sm font-semibold text-foreground">快捷入口</h3>
+                    <div className="grid grid-cols-1 gap-2">
+                      <Button type="button" variant="outline" className="h-9 justify-start text-xs" asChild><Link to="/prompts">提示词库</Link></Button>
+                      <Button type="button" variant="outline" className="h-9 justify-start text-xs" asChild><Link to="/reference">藏经</Link></Button>
+                      <Button type="button" variant="outline" className="h-9 justify-start text-xs" asChild><Link to="/settings">设置</Link></Button>
+                    </div>
+                  </div>
+
+                  {/* 权益与服务 */}
+                  <div className="rounded-xl border border-border/40 bg-background/40 p-4">
+                    <h3 className="mb-3 text-sm font-semibold text-foreground">权益与服务</h3>
+                    <div className="space-y-2">
+                      <Button type="button" className="h-9 w-full text-sm">开通 / 升级会员</Button>
+                      <Button type="button" variant="secondary" className="h-8 w-full text-xs">获得更多字数</Button>
+                      <Button type="button" variant="outline" className="h-8 w-full text-xs">兑换星月币</Button>
+                      <Button type="button" variant="outline" className="h-8 w-full text-xs">个人主页</Button>
+                    </div>
                   </div>
                 </div>
               </div>
