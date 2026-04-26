@@ -11,7 +11,7 @@ export function PrivacyPage() {
       </header>
 
       <section style={{ maxWidth: 860, lineHeight: 1.8 }}>
-        <p className="muted small">最后更新：2026-04-02</p>
+        <p className="muted small">最后更新：2026-04-26</p>
 
         <h2 style={{ marginTop: "1.25rem" }}>1. 我们收集什么数据</h2>
         <p>
@@ -37,14 +37,36 @@ export function PrivacyPage() {
           若你启用云端 AI，本次请求会受第三方服务的政策约束。我们建议你在启用前阅读对应提供方的隐私条款，并避免上传敏感信息。
         </p>
 
-        <h2 style={{ marginTop: "1.25rem" }}>4. 你的控制权</h2>
+        <h2 style={{ marginTop: "1.25rem" }}>4. 本地直连模式（高级，可选）</h2>
+        <p>
+          应用提供一项<strong>可选</strong>的「本地直连模式」（高级），允许用户通过<strong>自己电脑上</strong>的本地 sidecar 进程，
+          使用<strong>自己的 Claude 账号</strong>调用 AI 模型。该模式默认<strong>关闭</strong>，仅在用户在设置页主动勾选同意条款后生效。
+        </p>
+        <ul>
+          <li>
+            该模式下，AI 请求由用户本机的浏览器直接发送至用户本机回环地址（127.0.0.1），<strong>不经过本应用的服务端</strong>。
+          </li>
+          <li>
+            sidecar token、Claude 订阅 OAuth 凭据等<strong>全部仅存于用户本机</strong>（浏览器 localStorage 与本地配置文件）；
+            本应用<strong>不收集、不上传、不代管</strong>任何第三方账号或密钥。
+          </li>
+          <li>
+            提示词与生成内容会发送至 Claude（Anthropic）的服务，受其隐私政策约束；用户应自行阅读并遵守对应服务条款。
+          </li>
+          <li>
+            因该模式可能不被第三方平台条款明确覆盖，封号、限速、异常计费等账号合规与风控风险，
+            <strong>由用户本人自行承担</strong>，详见《用户协议》。
+          </li>
+        </ul>
+
+        <h2 style={{ marginTop: "1.25rem" }}>5. 你的控制权</h2>
         <ul>
           <li>你可以随时导出备份 zip，把数据带走。</li>
           <li>你可以关闭云端 AI，或仅使用本机 Ollama。</li>
           <li>你可以在浏览器中清除本站点数据以删除本地存储内容（注意：这会删除未备份的作品）。</li>
         </ul>
 
-        <h2 style={{ marginTop: "1.25rem" }}>5. 联系方式</h2>
+        <h2 style={{ marginTop: "1.25rem" }}>6. 联系方式</h2>
         <p className="muted small">如需反馈隐私问题，请通过项目页面或站点提供的联系方式联系维护者。</p>
       </section>
     </div>

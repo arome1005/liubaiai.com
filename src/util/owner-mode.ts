@@ -1,34 +1,33 @@
 /**
- * Owner 模式工具：判断当前登录账号是否 owner、读写本机 sidecar 的 token / baseUrl，
- * 探测 sidecar 是否可达。
+ * 本地直连（高级）工具：判断"用户是否已同意条款 + 是否启用 + 本机 sidecar 是否可达"，
+ * 读写本机 sidecar 的 token / baseUrl / 默认模型。
  *
- * 这是一个**仅 owner 本人**使用的旁路：开启后 AI 调用不走 API，而是走本机 sidecar
- * （tools/sidecar 子项目）→ Claude Agent SDK → Pro 订阅。
+ * 这是一个**完全本地化的高级特性**：
+ * - 所有凭据（token / baseUrl）仅保存在浏览器 localStorage，平台不托管
+ * - 启用前必须勾选《用户协议》《隐私政策》中"本地直连模式"条款的同意
+ * - 仅在用户本机的 sidecar 进程在线时生效；离线即自动 fallback 到原 provider
  *
- * 安全约束：
- * - email 必须严格等于 OWNER_EMAIL；其它账号即使打开开关也不会激活
- * - sidecar 监听 127.0.0.1，外部网络无法访问，所以非 owner 用户即便伪造前端状态也连不上
- * - token 校验是 sidecar 侧强制的；前端只是把 token 透传到 Authorization 头
+ * 注意：函数 / localStorage key 名沿用历史命名（含 "owner"）以维持向后兼容；
+ * 旧版"仅 owner 邮箱可用"的限制已移除——任何登录用户均可在自担风险下启用。
  */
-
-import { authMe } from "../api/auth";
-
-const OWNER_EMAIL = "hesongqiang3@gmail.com";
 
 const LS_OWNER_ENABLE_KEY = "liubai.ownerMode.enabled";
 const LS_OWNER_TOKEN_KEY = "liubai.ownerMode.sidecarToken";
 const LS_OWNER_BASEURL_KEY = "liubai.ownerMode.sidecarBaseUrl";
 const LS_OWNER_MODEL_KEY = "liubai.ownerMode.model";
 
+/**
+ * 协议同意状态。值为 "<版本>:<ISO 时间>" 字符串；版本变化时自动失效，需重新勾选。
+ * 当前版本对应的协议条款见 TermsPage / PrivacyPage 中"本地直连模式（高级）"小节。
+ */
+const LS_LOCAL_SIDECAR_DISCLAIMER_KEY = "liubai.localSidecar.disclaimerAcceptedAt";
+export const LOCAL_SIDECAR_DISCLAIMER_VERSION = "2026-04-26";
+
 const SIDECAR_DEFAULT_BASE_URL = "http://127.0.0.1:7788";
 const SIDECAR_PROBE_TIMEOUT_MS = 800;
 const SIDECAR_PROBE_CACHE_MS = 30_000;
 
 let probeCache: { at: number; ok: boolean } | null = null;
-
-export function isOwnerEmail(email: string | null | undefined): boolean {
-  return (email ?? "").trim().toLowerCase() === OWNER_EMAIL;
-}
 
 function safeLs(): Storage | null {
   try {
@@ -38,6 +37,35 @@ function safeLs(): Storage | null {
   }
 }
 
+/* ────────────────────────── 协议同意门禁 ────────────────────────── */
+
+export function getLocalSidecarDisclaimerAccepted(): boolean {
+  const v = safeLs()?.getItem(LS_LOCAL_SIDECAR_DISCLAIMER_KEY) ?? "";
+  return v.startsWith(`${LOCAL_SIDECAR_DISCLAIMER_VERSION}:`);
+}
+
+export function setLocalSidecarDisclaimerAccepted(v: boolean) {
+  const ls = safeLs();
+  if (!ls) return;
+  if (v) {
+    ls.setItem(
+      LS_LOCAL_SIDECAR_DISCLAIMER_KEY,
+      `${LOCAL_SIDECAR_DISCLAIMER_VERSION}:${new Date().toISOString()}`,
+    );
+  } else {
+    ls.removeItem(LS_LOCAL_SIDECAR_DISCLAIMER_KEY);
+  }
+  probeCache = null;
+}
+
+export function getLocalSidecarDisclaimerAcceptedAt(): string | null {
+  const v = safeLs()?.getItem(LS_LOCAL_SIDECAR_DISCLAIMER_KEY) ?? "";
+  if (!v.startsWith(`${LOCAL_SIDECAR_DISCLAIMER_VERSION}:`)) return null;
+  return v.slice(`${LOCAL_SIDECAR_DISCLAIMER_VERSION}:`.length) || null;
+}
+
+/* ────────────────────────── 启用开关 / token / baseUrl / model ────────────────────────── */
+
 export function getOwnerModeEnabled(): boolean {
   return safeLs()?.getItem(LS_OWNER_ENABLE_KEY) === "1";
 }
@@ -46,7 +74,6 @@ export function setOwnerModeEnabled(v: boolean) {
   const ls = safeLs();
   if (!ls) return;
   ls.setItem(LS_OWNER_ENABLE_KEY, v ? "1" : "0");
-  // 切换状态后立刻让探测失效，避免拿到旧缓存
   probeCache = null;
 }
 
@@ -84,6 +111,8 @@ export function setOwnerModel(model: string) {
   ls.setItem(LS_OWNER_MODEL_KEY, model.trim() || "sonnet");
 }
 
+/* ────────────────────────── sidecar 健康探测 ────────────────────────── */
+
 /**
  * 探测 sidecar 是否在线。30s 内的结果会被缓存以避免反复打 /health。
  * `force=true` 时强制重新探测。
@@ -107,57 +136,39 @@ export async function probeSidecar(force = false): Promise<boolean> {
   }
 }
 
-let cachedEmail: { at: number; email: string | null } | null = null;
-const EMAIL_CACHE_MS = 60_000;
-
-export async function getCurrentUserEmailForOwner(): Promise<string | null> {
-  if (cachedEmail && Date.now() - cachedEmail.at < EMAIL_CACHE_MS) {
-    return cachedEmail.email;
-  }
-  try {
-    const { user } = await authMe();
-    const email = user?.email ?? null;
-    cachedEmail = { at: Date.now(), email };
-    return email;
-  } catch {
-    cachedEmail = { at: Date.now(), email: null };
-    return null;
-  }
-}
-
-export function clearOwnerEmailCache() {
-  cachedEmail = null;
-}
+/* ────────────────────────── 综合判定 ────────────────────────── */
 
 /**
- * 当前是否应该走 owner 直连：邮箱匹配 + 开关开 + token 已配 + sidecar 健康。
+ * 当前是否应该走本地 sidecar：协议同意 + 开关开 + token 已配 + sidecar 健康。
  * 调用方：在 AI 调用入口处把 provider 覆盖为 "claude-code-local"。
  */
-export async function shouldUseOwnerSidecar(email?: string | null): Promise<boolean> {
-  const e = email ?? (await getCurrentUserEmailForOwner());
-  if (!isOwnerEmail(e)) return false;
+export async function shouldUseOwnerSidecar(): Promise<boolean> {
+  if (!getLocalSidecarDisclaimerAccepted()) return false;
   if (!getOwnerModeEnabled()) return false;
   if (!getOwnerSidecarToken()) return false;
   return probeSidecar();
 }
 
 /**
- * 同步版本：在已知 email 的 React 组件里使用，避免 await。
- * 不做 sidecar 探测，仅判断"用户允许 owner 模式"。
+ * 同步：用户是否已"完成接入"（协议同意 + 开关 + token），不做 sidecar 探测。
+ * 用于设置 UI / 徽章等需要立即决定渲染状态的场景。
  */
-export function ownerModeAllowedSync(email: string | null | undefined): boolean {
-  return isOwnerEmail(email) && getOwnerModeEnabled() && !!getOwnerSidecarToken();
+export function ownerModeAllowedSync(): boolean {
+  return (
+    getLocalSidecarDisclaimerAccepted() &&
+    getOwnerModeEnabled() &&
+    !!getOwnerSidecarToken()
+  );
 }
 
 /**
- * 同步：当前是否可能跳过 token 预算检查。
- * 用于 AiPanel 等需要在弹"超额确认"弹窗前同步判断的场景。
- * 不做 email 校验（懒加载邮箱会破坏同步契约）；仅看本机开关状态。
+ * 同步：当前是否可能跳过 token 预算检查（API 计费导向的预警/拦截）。
+ * 用于 AiPanel 在弹"超额确认"前同步判断。
  *
- * 这是个"宽松判断"：owner 把开关打开 + token 已配，就视为意图走订阅。
+ * 这是个"宽松判断"：用户已同意协议且开关打开 + token 已配，就视为意图走订阅。
  * 即便 sidecar 临时挂掉、call 落到 API 上，丢失一次预算预警的代价小于
- * 让 owner 在写作流里反复确认 token 预算。
+ * 让用户在写作流里反复确认 token 预算。
  */
 export function ownerModeWillBypassBudget(): boolean {
-  return getOwnerModeEnabled() && !!getOwnerSidecarToken();
+  return ownerModeAllowedSync();
 }

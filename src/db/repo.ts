@@ -39,6 +39,8 @@ import type {
   LogicPlaceEvent,
   LogicPlaceNode,
   TuiyanState,
+  TuiyanExtractedCharacter,
+  TuiyanExtractedTerm,
 } from "./types";
 import { buildBibleMarkdownExport } from "../storage/bible-markdown";
 
@@ -357,6 +359,145 @@ export async function deleteBibleWorldEntry(id: string) {
 }
 export async function reorderBibleWorldEntries(workId: string, orderedIds: string[]) {
   return getWritingStore().reorderBibleWorldEntries(workId, orderedIds);
+}
+
+// ─── 推演知识库批量 upsert ─────────────────────────────────────────────────────
+
+/** 归一化合并键（去除空白、标点、全角符号，转小写） */
+function normalizeKey(s: string): string {
+  return s.replace(/[\s\p{P}\uff00-\uffef]/gu, "").toLowerCase();
+}
+
+/**
+ * 批量 upsert 人物到书斋人物库。
+ * 同 workId 下 normalize(name) 相同的视为同一条目，合并更新非空字段；
+ * 无匹配则新建。返回 { added, updated }。
+ */
+export async function upsertBibleCharactersByWork(
+  workId: string,
+  items: TuiyanExtractedCharacter[],
+): Promise<{ added: number; updated: number }> {
+  const store = getWritingStore();
+  const existing = await store.listBibleCharacters(workId);
+  const byKey = new Map(existing.map((c) => [normalizeKey(c.name), c]));
+
+  let added = 0;
+  let updated = 0;
+  for (const item of items) {
+    const key = normalizeKey(item.name);
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (existing) {
+      const patch: Partial<Omit<BibleCharacter, "id" | "workId">> = {
+        updatedAt: Date.now(),
+      };
+      if (item.motivation?.trim() && !existing.motivation?.trim())
+        patch.motivation = item.motivation;
+      if (item.relationships?.trim() && !existing.relationships?.trim())
+        patch.relationships = item.relationships;
+      if (item.voiceNotes?.trim() && !existing.voiceNotes?.trim())
+        patch.voiceNotes = item.voiceNotes;
+      if (item.taboos?.trim() && !existing.taboos?.trim())
+        patch.taboos = item.taboos;
+      await store.updateBibleCharacter(existing.id, patch);
+      updated++;
+    } else {
+      const newChar = await store.addBibleCharacter(workId, {
+        name: item.name,
+        motivation: item.motivation ?? "",
+        relationships: item.relationships ?? "",
+        voiceNotes: item.voiceNotes ?? "",
+        taboos: item.taboos ?? "",
+      });
+      byKey.set(key, newChar);
+      added++;
+    }
+  }
+  return { added, updated };
+}
+
+/**
+ * 批量 upsert 词条到书斋世界观词条库。
+ * 同 workId 下 normalize(entryKind + title) 相同的视为同一条目，合并更新；
+ * 无匹配则新建。返回 { added, updated }。
+ */
+export async function upsertBibleWorldEntriesByWork(
+  workId: string,
+  items: TuiyanExtractedTerm[],
+): Promise<{ added: number; updated: number }> {
+  const store = getWritingStore();
+  const existing = await store.listBibleWorldEntries(workId);
+  const byKey = new Map(
+    existing.map((e) => [normalizeKey(e.entryKind + e.title), e]),
+  );
+
+  let added = 0;
+  let updated = 0;
+  for (const item of items) {
+    const key = normalizeKey(item.entryKind + item.title);
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (existing) {
+      if (item.body?.trim() && !existing.body?.trim()) {
+        await store.updateBibleWorldEntry(existing.id, {
+          body: item.body,
+          updatedAt: Date.now(),
+        });
+      }
+      updated++;
+    } else {
+      const newEntry = await store.addBibleWorldEntry(workId, {
+        entryKind: item.entryKind,
+        title: item.title,
+        body: item.body ?? "",
+      });
+      byKey.set(key, newEntry);
+      added++;
+    }
+  }
+  return { added, updated };
+}
+
+/**
+ * 将 AI 抽取的词条批量 upsert 到书斋词条库（BibleGlossaryTerm）。
+ * 匹配规则：normalize(term) 相同 → 仅在 note 为空时补充 note，不覆盖用户已填内容。
+ * entryKind 含"地点/地名/人名/城市/地方"时 category 设为 "name"，其余为 "term"。
+ */
+export async function upsertBibleGlossaryTermsByWork(
+  workId: string,
+  items: TuiyanExtractedTerm[],
+): Promise<{ added: number; updated: number }> {
+  const NAME_KINDS = ["地点", "地名", "人名", "城市", "地方"];
+  function toCategory(entryKind: string): BibleGlossaryTerm["category"] {
+    return NAME_KINDS.some((k) => entryKind.includes(k)) ? "name" : "term";
+  }
+
+  const store = getWritingStore();
+  const existing = await store.listBibleGlossaryTerms(workId);
+  const byKey = new Map(existing.map((t) => [normalizeKey(t.term), t]));
+
+  let added = 0;
+  let updated = 0;
+  for (const item of items) {
+    const key = normalizeKey(item.title);
+    if (!key) continue;
+    const found = byKey.get(key);
+    if (found) {
+      if (item.body?.trim() && !found.note?.trim()) {
+        await store.updateBibleGlossaryTerm(found.id, { note: item.body });
+      }
+      updated++;
+    } else {
+      const newTerm = await store.addBibleGlossaryTerm(workId, {
+        term: item.title,
+        category: toCategory(item.entryKind),
+        note: item.body ?? "",
+      });
+      byKey.set(key, newTerm);
+      added++;
+    }
+  }
+  return { added, updated };
 }
 
 export async function listBibleForeshadowing(workId: string) {

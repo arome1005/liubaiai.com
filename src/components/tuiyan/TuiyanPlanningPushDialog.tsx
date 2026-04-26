@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react"
 import { Button } from "../ui/button"
+import { Checkbox } from "../ui/checkbox"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog"
 import { ScrollArea } from "../ui/scroll-area"
 import type { TuiyanPlanningLevel } from "../../db/types"
 import { PLANNING_LEVEL_LABEL } from "../../util/tuiyan-planning"
+import { estimateKnowledgeTokenRange, type KnowledgeExtractInput } from "../../ai/tuiyan-knowledge-extract"
 
 export type TuiyanPlanningPushCandidate = {
   id: string
@@ -14,11 +16,19 @@ export type TuiyanPlanningPushCandidate = {
   content: string
 }
 
+/** 用户在推送弹窗里选定的知识生成选项 */
+export type KnowledgePushOptions = {
+  generateCharacters: boolean
+  generateTerms: boolean
+  /** 只抽取这些层级的节点（空数组 = 全选） */
+  levelFilter: TuiyanPlanningLevel[]
+}
+
 export type TuiyanPlanningPushDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   candidates: TuiyanPlanningPushCandidate[]
-  onConfirmPush: () => Promise<void>
+  onConfirmPush: (opts: KnowledgePushOptions) => Promise<void>
 }
 
 type TreeNode = TuiyanPlanningPushCandidate & { children: TreeNode[] }
@@ -50,6 +60,12 @@ const LEVEL_COUNT_ORDER: TuiyanPlanningLevel[] = [
   "chapter_detail",
 ]
 
+/** 格式化 token 估算展示 */
+function formatTokenRange(low: number, high: number): string {
+  const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+  return `~${fmt(low)}–${fmt(high)} tokens`
+}
+
 /** 推演 → 写作章纲：一键推送整棵五层规划树到写作编辑页「章纲」栏。 */
 export function TuiyanPlanningPushDialog({
   open,
@@ -58,6 +74,9 @@ export function TuiyanPlanningPushDialog({
   onConfirmPush,
 }: TuiyanPlanningPushDialogProps) {
   const [busy, setBusy] = useState(false)
+  const [generateCharacters, setGenerateCharacters] = useState(false)
+  const [generateTerms, setGenerateTerms] = useState(false)
+  const [levelFilter, setLevelFilter] = useState<TuiyanPlanningLevel[]>([])
 
   const tree = useMemo(() => buildTree(candidates), [candidates])
   const counts = useMemo(() => {
@@ -72,26 +91,66 @@ export function TuiyanPlanningPushDialog({
     return map
   }, [candidates])
 
+  const activeLevels = useMemo(
+    () => LEVEL_COUNT_ORDER.filter((lv) => counts[lv] > 0),
+    [counts],
+  )
+
+  const needsKnowledge = generateCharacters || generateTerms
+
+  const knowledgeCandidates = useMemo((): KnowledgeExtractInput[] => {
+    if (!needsKnowledge) return []
+    return candidates
+      .filter((c) => levelFilter.length === 0 || levelFilter.includes(c.level))
+      .map((c) => ({
+        nodeId: c.id,
+        level: c.level,
+        title: c.title,
+        content: c.content,
+      }))
+  }, [needsKnowledge, candidates, levelFilter])
+
+  const tokenRange = useMemo(
+    () => (needsKnowledge && knowledgeCandidates.length > 0
+      ? estimateKnowledgeTokenRange(knowledgeCandidates)
+      : null),
+    [needsKnowledge, knowledgeCandidates],
+  )
+
+  const toggleLevel = (lv: TuiyanPlanningLevel) => {
+    setLevelFilter((prev) =>
+      prev.includes(lv) ? prev.filter((x) => x !== lv) : [...prev, lv],
+    )
+  }
+
   const push = async () => {
     if (candidates.length === 0) return
     setBusy(true)
     try {
-      await onConfirmPush()
+      await onConfirmPush({ generateCharacters, generateTerms, levelFilter })
       onOpenChange(false)
     } finally {
       setBusy(false)
     }
   }
 
+  const btnLabel = busy
+    ? needsKnowledge ? "推送并生成中…" : "推送中…"
+    : needsKnowledge
+      ? `确认推送并生成配套库`
+      : `确认推送章纲（共 ${candidates.length} 条）`
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[min(86vh,760px)] w-[min(94vw,1040px)] max-w-none flex-col gap-0 overflow-hidden p-0">
+      <DialogContent className="flex h-[min(90vh,820px)] w-[min(94vw,1040px)] max-w-none flex-col gap-0 overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b border-border/40 px-6 py-4 text-left">
           <DialogTitle>推送到写作章纲</DialogTitle>
           <DialogDescription>
             整棵五层规划（总纲 → 一级大纲 → 卷纲 → 章细纲 → 详细细纲）会作为章纲快照写入写作编辑页左侧「章纲」栏。不会创建章节，也不会动章节正文。
           </DialogDescription>
         </DialogHeader>
+
+        {/* 层级统计栏 */}
         <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border/40 px-6 py-3 text-xs text-muted-foreground">
           {LEVEL_COUNT_ORDER.map((lv) => (
             <span key={lv} className="inline-flex items-center gap-1 rounded-full border border-border/40 bg-background/40 px-2 py-0.5">
@@ -101,27 +160,104 @@ export function TuiyanPlanningPushDialog({
           ))}
           <span className="ml-auto text-amber-400">本次推送会整体覆盖上一次快照。</span>
         </div>
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="space-y-1 p-5 text-sm">
-            {tree.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-border/50 p-8 text-center text-muted-foreground">
-                当前规划树为空。请先在推演页生成总纲 / 大纲 / 卷纲 / 细纲。
+
+        <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+          {/* 章纲树预览 */}
+          <ScrollArea className="min-h-0 flex-1 border-b border-border/40 md:border-b-0 md:border-r">
+            <div className="space-y-1 p-5 text-sm">
+              {tree.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-border/50 p-8 text-center text-muted-foreground">
+                  当前规划树为空。请先在推演页生成总纲 / 大纲 / 卷纲 / 细纲。
+                </div>
+              ) : (
+                tree.map((root) => <TreeRow key={root.id} node={root} depth={0} />)
+              )}
+            </div>
+          </ScrollArea>
+
+          {/* 配套知识推送选项 */}
+          <div className="w-full shrink-0 space-y-4 p-5 md:w-[280px]">
+            <div className="text-xs font-medium text-foreground/70">配套知识推送（可选）</div>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              勾选后将额外调用 AI 从规划内容中抽取人物和词条，写入当前作品的书斋。不勾选则仅推送章纲快照。
+            </p>
+
+            <div className="space-y-2">
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <Checkbox
+                  checked={generateCharacters}
+                  onCheckedChange={(v) => setGenerateCharacters(Boolean(v))}
+                />
+                <span>生成人物库</span>
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <Checkbox
+                  checked={generateTerms}
+                  onCheckedChange={(v) => setGenerateTerms(Boolean(v))}
+                />
+                <span>生成词条库</span>
+              </label>
+            </div>
+
+            {needsKnowledge && activeLevels.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-[11px] text-muted-foreground">抽取范围（层级，默认全选）</div>
+                <div className="space-y-1.5">
+                  {activeLevels.map((lv) => (
+                    <label key={lv} className="flex cursor-pointer items-center gap-2 text-xs">
+                      <Checkbox
+                        checked={levelFilter.length === 0 || levelFilter.includes(lv)}
+                        onCheckedChange={() => {
+                          if (levelFilter.length === 0) {
+                            // 从"全选"变为"仅排除此项"
+                            setLevelFilter(activeLevels.filter((x) => x !== lv))
+                          } else {
+                            toggleLevel(lv)
+                            // 若取消后全部勾选 = 重置为全选
+                            const next = levelFilter.includes(lv)
+                              ? levelFilter.filter((x) => x !== lv)
+                              : [...levelFilter, lv]
+                            if (next.length === activeLevels.length) setLevelFilter([])
+                          }
+                        }}
+                      />
+                      <span>{PLANNING_LEVEL_LABEL[lv]}</span>
+                      <span className="ml-auto text-muted-foreground/60">{counts[lv]} 个</span>
+                    </label>
+                  ))}
+                </div>
               </div>
-            ) : (
-              tree.map((root) => <TreeRow key={root.id} node={root} depth={0} />)
+            )}
+
+            {needsKnowledge && tokenRange && (
+              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3 text-[11px] leading-relaxed text-amber-400/90">
+                <div className="font-medium">Token 估算</div>
+                <div className="mt-1">
+                  预计额外消耗 {formatTokenRange(tokenRange.low, tokenRange.high)}
+                  （{knowledgeCandidates.length} 个节点，各调用一次）
+                </div>
+              </div>
+            )}
+
+            {needsKnowledge && (
+              <div className="rounded-lg border border-border/30 bg-background/20 p-3 text-[11px] leading-relaxed text-muted-foreground">
+                <div className="font-medium text-foreground/60">合并规则</div>
+                <div className="mt-1">同名人物/词条自动合并更新，不会重复创建。</div>
+              </div>
             )}
           </div>
-        </ScrollArea>
+        </div>
+
         <div className="flex shrink-0 items-center justify-between gap-3 border-t border-border/40 px-6 py-4">
           <div className="text-xs text-muted-foreground">
-            推送后在写作编辑页切到「章纲」即可点击查看任一层内容。
+            推送后在写作编辑页切到「章纲」即可查看任一层内容。
           </div>
           <div className="flex items-center gap-2">
             <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
               取消
             </Button>
             <Button type="button" onClick={push} disabled={busy || candidates.length === 0}>
-              {busy ? "推送中..." : `确认推送（共 ${candidates.length} 条）`}
+              {btnLabel}
             </Button>
           </div>
         </div>

@@ -203,6 +203,8 @@ export type BibleCharacter = {
   relationships: string;
   voiceNotes: string;
   taboos: string;
+  /** 性别：IndexedDB 兼容旧数据（undefined = 未知） */
+  gender?: "male" | "female" | "unknown" | "none";
   sortOrder: number;
   createdAt: number;
   updatedAt: number;
@@ -544,6 +546,8 @@ export type PlanningNodeStructuredMeta = {
   // 总纲 (master_outline)
   logline?: string;
   worldSetting?: string;
+  /** 世界观中的核心设定词条（chip 联动书斋词条库） */
+  worldSettingTerms?: string;
   mainConflict?: string;
   coreCharacters?: string;
   storyStages?: string;
@@ -663,6 +667,56 @@ export type TuiyanState = {
   planningStructuredMetaByNodeId?: Record<string, PlanningNodeStructuredMeta>;
   /** 推演页推送给写作编辑页「章纲」栏的只读快照；不创建正文章节。 */
   planningPushedOutlines?: TuiyanPushedOutlineEntry[];
+  /**
+   * 推送时可选生成的知识批次快照（人物 + 词条）。
+   * 用于回溯来源、去重与统计；实际落库数据在 BibleCharacter / BibleWorldEntry 里。
+   */
+  planningKnowledgeBatches?: TuiyanKnowledgeBatch[];
+};
+
+// ─── 推演知识库抽取类型 ────────────────────────────────────────────────────────
+
+/** AI 从规划节点内容中抽取的人物条目（待落入 BibleCharacter） */
+export type TuiyanExtractedCharacter = {
+  name: string;
+  motivation: string;
+  relationships: string;
+  voiceNotes: string;
+  taboos: string;
+  /** 来源层级 */
+  sourceLevel: TuiyanPlanningLevel;
+  /** 来源节点 id */
+  sourceNodeId: string;
+};
+
+/** AI 从规划节点内容中抽取的世界观词条（待落入 BibleWorldEntry） */
+export type TuiyanExtractedTerm = {
+  entryKind: string;
+  title: string;
+  body: string;
+  /** 来源层级 */
+  sourceLevel: TuiyanPlanningLevel;
+  /** 来源节点 id */
+  sourceNodeId: string;
+};
+
+/** 一次推送生成的知识批次快照 */
+export type TuiyanKnowledgeBatch = {
+  id: string;
+  createdAt: number;
+  /** 来源节点 id 集合 */
+  sourceNodeIds: string[];
+  /** 本批次抽取的人物（归一化后用于 upsert） */
+  characters: TuiyanExtractedCharacter[];
+  /** 本批次抽取的词条（归一化后用于 upsert） */
+  terms: TuiyanExtractedTerm[];
+  /** upsert 结果统计 */
+  stats: {
+    charactersAdded: number;
+    charactersUpdated: number;
+    termsAdded: number;
+    termsUpdated: number;
+  };
 };
 
 /** 参考库倒排索引：按 token 命中块，offsetsJson 为 UTF-16 偏移 JSON 数组 */

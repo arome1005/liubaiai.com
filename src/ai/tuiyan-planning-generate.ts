@@ -51,6 +51,7 @@ const FIELD_NAME_MAP: Record<string, keyof PlanningNodeStructuredMeta> = {
   "标签": "tags",
   // master_outline aliases
   "世界观": "worldSetting",
+  "世界观核心词条": "worldSettingTerms",
   "主要冲突": "mainConflict",
   "核心人物": "coreCharacters",
   "故事阶段": "storyStages",
@@ -61,6 +62,7 @@ const FIELD_NAME_MAP: Record<string, keyof PlanningNodeStructuredMeta> = {
 const LEVEL_STRUCTURED_FIELDS: Record<TuiyanPlanningListLevel, string> = {
   master_outline: `核心创意：
 世界观：
+世界观核心词条：（用逗号分隔的核心设定词条，如：境界体系名称、特殊力量、核心宗门等，5-15 个）
 主要冲突：
 核心人物：
 故事阶段：`,

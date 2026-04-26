@@ -33,6 +33,7 @@ export const STRUCTURED_FIELDS_BY_LEVEL: Record<TuiyanPlanningLevel, StructuredF
   master_outline: [
     { key: "logline", label: "核心创意 / Logline" },
     { key: "worldSetting", label: "世界观 / 力量体系" },
+    { key: "worldSettingTerms", label: "世界观核心词条" },
     { key: "mainConflict", label: "主要冲突" },
     { key: "coreCharacters", label: "核心人物" },
     { key: "storyStages", label: "故事阶段" },

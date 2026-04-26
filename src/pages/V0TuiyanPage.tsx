@@ -3,6 +3,7 @@ import { TuiyanPlanningNodeCenterEditor } from "../components/tuiyan/TuiyanPlann
 import {
   TuiyanPlanningPushDialog,
   type TuiyanPlanningPushCandidate,
+  type KnowledgePushOptions,
 } from "../components/tuiyan/TuiyanPlanningPushDialog"
 import { TuiyanPlanningStatsInline } from "../components/tuiyan/TuiyanPlanningStatsInline"
 import { TuiyanPlanningTree } from "../components/tuiyan/TuiyanPlanningTree"
@@ -14,6 +15,7 @@ import { useTuiyanLayoutPanels } from "../hooks/useTuiyanLayoutPanels"
 import type {
   GlobalPromptTemplate,
   PlanningNodeStructuredMeta,
+  TuiyanKnowledgeBatch,
   TuiyanPlanningLevel,
   TuiyanPlanningMeta,
   TuiyanPlanningNode,
@@ -42,6 +44,9 @@ import {
   generateTuiyanPlanningList,
   TuiyanPlanningGenerateError,
 } from "../ai/tuiyan-planning-generate"
+import { extractKnowledgeFromNodes, type KnowledgeExtractInput } from "../ai/tuiyan-knowledge-extract"
+import { autoLinkChipsFromNodes, type AutoLinkItem } from "../util/tuiyan-chip-autolink"
+import { useToast } from "../components/ui/use-toast"
 import type { WritingWorkStyleSlice } from "../ai/assemble-context"
 import { loadAiSettings, saveAiSettings } from "../ai/storage"
 import { aiModelIdToProvider, aiProviderToModelId } from "../util/ai-ui-model-map"
@@ -57,6 +62,8 @@ import {
   updateChapter,
   listReferenceLibrary,
   listReferenceExcerpts,
+  upsertBibleCharactersByWork,
+  upsertBibleGlossaryTermsByWork,
 } from "../db/repo"
 import type { Chapter, ReferenceLibraryEntry, Work } from "../db/types"
 import { resolveDefaultChapterId } from "../util/resolve-default-chapter"
@@ -135,6 +142,7 @@ import {
   Lightbulb,
   List,
   X,
+  LibraryBig,
 } from "lucide-react"
 import { cn } from "../lib/utils"
 import { LiubaiLogo } from "../components/LiubaiLogo"
@@ -735,6 +743,7 @@ function WenCeCard({
 // ============ Main Component ============
 export default function V0TuiyanPage() {
   const navigate = useNavigate()
+  const { toast } = useToast()
   const [works, setWorks] = useState<Work[]>([])
   const [workId, setWorkId] = useState<string | null>(null)
   const [chapters, setChapters] = useState<Chapter[]>([])
@@ -782,6 +791,44 @@ export default function V0TuiyanPage() {
   const [planningMode, setPlanningMode] = useState<"model" | "template">("model")
   const [planningBusyLevel, setPlanningBusyLevel] = useState<TuiyanPlanningLevel | null>(null)
   const [planningError, setPlanningError] = useState("")
+  /** 自动入库完成后递增，触发 StructuredMetaChips 内 useNodeChipLibrary 重载 */
+  const [chipLibRefreshKey, setChipLibRefreshKey] = useState(0)
+  /** 生成即入库开关（localStorage 持久化） */
+  const [autoLinkEnabled, setAutoLinkEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("liubai:tuiyan:autoLink:v1") !== "false"
+    } catch { return true }
+  })
+
+  const toggleAutoLink = useCallback(() => {
+    setAutoLinkEnabled((prev) => {
+      const next = !prev
+      try { localStorage.setItem("liubai:tuiyan:autoLink:v1", String(next)) } catch { /* ignore */ }
+      return next
+    })
+  }, [])
+
+  /** 触发自动入库并展示 toast 结果（fire-and-forget） */
+  const runAutoLink = useCallback(
+    (items: AutoLinkItem[]) => {
+      if (!autoLinkEnabled || !workId) return
+      autoLinkChipsFromNodes(workId, items)
+        .then(({ characters, terms }) => {
+          setChipLibRefreshKey((k) => k + 1)
+          if (characters > 0 || terms > 0) {
+            const parts: string[] = []
+            if (characters > 0) parts.push(`人物 ${characters} 个`)
+            if (terms > 0) parts.push(`词条 ${terms} 个`)
+            toast({ title: "自动入库完成", description: parts.join(" · ") })
+          }
+        })
+        .catch((err) => {
+          console.error("[autoLink]", err)
+          toast({ title: "自动入库失败", description: err instanceof Error ? err.message : "未知错误", variant: "destructive" })
+        })
+    },
+    [autoLinkEnabled, workId, toast],
+  )
   const [planningIdeaDialogOpen, setPlanningIdeaDialogOpen] = useState(false)
   const [planningPushDialogOpen, setPlanningPushDialogOpen] = useState(false)
   const [planningScale, setPlanningScale] = useState<PlanningScale>(() => {
@@ -796,6 +843,7 @@ export default function V0TuiyanPage() {
     localStorage.setItem("liubai:tuiyan:planningScale:v1", JSON.stringify(s))
   }, [])
   const [pushOverwriteConfirmOpen, setPushOverwriteConfirmOpen] = useState(false)
+  const [pendingKnowledgeOpts, setPendingKnowledgeOpts] = useState<KnowledgePushOptions | null>(null)
   const [planningDeleteTarget, setPlanningDeleteTarget] = useState<PlanningDeleteTarget>(null)
   /** 规划树折叠：undefined / true 为展开，false 为收起 */
   const [planningExpandedById, setPlanningExpandedById] = useState<Record<string, boolean>>({})
@@ -1535,6 +1583,16 @@ export default function V0TuiyanPage() {
           if (Object.keys(masterPatch).length) {
             setPlanningStructuredMetaByNodeId((prev) => ({ ...prev, ...masterPatch }))
           }
+          // 自动从生成内容提取 chip 基本信息并入库（fire-and-forget）
+          {
+            const autoItems: AutoLinkItem[] = nodes.map((n, idx) => ({
+              summary: n.summary,
+              structuredMeta: items[idx]?.structuredMeta ?? {},
+              level: "master_outline",
+              nodeId: n.id,
+            }))
+            runAutoLink(autoItems)
+          }
           return
         }
         if (!parentNode) {
@@ -1580,6 +1638,15 @@ export default function V0TuiyanPage() {
           })
           if (Object.keys(outlinePatch).length) {
             setPlanningStructuredMetaByNodeId((prev) => ({ ...prev, ...outlinePatch }))
+          }
+          {
+            const autoItems: AutoLinkItem[] = nodes.map((n, idx) => ({
+              summary: n.summary,
+              structuredMeta: items[idx]?.structuredMeta ?? {},
+              level: "outline",
+              nodeId: n.id,
+            }))
+            runAutoLink(autoItems)
           }
           return
         }
@@ -1635,6 +1702,12 @@ export default function V0TuiyanPage() {
           if (volItem.structuredMeta && Object.keys(volItem.structuredMeta).length) {
             setPlanningStructuredMetaByNodeId((prev) => ({ ...prev, [newVolNode.id]: volItem.structuredMeta }))
           }
+          runAutoLink([{
+            summary: newVolNode.summary,
+            structuredMeta: volItem.structuredMeta ?? {},
+            level: "volume",
+            nodeId: newVolNode.id,
+          }])
           return
         }
         if (level === "chapter_outline") {
@@ -1671,6 +1744,15 @@ export default function V0TuiyanPage() {
           if (Object.keys(chapterPatch).length) {
             setPlanningStructuredMetaByNodeId((prev) => ({ ...prev, ...chapterPatch }))
           }
+          {
+            const autoItems: AutoLinkItem[] = nodes.map((n, idx) => ({
+              summary: n.summary,
+              structuredMeta: items[idx]?.structuredMeta ?? {},
+              level: "chapter_outline",
+              nodeId: n.id,
+            }))
+            runAutoLink(autoItems)
+          }
           return
         }
         const userInput = makePlanningContext("chapter_detail", parentNode)
@@ -1702,6 +1784,12 @@ export default function V0TuiyanPage() {
             [detailNode.id]: { ...prev[detailNode.id], ...detailMeta },
           }))
         }
+        runAutoLink([{
+          summary: text,
+          structuredMeta: { ...detailMeta },
+          level: "chapter_detail",
+          nodeId: detailNode.id,
+        }])
       } catch (e) {
         if (isFirstAiGateCancelledError(e)) return
         if (e instanceof DOMException && e.name === "AbortError") return
@@ -1787,6 +1875,12 @@ export default function V0TuiyanPage() {
       if (volItem.structuredMeta && Object.keys(volItem.structuredMeta).length) {
         setPlanningStructuredMetaByNodeId((prev) => ({ ...prev, [newVolNode.id]: volItem.structuredMeta }))
       }
+      runAutoLink([{
+        summary: newVolNode.summary,
+        structuredMeta: volItem.structuredMeta ?? {},
+        level: "volume",
+        nodeId: newVolNode.id,
+      }])
     } catch (e) {
       if (isFirstAiGateCancelledError(e)) return
       if (e instanceof DOMException && e.name === "AbortError") return
@@ -1803,6 +1897,7 @@ export default function V0TuiyanPage() {
     planningScale,
     planningTree,
     upsertPlanningMeta,
+    workId,
   ])
 
   const updatePlanningNodeDraft = useCallback((nodeId: string, value: string) => {
@@ -1859,7 +1954,7 @@ export default function V0TuiyanPage() {
     })
   }, [])
 
-  const doPushPlanningTree = useCallback(async () => {
+  const doPushPlanningTree = useCallback(async (opts: KnowledgePushOptions) => {
     if (!workId || planningPushCandidates.length === 0) return
     const pushedAt = Date.now()
     const nextEntries: TuiyanPushedOutlineEntry[] = planningPushCandidates.map((candidate) => ({
@@ -1874,9 +1969,70 @@ export default function V0TuiyanPage() {
     }))
     await upsertTuiyanState(workId, { planningPushedOutlines: nextEntries })
     setPlanningError("")
-  }, [planningPushCandidates, planningStructuredMetaByNodeId, workId])
 
-  const pushPlanningTreeToWriter = useCallback(async () => {
+    // 章纲推送成功后，可选生成人物/词条并写入书斋
+    const needsKnowledge = opts.generateCharacters || opts.generateTerms
+    if (!needsKnowledge) {
+      toast({ title: "章纲已推送", description: `共 ${nextEntries.length} 条节点已写入写作页章纲栏。` })
+      return
+    }
+
+    const filterLevels = opts.levelFilter
+    const extractInputs: KnowledgeExtractInput[] = planningPushCandidates
+      .filter((c) => filterLevels.length === 0 || filterLevels.includes(c.level))
+      .map((c) => ({
+        nodeId: c.id,
+        level: c.level,
+        title: c.title,
+        content: c.content,
+        structuredMeta: planningStructuredMetaByNodeId[c.id],
+      }))
+
+    try {
+      const { characters, terms } = await extractKnowledgeFromNodes({ inputs: extractInputs })
+
+      let charAdded = 0; let charUpdated = 0
+      let termAdded = 0; let termUpdated = 0
+
+      if (opts.generateCharacters && characters.length > 0) {
+        const r = await upsertBibleCharactersByWork(workId, characters)
+        charAdded = r.added; charUpdated = r.updated
+      }
+      if (opts.generateTerms && terms.length > 0) {
+        const r = await upsertBibleGlossaryTermsByWork(workId, terms)
+        termAdded = r.added; termUpdated = r.updated
+      }
+
+      // 保存批次快照到推演状态
+      const batch: TuiyanKnowledgeBatch = {
+        id: crypto.randomUUID(),
+        createdAt: Date.now(),
+        sourceNodeIds: extractInputs.map((n) => n.nodeId),
+        characters: opts.generateCharacters ? characters : [],
+        terms: opts.generateTerms ? terms : [],
+        stats: { charactersAdded: charAdded, charactersUpdated: charUpdated, termsAdded: termAdded, termsUpdated: termUpdated },
+      }
+      const prevState = await getTuiyanState(workId)
+      const prevBatches = prevState?.planningKnowledgeBatches ?? []
+      await upsertTuiyanState(workId, {
+        planningKnowledgeBatches: [...prevBatches.slice(-9), batch],
+      })
+
+      const parts: string[] = [`章纲 ${nextEntries.length} 条已推送。`]
+      if (opts.generateCharacters) parts.push(`人物：新增 ${charAdded}、更新 ${charUpdated}。`)
+      if (opts.generateTerms) parts.push(`词条：新增 ${termAdded}、更新 ${termUpdated}。`)
+      toast({ title: "推送完成", description: parts.join(" ") })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "未知错误"
+      toast({
+        title: "章纲已推送，配套库未更新",
+        description: `知识库生成失败：${msg}`,
+        variant: "destructive",
+      })
+    }
+  }, [planningPushCandidates, planningStructuredMetaByNodeId, workId, toast])
+
+  const pushPlanningTreeToWriter = useCallback(async (opts: KnowledgePushOptions) => {
     if (!workId) return
     if (planningPushCandidates.length === 0) {
       setPlanningError("当前规划树为空，请先生成总纲/大纲/卷纲/细纲。")
@@ -1885,10 +2041,11 @@ export default function V0TuiyanPage() {
     const previousState = await getTuiyanState(workId)
     const hadPrevious = (previousState?.planningPushedOutlines?.length ?? 0) > 0
     if (hadPrevious) {
+      setPendingKnowledgeOpts(opts)
       setPushOverwriteConfirmOpen(true)
       return
     }
-    await doPushPlanningTree()
+    await doPushPlanningTree(opts)
   }, [doPushPlanningTree, planningPushCandidates.length, workId])
 
   const writeToAiPanelDraftAndOpenEditor = useCallback(
@@ -2141,10 +2298,12 @@ export default function V0TuiyanPage() {
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel onClick={() => setPendingKnowledgeOpts(null)}>取消</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                void doPushPlanningTree()
+                const opts = pendingKnowledgeOpts ?? { generateCharacters: false, generateTerms: false, levelFilter: [] }
+                setPendingKnowledgeOpts(null)
+                void doPushPlanningTree(opts)
               }}
             >
               确认覆盖
@@ -2292,6 +2451,29 @@ export default function V0TuiyanPage() {
               </Tooltip>
             </TooltipProvider>
           )}
+
+          <TooltipProvider>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  aria-label={autoLinkEnabled ? "生成即入库（已开）" : "生成即入库（已关）"}
+                  className={cn(
+                    "h-8 w-8 p-0 transition-colors",
+                    autoLinkEnabled ? "text-emerald-400" : "text-muted-foreground/40",
+                  )}
+                  onClick={toggleAutoLink}
+                >
+                  <LibraryBig className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {autoLinkEnabled ? "生成即入库（开）— 点击关闭" : "生成即入库（关）— 点击开启"}
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
 
           <TooltipProvider>
             <Tooltip>
@@ -2447,7 +2629,9 @@ export default function V0TuiyanPage() {
                 onSummaryChange={updatePlanningNodeSummary}
                 onDraftChange={updatePlanningNodeDraft}
                 onStructuredMetaChange={updatePlanningNodeStructuredMeta}
+                workId={workId}
                 onRegenerateChapterDetail={(chapterNode) => void generatePlanningLevel("chapter_detail", chapterNode)}
+                libraryRefreshKey={chipLibRefreshKey}
               />
             </ScrollArea>
           )}

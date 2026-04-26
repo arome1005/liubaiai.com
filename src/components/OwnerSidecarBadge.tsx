@@ -1,18 +1,15 @@
 /**
- * 右下角小徽章：当 owner 模式启用时显示当前 sidecar 健康状态。
+ * 右下角小徽章：当本地直连（高级）已配置时，显示 sidecar 健康状态。
  * - 绿："● Claude 订阅直连"
  * - 红："● Sidecar 离线，已 fallback"
- * 隐藏：非 owner 账号 / owner 模式关 / 没填 token。
+ * 隐藏：未同意条款 / 未启用 / 没填 token。
  *
  * 主要价值：避免你以为在白嫖订阅、其实在烧 API。
  */
 import { useEffect, useState } from "react";
 import {
-  isOwnerEmail,
-  getOwnerModeEnabled,
-  getOwnerSidecarToken,
+  ownerModeAllowedSync,
   probeSidecar,
-  getCurrentUserEmailForOwner,
 } from "../util/owner-mode";
 
 type State = "hidden" | "live" | "down";
@@ -27,8 +24,7 @@ export function OwnerSidecarBadge() {
 
     const tick = async () => {
       try {
-        const email = await getCurrentUserEmailForOwner();
-        if (!isOwnerEmail(email) || !getOwnerModeEnabled() || !getOwnerSidecarToken()) {
+        if (!ownerModeAllowedSync()) {
           if (alive) setState("hidden");
           return;
         }
@@ -42,7 +38,6 @@ export function OwnerSidecarBadge() {
     void tick();
     const id = setInterval(() => void tick(), PROBE_INTERVAL_MS);
 
-    // 切到前台时立即探测，避免长时间息屏后徽章信息陈旧
     const onVis = () => {
       if (document.visibilityState === "visible") void tick();
     };

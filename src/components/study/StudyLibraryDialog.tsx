@@ -321,6 +321,11 @@ export function StudyLibraryDialog(props: {
       voiceNotes: selectedCharacter.voiceNotes ?? "",
       taboos: selectedCharacter.taboos ?? "",
     });
+    // 从持久化字段同步性别（回落到 "unknown"）
+    setCharacterGenderById((prev) => ({
+      ...prev,
+      [selectedCharacter.id]: (selectedCharacter.gender ?? "unknown") as CharacterGender,
+    }));
   }, [selectedCharacter]);
 
   useEffect(() => {
@@ -365,9 +370,10 @@ export function StudyLibraryDialog(props: {
       characterDraft.motivation !== selectedCharacter.motivation ||
       characterDraft.relationships !== selectedCharacter.relationships ||
       characterDraft.voiceNotes !== selectedCharacter.voiceNotes ||
-      characterDraft.taboos !== selectedCharacter.taboos
+      characterDraft.taboos !== selectedCharacter.taboos ||
+      selectedCharacterGender !== (selectedCharacter.gender ?? "unknown")
     );
-  }, [characterDraft, selectedCharacter]);
+  }, [characterDraft, selectedCharacter, selectedCharacterGender]);
 
   const termDirty = useMemo(() => {
     if (!selectedTerm) return false;
@@ -392,6 +398,7 @@ export function StudyLibraryDialog(props: {
         relationships: characterDraft.relationships,
         voiceNotes: characterDraft.voiceNotes,
         taboos: characterDraft.taboos,
+        gender: selectedCharacterGender as BibleCharacter["gender"],
       });
       await props.onRefresh();
       toast.success("人物已保存");

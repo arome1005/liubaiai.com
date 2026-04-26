@@ -1,17 +1,18 @@
 /**
- * Owner 模式设置卡片：仅当当前登录账号是 owner 时渲染。
- * 在「设置 → AI」末尾出现，提供：
- *  - 总开关（Switch）：开启后调用走本机 sidecar
- *  - Sidecar Token 输入（Bearer 头校验）
- *  - Sidecar Base URL（默认 127.0.0.1:7788）
- *  - 模型选择（sonnet / opus / haiku）
- *  - 「测试连接」按钮：探测 /health 与发一次 1-token 请求验证 token
+ * 高级接入（本地直连 · Claude Code 订阅直连）
  *
- * 本组件**不持久化任何 token 到 Supabase / 后端**——一切 localStorage。
+ * 以「高级接入」按钮 + Dialog 的形式嵌入「设置 → AI 配置」末尾。
+ * 任何登录用户均可在自担风险下启用，前提是先勾选同意条款。
+ *
+ * 所有凭据仅保存在本机浏览器 localStorage 中，不上传后端。
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import { ChevronRight, Lock, Zap } from "lucide-react";
 import {
-  isOwnerEmail,
+  getLocalSidecarDisclaimerAccepted,
+  setLocalSidecarDisclaimerAccepted,
+  getLocalSidecarDisclaimerAcceptedAt,
   getOwnerModeEnabled,
   setOwnerModeEnabled,
   getOwnerSidecarToken,
@@ -22,12 +23,22 @@ import {
   setOwnerModel,
   probeSidecar,
 } from "../util/owner-mode";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
+import { cn } from "../lib/utils";
 
 type ConnState = "idle" | "checking" | "ok" | "fail";
 
 export function OwnerModeSection({ currentEmail }: { currentEmail: string | null | undefined }) {
-  const isOwner = useMemo(() => isOwnerEmail(currentEmail), [currentEmail]);
+  const isLoggedIn = useMemo(() => !!(currentEmail && currentEmail.trim()), [currentEmail]);
 
+  const [open, setOpen] = useState(false);
+  const [pwOpen, setPwOpen] = useState(false);
+  const [pwInput, setPwInput] = useState("");
+  const [pwError, setPwError] = useState(false);
+  const pwInputRef = useRef<HTMLInputElement>(null);
+
+  const [accepted, setAccepted] = useState<boolean>(() => getLocalSidecarDisclaimerAccepted());
+  const [acceptedAt, setAcceptedAt] = useState<string | null>(() => getLocalSidecarDisclaimerAcceptedAt());
   const [enabled, setEnabled] = useState<boolean>(() => getOwnerModeEnabled());
   const [token, setToken] = useState<string>(() => getOwnerSidecarToken());
   const [baseUrl, setBaseUrl] = useState<string>(() => getOwnerSidecarBaseUrl());
@@ -35,20 +46,35 @@ export function OwnerModeSection({ currentEmail }: { currentEmail: string | null
   const [showToken, setShowToken] = useState(false);
   const [conn, setConn] = useState<ConnState>("idle");
   const [connMsg, setConnMsg] = useState<string>("");
+  const [showDetails, setShowDetails] = useState<boolean>(() => getLocalSidecarDisclaimerAccepted());
 
   useEffect(() => {
-    if (!isOwner) return;
-    if (!enabled) return;
-    // 进入页面时静默探测一次，给徽章/状态一个新鲜值
+    if (!accepted || !enabled) return;
     void probeSidecar(true).then((ok) => {
       setConn(ok ? "ok" : "fail");
       setConnMsg(ok ? "已连通" : "连不上 sidecar，先在终端 npm run sidecar");
     });
-  }, [isOwner, enabled]);
+  }, [accepted, enabled]);
 
-  if (!isOwner) return null;
+  if (!isLoggedIn) return null;
+
+  const onAcceptDisclaimer = (v: boolean) => {
+    setLocalSidecarDisclaimerAccepted(v);
+    setAccepted(v);
+    setAcceptedAt(getLocalSidecarDisclaimerAcceptedAt());
+    if (!v) {
+      setOwnerModeEnabled(false);
+      setEnabled(false);
+      setShowDetails(false);
+      setConn("idle");
+      setConnMsg("");
+    } else {
+      setShowDetails(true);
+    }
+  };
 
   const onToggle = (v: boolean) => {
+    if (!accepted) return;
     setEnabled(v);
     setOwnerModeEnabled(v);
   };
@@ -83,7 +109,6 @@ export function OwnerModeSection({ currentEmail }: { currentEmail: string | null
       setConnMsg("Sidecar 在线，但还没填 Token");
       return;
     }
-    // 进一步：发一个最小请求验证 token
     try {
       const url = `${baseUrl.replace(/\/+$/, "")}/v1/stream`;
       const r = await fetch(url, {
@@ -107,12 +132,7 @@ export function OwnerModeSection({ currentEmail }: { currentEmail: string | null
         setConnMsg(`Sidecar 返回 ${r.status}`);
         return;
       }
-      // 不读完整 stream，只确认握手成功
-      try {
-        await r.body?.cancel();
-      } catch {
-        /* ignore */
-      }
+      try { await r.body?.cancel(); } catch { /* ignore */ }
       setConn("ok");
       setConnMsg("连通 + Token 校验通过");
     } catch (e) {
@@ -124,93 +144,214 @@ export function OwnerModeSection({ currentEmail }: { currentEmail: string | null
   const statusColor =
     conn === "ok" ? "var(--success, #10b981)" :
     conn === "fail" ? "var(--destructive, #f43f5e)" :
-    conn === "checking" ? "var(--muted-foreground, #64748b)" :
     "var(--muted-foreground, #64748b)";
 
   return (
-    <div
-      className="settings-ai-usage"
-      role="region"
-      aria-label="Owner 模式 · Claude Code 本地直连"
-      style={{ marginTop: 14 }}
-    >
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <h3 className="settings-ai-usage-title">Owner 模式 · Claude Code 本地直连</h3>
-        <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => onToggle(e.target.checked)}
-          />
-          <span className="small">{enabled ? "已启用" : "未启用"}</span>
-        </label>
-      </div>
-      <p className="muted small" style={{ marginTop: 4 }}>
-        启用后：本账号触发的 AI 调用会走本机 sidecar → Claude 订阅，不消耗 API 额度。
-        sidecar 未启动或 Token 不对时，自动 fallback 到下方常规 provider。
-        <strong style={{ marginLeft: 4 }}>仅本人可见。</strong>
-      </p>
-
-      <div style={{ display: "grid", gridTemplateColumns: "auto 1fr", gap: 8, marginTop: 12, alignItems: "center" }}>
-        <span className="small">Sidecar Token</span>
-        <div style={{ display: "flex", gap: 6 }}>
-          <input
-            className="input"
-            type={showToken ? "text" : "password"}
-            value={token}
-            placeholder="在终端 npm run sidecar 后从控制台复制"
-            onChange={(e) => onTokenChange(e.target.value)}
-            autoComplete="off"
-            spellCheck={false}
-            style={{ flex: 1 }}
-          />
-          <button type="button" className="btn ghost" onClick={() => setShowToken((v) => !v)}>
-            {showToken ? "隐藏" : "显示"}
-          </button>
-        </div>
-
-        <span className="small">Base URL</span>
-        <input
-          className="input"
-          type="text"
-          value={baseUrl}
-          placeholder="http://127.0.0.1:7788"
-          onChange={(e) => onBaseUrlChange(e.target.value)}
-          spellCheck={false}
-        />
-
-        <span className="small">默认模型</span>
-        <select
-          className="input"
-          value={model}
-          onChange={(e) => onModelChange(e.target.value)}
-        >
-          <option value="sonnet">Sonnet（推荐）</option>
-          <option value="opus">Opus（强但慢）</option>
-          <option value="haiku">Haiku（快而省）</option>
-        </select>
-      </div>
-
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12 }}>
+    <>
+      {/* ── 触发按钮（内联于 AI 配置末尾） ── */}
+      <div style={{ marginTop: 14 }}>
         <button
           type="button"
-          className="btn"
-          disabled={!enabled || conn === "checking"}
-          onClick={() => void test()}
+          className={cn(
+            "flex w-full items-center justify-between rounded-lg border px-4 py-3 text-sm transition-colors",
+            "border-border/40 bg-background/30 hover:bg-background/60",
+          )}
+          onClick={() => {
+            setPwInput("");
+            setPwError(false);
+            setPwOpen(true);
+          }}
         >
-          {conn === "checking" ? "测试中…" : "测试连接"}
+          <span className="flex items-center gap-2">
+            <Zap className="h-4 w-4 text-amber-400" />
+            <span className="font-medium">高级接入</span>
+            <span className="text-xs text-muted-foreground">本地直连模式 · 听雨官方订阅直连</span>
+          </span>
+          <span className="flex items-center gap-2">
+            {enabled && accepted && (
+              <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-400">
+                启用中
+              </span>
+            )}
+            <Lock className="h-3.5 w-3.5 text-muted-foreground/50" />
+            <ChevronRight className="h-4 w-4 text-muted-foreground/50" />
+          </span>
         </button>
-        <span className="small" style={{ color: statusColor }}>
-          {connMsg || (enabled ? "尚未测试" : "已禁用")}
-        </span>
       </div>
 
-      <p className="muted small" style={{ marginTop: 10, fontSize: "0.74rem", lineHeight: 1.6 }}>
-        启动方式：在仓库根 <code>npm run sidecar</code>（首次需 <code>npm run sidecar:install</code>）。
-        Token 持久化在 <code>~/.liubai-sidecar/config.json</code>，重启后不会变。
-        <br />
-        重要：请勿设置 <code>ANTHROPIC_API_KEY</code> 环境变量——会让 SDK 走 API 计费而不是订阅。
-      </p>
-    </div>
+      {/* ── 密码验证弹窗 ── */}
+      <Dialog open={pwOpen} onOpenChange={(v) => { setPwOpen(v); if (!v) { setPwInput(""); setPwError(false); } }}>
+        <DialogContent
+          className="max-w-xs"
+          onOpenAutoFocus={() => setTimeout(() => pwInputRef.current?.focus(), 0)}
+        >
+          <DialogTitle className="flex items-center gap-2 text-sm font-semibold">
+            <Lock className="h-4 w-4 text-amber-400" />
+            验证访问密码
+          </DialogTitle>
+          <p className="text-xs text-muted-foreground">高级接入为受保护功能，请输入访问密码继续。</p>
+          <form
+            className="space-y-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (pwInput.trim() === "1005") {
+                setPwOpen(false);
+                setPwInput("");
+                setPwError(false);
+                setOpen(true);
+              } else {
+                setPwError(true);
+                setPwInput("");
+                pwInputRef.current?.focus();
+              }
+            }}
+          >
+            <input
+              ref={pwInputRef}
+              type="password"
+              className={cn(
+                "input w-full",
+                pwError && "border-destructive ring-1 ring-destructive/40",
+              )}
+              placeholder="请输入密码"
+              value={pwInput}
+              autoComplete="off"
+              onChange={(e) => { setPwInput(e.target.value); setPwError(false); }}
+            />
+            {pwError && (
+              <p className="text-xs text-destructive">密码错误，请重试。</p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button type="button" className="btn ghost text-sm" onClick={() => setPwOpen(false)}>取消</button>
+              <button type="submit" className="btn text-sm" disabled={!pwInput.trim()}>确认</button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── 配置弹窗 ── */}
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent
+          className="max-w-lg"
+          style={{ maxHeight: "90vh", overflowY: "auto" }}
+        >
+          <DialogTitle className="flex items-center gap-2 text-base font-semibold">
+            <Zap className="h-4 w-4 text-amber-400" />
+            高级接入
+          </DialogTitle>
+
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            本地直连模式（高级）· 听雨官方订阅直连。
+            高级用户可在<strong>自己的电脑</strong>上启动 sidecar，使用<strong>自己的 Claude 账号</strong>登录，
+            让 AI 调用走 Claude 订阅而不是 API 计费。平台<strong>不托管</strong>任何第三方账号或密钥；
+            所有凭据仅保存在本机浏览器 localStorage 中。
+          </p>
+
+          {/* 总开关 */}
+          <div className="flex items-center justify-between rounded-lg border border-border/30 bg-background/30 px-4 py-3">
+            <span className="text-sm font-medium">启用本地直连</span>
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={enabled}
+                disabled={!accepted}
+                onChange={(e) => onToggle(e.target.checked)}
+              />
+              <span className="text-xs text-muted-foreground">{enabled ? "已启用" : "未启用"}</span>
+            </label>
+          </div>
+
+          {/* 协议同意门禁 */}
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 text-xs leading-relaxed">
+            <p className="mb-2 font-semibold text-amber-400">启用前请确认（自担风险）</p>
+            <ol className="space-y-1 pl-4" style={{ listStyleType: "decimal" }}>
+              <li>本功能为<strong>本地自配置</strong>：需在<strong>自己的电脑</strong>上启动 <code>npm run sidecar</code>，并已用<strong>你自己的 Claude 账号</strong>登录 Claude Code CLI。</li>
+              <li>平台<strong>不托管</strong>你的 Claude 账号、token 或任何第三方密钥；token 仅保存在浏览器 localStorage。</li>
+              <li>该方式<strong>未必</strong>被 Claude 平台条款明确覆盖；封号、限速、异常计费等风险<strong>由你本人自担</strong>。</li>
+              <li>请<strong>仅本机使用</strong>：sidecar 只监听 <code>127.0.0.1</code>，不要暴露公网或与他人共享 token。</li>
+            </ol>
+            <label className="mt-3 flex cursor-pointer items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-0.5 shrink-0"
+                checked={accepted}
+                onChange={(e) => onAcceptDisclaimer(e.target.checked)}
+              />
+              <span>
+                我已阅读并同意 <Link to="/terms" onClick={() => setOpen(false)}>《用户协议》</Link> 与{" "}
+                <Link to="/privacy" onClick={() => setOpen(false)}>《隐私政策》</Link> 中「本地直连模式（高级）」的相关说明，并自愿启用。
+              </span>
+            </label>
+            {accepted && acceptedAt ? (
+              <p className="mt-1.5 text-[10px] text-muted-foreground">已于 {acceptedAt} 同意。</p>
+            ) : null}
+          </div>
+
+          {/* 同意后展开配置 */}
+          {accepted && showDetails ? (
+            <div className="space-y-3">
+              <div className="grid grid-cols-[auto_1fr] items-center gap-x-4 gap-y-3">
+                <span className="text-xs text-muted-foreground">Sidecar Token</span>
+                <div className="flex gap-2">
+                  <input
+                    className="input flex-1"
+                    type={showToken ? "text" : "password"}
+                    value={token}
+                    placeholder="从终端 npm run sidecar 控制台复制"
+                    onChange={(e) => onTokenChange(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                  <button type="button" className="btn ghost text-xs" onClick={() => setShowToken((v) => !v)}>
+                    {showToken ? "隐藏" : "显示"}
+                  </button>
+                </div>
+
+                <span className="text-xs text-muted-foreground">Base URL</span>
+                <input
+                  className="input"
+                  type="text"
+                  value={baseUrl}
+                  placeholder="http://127.0.0.1:7788"
+                  onChange={(e) => onBaseUrlChange(e.target.value)}
+                  spellCheck={false}
+                />
+
+                <span className="text-xs text-muted-foreground">默认模型</span>
+                <select
+                  className="input"
+                  value={model}
+                  onChange={(e) => onModelChange(e.target.value)}
+                >
+                  <option value="sonnet">Sonnet（推荐）</option>
+                  <option value="opus">Opus（强但慢）</option>
+                  <option value="haiku">Haiku（快而省）</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-3 pt-1">
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={!enabled || conn === "checking"}
+                  onClick={() => void test()}
+                >
+                  {conn === "checking" ? "测试中…" : "测试连接"}
+                </button>
+                <span className="text-xs" style={{ color: statusColor }}>
+                  {connMsg || (enabled ? "尚未测试" : "已禁用")}
+                </span>
+              </div>
+
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                启动方式：在仓库根 <code>npm run sidecar</code>（首次需 <code>npm run sidecar:install</code>）。
+                Token 持久化在 <code>~/.liubai-sidecar/config.json</code>，重启后不会变。<br />
+                重要：请勿设置 <code>ANTHROPIC_API_KEY</code> 环境变量——会让 SDK 走 API 计费而不是订阅。
+              </p>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
