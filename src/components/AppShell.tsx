@@ -765,7 +765,7 @@ export function AppShell() {
                     <div className="grid grid-cols-2 gap-2">
                       {[
                         { label: "字数仓剩余",  value: "—" },
-                        { label: "星月币可用",   value: "—" },
+                        { label: "留白笺可用",   value: "—" },
                         { label: "每日免费重塑", value: "0 / 0" },
                         { label: "会员时效",    value: "未开通" },
                       ].map(({ label, value }) => (
@@ -796,7 +796,7 @@ export function AppShell() {
                     <div className="space-y-2">
                       <Button type="button" className="h-9 w-full text-sm">开通 / 升级会员</Button>
                       <Button type="button" variant="secondary" className="h-8 w-full text-xs">获得更多字数</Button>
-                      <Button type="button" variant="outline" className="h-8 w-full text-xs">兑换星月币</Button>
+                      <Button type="button" variant="outline" className="h-8 w-full text-xs">兑换留白笺</Button>
                       <Button type="button" variant="outline" className="h-8 w-full text-xs">个人主页</Button>
                     </div>
                   </div>
