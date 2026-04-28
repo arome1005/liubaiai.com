@@ -8,6 +8,7 @@ import {
   WRITING_RAG_PER_HIT_MAX_CHARS,
   clampReferenceRagSnippetForAssembleBody,
 } from "../util/tuiyan-reference-inject-text";
+import { findOutlineMentionedCharacterNames } from "../util/sheng-hui-outline-character-detect";
 
 const MAX_OUTLINE_CHARS = 48000;
 const MAX_BODY_TAIL_CHARS = 12000;
@@ -25,19 +26,13 @@ export type CharacterVoiceLock = {
 
 /**
  * 从大纲文本中检测出现了哪些人物名（与锦囊人物列表交叉匹配）。
- * 返回匹配到的人物名 Set。
+ * 实现见 `findOutlineMentionedCharacterNames`（长名优先非重叠、单字名不自动检）。
  */
 export function detectCharactersInOutline(
   outlineText: string,
   characters: { name: string }[],
 ): Set<string> {
-  const matched = new Set<string>();
-  for (const c of characters) {
-    if (c.name.trim() && outlineText.includes(c.name.trim())) {
-      matched.add(c.name.trim());
-    }
-  }
-  return matched;
+  return findOutlineMentionedCharacterNames(outlineText, characters);
 }
 
 export function formatCharacterVoiceLocksForPrompt(locks: CharacterVoiceLock[]): string {
@@ -116,6 +111,58 @@ export const MODE_DESCS: Record<ShengHuiGenerateMode, string> = {
   dialogue_first: "先生成骨架对话，再补充动作与叙述描写（两步）",
   segment: "每次生成一个场景段落，自动携带上段末尾续接",
 };
+
+/** 右栏主模式：四段式切换 */
+export const SHENG_HUI_MAIN_MODES: readonly ShengHuiGenerateMode[] = ["write", "continue", "rewrite", "polish"];
+/** 高级模式下拉：骨架 / 对话优先 / 分段接龙 */
+export const SHENG_HUI_ADVANCED_MODES: readonly ShengHuiGenerateMode[] = ["skeleton", "dialogue_first", "segment"];
+
+export const SHENG_HUI_ADVANCED_MODE_SHORT_LABEL: Partial<Record<ShengHuiGenerateMode, string>> = {
+  skeleton: "场景骨架",
+  dialogue_first: "对话优先",
+  segment: "分段接龙",
+};
+
+/** 右栏「高级」下拉的骨架/对话优先/接龙等是否命中当前模式 */
+export function shengHuiIsAdvancedGenerateMode(m: ShengHuiGenerateMode): boolean {
+  return (SHENG_HUI_ADVANCED_MODES as readonly string[]).includes(m);
+}
+
+/** 叙事「热度」：1 克制 … 5 热烈；写入 `WritingWorkStyleSlice.extraRules` 参与生成 */
+export type ShengHuiEmotionTemperature = 1 | 2 | 3 | 4 | 5;
+
+export function clampShengHuiEmotionTemperature(n: number): ShengHuiEmotionTemperature {
+  const r = Math.round(Number.isFinite(n) ? n : 3);
+  if (r <= 1) return 1;
+  if (r >= 5) return 5;
+  return r as ShengHuiEmotionTemperature;
+}
+
+/** 生辉 improve-plan 第 8 步：三档说明，拼入风格补充规则 */
+export function shengHuiEmotionTemperaturePromptLine(t: ShengHuiEmotionTemperature): string {
+  if (t <= 2) return "叙述克制，情绪内化，少用形容词，多用行为描写表达情感。";
+  if (t === 3) return "情绪适中，自然表达。";
+  return "情绪饱满，意象丰富，可适当抒情，感官描写密集。";
+}
+
+export function shengHuiIsTwoStepGenerateMode(m: ShengHuiGenerateMode): boolean {
+  return m === "skeleton" || m === "dialogue_first";
+}
+
+export function shengHuiTwoStepPhaseFromIntermediate(intermediate: string | null): 1 | 2 {
+  return intermediate ? 2 : 1;
+}
+
+/** 右栏主「生成」按钮：两步模式第一步/第二步与主模式标签 */
+export function shengHuiComposePrimaryButtonLabel(
+  m: ShengHuiGenerateMode,
+  twoStepIntermediate: string | null,
+): string {
+  if (shengHuiIsTwoStepGenerateMode(m)) {
+    return twoStepIntermediate ? "展开正文" : m === "skeleton" ? "生成骨架" : "对话骨架";
+  }
+  return MODE_LABELS[m];
+}
 
 const MODE_TASK_PREFIXES: Record<ShengHuiGenerateMode, string> = {
   write: "【任务：按纲仿写】请依照下方大纲与文策，生成本章正文。若有文风参考段落，请学习其笔法并自然融入。",

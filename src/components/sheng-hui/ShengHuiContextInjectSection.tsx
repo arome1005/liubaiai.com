@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import type { BodyTailParagraphCount } from "../../ai/sheng-hui-generate";
+import { SHENG_HUI_BODY_TAIL_SELECT_OPTIONS } from "../../util/sheng-hui-body-tail";
 import { cn } from "../../lib/utils";
 import type { Work } from "../../db/types";
 import { isLocalAiProvider } from "../../ai/local-provider";
@@ -75,12 +76,12 @@ export function ShengHuiContextInjectSection({
               className="mt-0.5 shrink-0"
               checked={bodyTailCount !== false}
               disabled={!chapterId}
-              onChange={(e) => onBodyTailCountChange(e.target.checked ? 3 : false)}
+              onChange={(e) => onBodyTailCountChange(e.target.checked ? 1 : false)}
             />
-            <span className="shrink-0">续接末尾</span>
+            <span className="shrink-0">续接正文末尾</span>
             {bodyTailCount !== false && (
               <select
-                className="ml-auto rounded border border-border/40 bg-background/60 px-1 py-0 text-[11px] text-foreground focus:outline-none"
+                className="ml-auto max-w-[min(100%,9rem)] rounded border border-border/40 bg-background/60 px-1 py-0 text-[11px] text-foreground focus:outline-none"
                 value={String(bodyTailCount)}
                 disabled={!chapterId}
                 onChange={(e) => {
@@ -88,10 +89,11 @@ export function ShengHuiContextInjectSection({
                   onBodyTailCountChange(v === "all" ? "all" : (Number(v) as 1 | 3 | 5));
                 }}
               >
-                <option value="1">最近 1 段</option>
-                <option value="3">最近 3 段</option>
-                <option value="5">最近 5 段</option>
-                <option value="all">全部末尾</option>
+                {SHENG_HUI_BODY_TAIL_SELECT_OPTIONS.map((o) => (
+                  <option key={o.value} value={String(o.value)}>
+                    {o.label}
+                  </option>
+                ))}
               </select>
             )}
           </div>

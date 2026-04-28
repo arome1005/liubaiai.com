@@ -1,6 +1,7 @@
 import type { AiSettings } from "../../ai/types";
 import { formatSceneStateForPrompt, isSceneStateCardEmpty, type BodyTailParagraphCount, type SceneStateCard } from "../../ai/sheng-hui-generate";
 import type { Chapter, ReferenceSearchHit, Work } from "../../db/types";
+import type { ShengHuiBibleCharRow } from "../../util/sheng-hui-voice-lock";
 import { HubAiSettingsHint } from "../HubAiSettingsHint";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
@@ -32,7 +33,7 @@ export function ShengHuiRightMaterialsBlock(props: {
   onSceneStateOpenChange: (v: boolean | ((b: boolean) => boolean)) => void;
   sceneStateExtracting: boolean;
   onExtractSceneStateFromSnapshot: () => void;
-  bibleCharacters: { name: string; voiceNotes: string; taboos: string }[];
+  bibleCharacters: ShengHuiBibleCharRow[];
   detectedCharNames: Set<string>;
   lockedCharNames: Set<string>;
   onToggleLockedCharName: (name: string, hasData: boolean) => void;

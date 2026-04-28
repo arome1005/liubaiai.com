@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { PanelLeftOpen } from "lucide-react";
 import { Button } from "../ui/button";
+import type { ShengHuiEmotionTemperature } from "../../ai/sheng-hui-generate";
 
 export interface ShengHuiRightColumnSyncHintProps {
   /** 宽屏且左侧已收起时，提供展开入口 */
@@ -10,7 +11,7 @@ export interface ShengHuiRightColumnSyncHintProps {
   contextSummary: string;
   ragSummary: string;
   targetWords: number;
-  emotionTemperature: number;
+  emotionTemperature: ShengHuiEmotionTemperature;
   modelTemperatureLabel: string;
 }
 

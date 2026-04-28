@@ -1,28 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
-import type { WritingWorkStyleSlice } from "../ai/assemble-context";
 import { clampContextText } from "../ai/assemble-context";
 import { isLocalAiProvider } from "../ai/local-provider";
-import { getProviderConfig, getProviderTemperature, loadAiSettings } from "../ai/storage";
-import { isFirstAiGateCancelledError } from "../ai/client";
+import { getProviderTemperature, loadAiSettings } from "../ai/storage";
 import {
   assertShengHuiPrivacy,
-  buildShengHuiChatMessages,
-  detectCharactersInOutline,
-  estimateShengHuiRoughTokens,
   formatSceneStateForPrompt,
-  generateShengHuiProseStream,
   isSceneStateCardEmpty,
   MODE_DESCS,
-  takeTailByParagraphs,
-  type BodyTailParagraphCount,
-  type CharacterVoiceLock,
+  shengHuiEmotionTemperaturePromptLine,
+  shengHuiIsTwoStepGenerateMode,
+  shengHuiTwoStepPhaseFromIntermediate,
   type SceneStateCard,
-  type ShengHuiGenerateMode,
 } from "../ai/sheng-hui-generate";
-import { addTodayApproxTokens } from "../ai/daily-approx-tokens";
-import { confirmInjectionPrompt, resolveInjectionConfirmPrompt } from "../util/ai-injection-confirm";
 import type { AiSettings } from "../ai/types";
 import {
   getChapterBible,
@@ -38,46 +29,45 @@ import {
 import type { Chapter, ChapterBible, ReferenceSearchHit, Work, WorkStyleCard } from "../db/types";
 import { resolveDefaultChapterId } from "../util/resolve-default-chapter";
 import { formatRelativeUpdateMs } from "../util/relativeTime";
-import {
-  appendShengHuiSnapshot,
-  deleteShengHuiSnapshot,
-  loadShengHuiSnapshotBucket,
-  setShengHuiAdoptedSnapshot,
-  type ShengHuiSnapshotBucket,
-} from "../util/sheng-hui-snapshots";
+import { loadShengHuiSnapshotBucket, setShengHuiAdoptedSnapshot, type ShengHuiSnapshotBucket } from "../util/sheng-hui-snapshots";
 import { workTagsToProfileText } from "../util/work-tags";
 import { searchWritingRagMerged } from "../util/work-rag-runtime";
-import { writeAiPanelDraft } from "../util/ai-panel-draft";
+import { writeAiPanelDraftWithHistory } from "../util/ai-panel-draft";
 import { HubAiSettingsHint } from "../components/HubAiSettingsHint";
 import { Button } from "../components/ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "../components/ui/alert-dialog";
-import { PenLine, Undo2 } from "lucide-react";
+import { BookOpen, PanelLeft, PenLine } from "lucide-react";
+import { readTodayApproxTokens } from "../ai/daily-approx-tokens";
 import { ShengHuiAmbientBg } from "../components/sheng-hui/ShengHuiAmbientBg";
 import { ShengHuiCenterManuscriptColumn } from "../components/sheng-hui/ShengHuiCenterManuscriptColumn";
 import { ShengHuiLeftChapterRail } from "../components/sheng-hui/ShengHuiLeftChapterRail";
-import { ShengHuiModelTrigger } from "../components/sheng-hui/ShengHuiModelTrigger";
 import { ShengHuiRightColumnSyncHint } from "../components/sheng-hui/ShengHuiRightColumnSyncHint";
 import { ShengHuiRightComposeBlock } from "../components/sheng-hui/ShengHuiRightComposeBlock";
 import { ShengHuiRightMaterialsBlock } from "../components/sheng-hui/ShengHuiRightMaterialsBlock";
 import { ShengHuiRightPanel } from "../components/sheng-hui/ShengHuiRightPanel";
+import { ShengHuiDeleteSnapshotDialog } from "../components/sheng-hui/ShengHuiDeleteSnapshotDialog";
 import { ShengHuiRightVersionsBlock } from "../components/sheng-hui/ShengHuiRightVersionsBlock";
+import { ShengHuiWorkspaceTopBar } from "../components/sheng-hui/ShengHuiWorkspaceTopBar";
 import type { ShengHuiRightPanelTab } from "../components/sheng-hui/sheng-hui-right-panel-types";
+import { Sheet, SheetContent } from "../components/ui/sheet";
 import { AiPanelModelPickerDialog } from "../components/ai-panel/AiPanelModelPickerDialog";
 import { useShengHuiModelPickerBridge } from "../hooks/useShengHuiModelPickerBridge";
 import { useShengHuiWorkspacePrefs } from "../hooks/useShengHuiWorkspacePrefs";
+import {
+  useShengHuiGenerationLifecycle,
+  type ShengHuiBuildResult,
+} from "../hooks/useShengHuiGenerationLifecycle";
 import { summarizeShengHuiContextInject, summarizeShengHuiRagSelection } from "../util/sheng-hui-context-inject-summary";
-import { buildWorkEditorUrl } from "../util/sheng-hui-deeplink";
 import { cn } from "../lib/utils";
 import { useShengHuiDeepLink } from "../hooks/useShengHuiDeepLink";
+import { useShengHuiBodyTailPreference } from "../hooks/useShengHuiBodyTailPreference";
+import { useShengHuiRagStyleFeatures } from "../hooks/useShengHuiRagStyleFeatures";
+import { useShengHuiEmotionTemperature } from "../hooks/useShengHuiEmotionTemperature";
+import { useShengHuiGenerateMode } from "../hooks/useShengHuiGenerateMode";
+import { useShengHuiSnapshotDelete } from "../hooks/useShengHuiSnapshotDelete";
+import { useShengHuiVoiceLock } from "../hooks/useShengHuiVoiceLock";
+import { computeShengHuiChapterBodyTail } from "../util/sheng-hui-body-tail";
+import { buildCharacterVoiceLocksForShengHui } from "../util/sheng-hui-voice-lock";
+import { workStyleCardToWritingSlice } from "../util/work-style-card-to-slice";
 
 // ─────────────────────────────────────────────
 // Constants
@@ -117,17 +107,6 @@ function readInitialRightPanelTab(): ShengHuiRightPanelTab {
 
 function outlineStorageKey(workId: string | null): string {
   return LS_OUTLINE_PREFIX + (workId ?? "none");
-}
-
-function styleCardToSlice(card: WorkStyleCard | undefined): WritingWorkStyleSlice {
-  if (!card) return { pov: "", tone: "", bannedPhrases: "", styleAnchor: "", extraRules: "" };
-  return {
-    pov: card.pov ?? "",
-    tone: card.tone ?? "",
-    bannedPhrases: card.bannedPhrases ?? "",
-    styleAnchor: card.styleAnchor ?? "",
-    extraRules: card.extraRules ?? "",
-  };
 }
 
 async function buildSettingIndexText(workId: string, maxChars: number): Promise<string> {
@@ -199,7 +178,7 @@ export function ShengHuiPage() {
   // Context toggles
   const [includeSummary, setIncludeSummary] = useState(true);
   const [includeBible, setIncludeBible] = useState(true);
-  const [bodyTailCount, setBodyTailCount] = useState<BodyTailParagraphCount | false>(false);
+  const { bodyTailCount, setBodyTailCount } = useShengHuiBodyTailPreference();
   const [includeSettingIndex, setIncludeSettingIndex] = useState(false);
   const [settingIndexText, setSettingIndexText] = useState("");
   const [settingIndexLoading, setSettingIndexLoading] = useState(false);
@@ -209,34 +188,24 @@ export function ShengHuiPage() {
   const [ragResults, setRagResults] = useState<ReferenceSearchHit[]>([]);
   const [ragSearching, setRagSearching] = useState(false);
   const [selectedExcerptIds, setSelectedExcerptIds] = useState<Set<string>>(new Set());
-  // 风格解构器：chunkId → 提炼出的笔法描述（替代原文注入）
-  const [styleFeatures, setStyleFeatures] = useState<Map<string, string>>(new Map());
-  const [extractingFeatureIds, setExtractingFeatureIds] = useState<Set<string>>(new Set());
-
-  // 人物声音锁
-  const [bibleCharacters, setBibleCharacters] = useState<{ name: string; voiceNotes: string; taboos: string }[]>([]);
-  const [lockedCharNames, setLockedCharNames] = useState<Set<string>>(new Set());
-
-  // Writing
-  const [generateMode, setGenerateMode] = useState<ShengHuiGenerateMode>("write");
-  /** 两步模式（skeleton / dialogue_first）的中间结果：第一步骨架输出 */
-  const [twoStepIntermediate, setTwoStepIntermediate] = useState<string | null>(null);
-  /** 快照删除确认 Dialog */
-  const [deleteSnapshotDialogOpen, setDeleteSnapshotDialogOpen] = useState(false);
-  /** 情绪温度：1=克制 … 5=热烈 */
-  const [emotionTemperature, setEmotionTemperature] = useState(3);
   const [outline, setOutline] = useState("");
   const [outlineHydrated, setOutlineHydrated] = useState(false);
-  const [output, setOutput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const accRef = useRef("");
-  const [lastRoughEstimate, setLastRoughEstimate] = useState<{
-    inputApprox: number;
-    outputEstimateApprox: number;
-    totalApprox: number;
-  } | null>(null);
+  const { styleFeatures, extractingFeatureIds, runExtract, clearForNewRagSearch } = useShengHuiRagStyleFeatures(workId);
+  const { bibleCharacters, detectedCharNames, lockedCharNames, toggleLockedCharName } = useShengHuiVoiceLock(
+    workId,
+    outline,
+  );
+  /**
+   * `runGenerate` 等流式生命周期已下沉到 `useShengHuiGenerationLifecycle`：
+   * 它持有 output/busy/error/lastRoughEstimate 与 abort/acc/latestTarget refs，
+   * 并在 workId/chapterId 切换时自动 abort in-flight 流。本页通过下面的
+   * `buildGenerateArgs` 把所有装配上下文（outline、generateMode、各注入开关、RAG、
+   * 场景卡、人物声音锁、风格卡、目标字数、情绪温度等）以一次 async 调用喂给 hook；
+   * 通过 `onTwoStepIntermediateChange` / `onSnapshotPersisted` 让 hook 写回页内状态。
+   */
+  const buildGenerateArgsRef = useRef<() => Promise<ShengHuiBuildResult>>(() =>
+    Promise.resolve({ ok: false, error: "未初始化" }),
+  );
 
   // Parameters panel
   const [targetWords, setTargetWords] = useState(2000);
@@ -282,10 +251,83 @@ export function ShengHuiPage() {
   });
   const [selectedSnapshotId, setSelectedSnapshotId] = useState<string | null>(null);
 
-  const { isLg, setLeftOpen, leftExpanded, stepHintDismissed, dismissStepHint, prefsHydrated } =
-    useShengHuiWorkspacePrefs();
+  const {
+    isLg,
+    setLeftOpen,
+    leftExpanded,
+    stepHintDismissed,
+    dismissStepHint,
+    prefsHydrated,
+    focusMode,
+    toggleFocusMode,
+  } = useShengHuiWorkspacePrefs();
+
+  const [genElapsedSec, setGenElapsedSec] = useState(0);
+  const [todayTokensSnapshot, setTodayTokensSnapshot] = useState(0);
+  const [mobileSheet, setMobileSheet] = useState<null | "left" | "right">(null);
 
   useShengHuiDeepLink(loading, works, chapters, workId, chapterId, setWorkId, setChapterId);
+
+  const {
+    generateMode,
+    setGenerateMode,
+    twoStepIntermediate,
+    setTwoStepIntermediate,
+    resetTwoStep,
+  } = useShengHuiGenerateMode();
+
+  const { emotionTemperature, setEmotionTemperature } = useShengHuiEmotionTemperature();
+
+  /** 生辉「按纲仿写」流式生命周期（state/abort/快照写回均在 hook 内）。 */
+  const lifecycle = useShengHuiGenerationLifecycle({
+    workId,
+    chapterId,
+    settings,
+    // 用稳定包装函数代理到 ref，避免循环依赖（builder 内需要读 hook 返回的 output）。
+    buildGenerateArgs: useCallback(() => buildGenerateArgsRef.current(), []),
+    onTwoStepIntermediateChange: setTwoStepIntermediate,
+    onSnapshotPersisted: ({ snap, runWorkId, runChapterId, isCurrentTarget }) => {
+      if (isCurrentTarget) {
+        setSnapshotBucket(loadShengHuiSnapshotBucket(runWorkId, runChapterId));
+        setSelectedSnapshotId(snap.id);
+      }
+    },
+  });
+  const { output, setOutput, busy, error, setError, lastRoughEstimate, runGenerate, stop } = lifecycle;
+
+  const {
+    deleteSnapshotDialogOpen,
+    onDeleteSnapshotDialogOpenChange,
+    requestDeleteSelectedSnapshot,
+    confirmDeleteSelectedSnapshot,
+  } = useShengHuiSnapshotDelete(
+    workId,
+    chapterId,
+    selectedSnapshotId,
+    setOutput,
+    setSelectedSnapshotId,
+    setSnapshotBucket,
+  );
+
+  useEffect(() => {
+    setTodayTokensSnapshot(readTodayApproxTokens());
+  }, [busy]);
+  useEffect(() => {
+    const sync = () => setTodayTokensSnapshot(readTodayApproxTokens());
+    window.addEventListener("focus", sync);
+    return () => window.removeEventListener("focus", sync);
+  }, []);
+
+  useEffect(() => {
+    if (!busy) {
+      setGenElapsedSec(0);
+      return;
+    }
+    const t0 = Date.now();
+    setGenElapsedSec(0);
+    const id = window.setInterval(() => setGenElapsedSec(Math.floor((Date.now() - t0) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [busy]);
 
   // Derived
   const isCloudProvider = !isLocalAiProvider(settings.provider);
@@ -324,6 +366,120 @@ export function ShengHuiPage() {
     () => String(getProviderTemperature(settings, settings.provider)),
     [settings],
   );
+
+  const buildShengHuiPageGenerateArgs = useCallback(async (): Promise<ShengHuiBuildResult> => {
+    if (!workId || !work) {
+      return { ok: false, error: "请先选择作品。" };
+    }
+    if (isCloudProvider && !cloudAllowed) {
+      return { ok: false, error: "请先在设置中同意云端 AI 并允许调用。" };
+    }
+    if (generateMode === "write" && !outline.trim()) {
+      return { ok: false, error: "按纲仿写模式：请先填写「大纲与文策」。" };
+    }
+    if ((generateMode === "rewrite" || generateMode === "polish") && !output.trim()) {
+      return {
+        ok: false,
+        error: `${generateMode === "rewrite" ? "重写" : "精炼"}模式需先有草稿内容。`,
+      };
+    }
+    if (shengHuiIsTwoStepGenerateMode(generateMode) && !outline.trim()) {
+      return { ok: false, error: "请先填写「大纲与文策」。" };
+    }
+
+    const isTwoStep = shengHuiIsTwoStepGenerateMode(generateMode);
+    const twoStepPhase = shengHuiTwoStepPhaseFromIntermediate(twoStepIntermediate);
+
+    let bibleFormatted = "";
+    if (chapterId && includeBible) {
+      const row = await getChapterBible(chapterId);
+      bibleFormatted = formatChapterBibleForPrompt(row);
+    }
+    const summary = chapterId && includeSummary ? (selectedChapter?.summary ?? "").trim() : "";
+    const chapterContent = (selectedChapter?.content ?? "").trim();
+    const effectiveBodyTail = computeShengHuiChapterBodyTail({
+      fullChapterText: chapterId ? chapterContent : "",
+      bodyTailCount,
+      generateMode,
+    });
+
+    assertShengHuiPrivacy(settings, { includeChapterSummary: Boolean(summary) });
+
+    const referenceStyleExcerpts = ragResults
+      .filter((h) => selectedExcerptIds.has(h.chunkId))
+      .map((h) => {
+        const feature = styleFeatures.get(h.chunkId);
+        return feature ? `[笔法特征] ${feature}` : (h.preview ?? "").trim();
+      })
+      .filter(Boolean);
+
+    const needsDraft = generateMode === "continue" || generateMode === "rewrite" || generateMode === "polish";
+
+    const baseStyle = workStyleCardToWritingSlice(styleCard);
+    const emotionLine = shengHuiEmotionTemperaturePromptLine(emotionTemperature);
+    const effectiveWorkStyle = {
+      ...baseStyle,
+      extraRules: [baseStyle.extraRules, emotionLine].filter(Boolean).join("\n"),
+    };
+
+    const args = {
+      workTitle: work.title.trim() || "未命名",
+      chapterTitle: selectedChapter?.title?.trim() || undefined,
+      outlineAndStrategy: outline,
+      chapterSummary: summary || undefined,
+      chapterBodyTail: effectiveBodyTail || undefined,
+      chapterBibleFormatted: bibleFormatted || undefined,
+      settingIndexText: includeSettingIndex && settingIndexText.trim() ? settingIndexText : undefined,
+      workStyle: effectiveWorkStyle,
+      tagProfileText: tagProfileText || undefined,
+      referenceStyleExcerpts: referenceStyleExcerpts.length > 0 ? referenceStyleExcerpts : undefined,
+      generateMode,
+      draftToProcess: needsDraft ? (output.trim() || undefined) : undefined,
+      targetWordCount: targetWords > 0 ? targetWords : undefined,
+      sceneStateText: !isSceneStateCardEmpty(sceneState) ? formatSceneStateForPrompt(sceneState) : undefined,
+      characterVoiceLocks: buildCharacterVoiceLocksForShengHui(lockedCharNames, bibleCharacters),
+      twoStepPhase: isTwoStep ? twoStepPhase : undefined,
+      intermediateResult: isTwoStep && twoStepPhase === 2 ? (twoStepIntermediate ?? undefined) : undefined,
+    };
+
+    return {
+      ok: true,
+      args,
+      willSendBibleToCloud: isCloudProvider && Boolean(bibleFormatted.trim()),
+      outlineForSnapshotPreview: outline,
+    };
+  }, [
+    workId,
+    work,
+    isCloudProvider,
+    cloudAllowed,
+    generateMode,
+    outline,
+    output,
+    twoStepIntermediate,
+    chapterId,
+    includeBible,
+    includeSummary,
+    bodyTailCount,
+    selectedChapter,
+    includeSettingIndex,
+    settingIndexText,
+    styleCard,
+    tagProfileText,
+    ragResults,
+    selectedExcerptIds,
+    styleFeatures,
+    sceneState,
+    lockedCharNames,
+    bibleCharacters,
+    emotionTemperature,
+    targetWords,
+    settings,
+  ]);
+
+  useEffect(() => {
+    buildGenerateArgsRef.current = buildShengHuiPageGenerateArgs;
+  }, [buildShengHuiPageGenerateArgs]);
 
   useEffect(() => {
     try {
@@ -471,32 +627,6 @@ export function ShengHuiPage() {
     } catch { /* quota */ }
   }, [SCENE_STATE_KEY, sceneState]);
 
-  // 人物声音锁 — 随 workId 加载锦囊人物卡
-  useEffect(() => {
-    if (!workId) { setBibleCharacters([]); return; }
-    void listBibleCharacters(workId).then((list) =>
-      setBibleCharacters(list.map((c) => ({ name: c.name, voiceNotes: c.voiceNotes, taboos: c.taboos })))
-    );
-  }, [workId]);
-
-  // 人物声音锁 — 大纲变化时自动检测匹配人物，自动勾选有 voiceNotes/taboos 的
-  const detectedCharNames = useMemo(
-    () => detectCharactersInOutline(outline, bibleCharacters),
-    [outline, bibleCharacters],
-  );
-  useEffect(() => {
-    setLockedCharNames((prev) => {
-      const next = new Set<string>();
-      for (const name of detectedCharNames) {
-        // 自动勾选有 voiceNotes 或 taboos 的；保留用户手动勾选的
-        const char = bibleCharacters.find((c) => c.name === name);
-        if (char && (char.voiceNotes.trim() || char.taboos.trim())) next.add(name);
-        else if (prev.has(name)) next.add(name); // 保留用户手动勾选
-      }
-      return next;
-    });
-  }, [detectedCharNames, bibleCharacters]);
-
   // Snapshots
   useEffect(() => {
     if (!workId) return;
@@ -527,8 +657,7 @@ export function ShengHuiPage() {
     setRagSearching(true);
     setRagResults([]);
     setSelectedExcerptIds(new Set());
-    setStyleFeatures(new Map());   // 新搜索 → 旧提炼失效
-    setExtractingFeatureIds(new Set());
+    clearForNewRagSearch();
     try {
       const hits = await searchWritingRagMerged({
         workId: workId ?? "",
@@ -602,224 +731,10 @@ ${prose.slice(-2000)}`;
     });
   }
 
-  async function extractStyleFeature(chunkId: string, text: string) {
-    if (!text.trim() || extractingFeatureIds.has(chunkId)) return;
-    setExtractingFeatureIds((prev) => new Set(prev).add(chunkId));
-    try {
-      const { generateWithProviderStream } = await import("../ai/client");
-      const { getProviderConfig } = await import("../ai/storage");
-      const cfg = getProviderConfig(settings, settings.provider);
-      const prompt = `请从以下中文小说段落中，提炼其笔法特征。
-要求：输出 3-4 句简洁的风格描述，涵盖：句子节奏（长短句分布）、遣词风格（古典/白话/现代）、感官偏好（视/听/触/心理）、情绪处理方式（外化动作还是内化心理）。
-不要引用原文句子，不要解释，直接给出描述。
-
-【段落】
-${text.slice(0, 1500)}`;
-      let result = "";
-      await generateWithProviderStream({
-        provider: settings.provider,
-        config: cfg,
-        messages: [{ role: "user", content: prompt }],
-        onDelta: (d) => { result += d; },
-        signal: undefined,
-        usageLog: { task: "生辉·笔法提炼", workId },
-      });
-      const feature = result.trim();
-      if (feature) {
-        setStyleFeatures((prev) => new Map(prev).set(chunkId, feature));
-        // 自动勾选已提炼条目
-        setSelectedExcerptIds((prev) => new Set(prev).add(chunkId));
-      }
-    } catch {
-      toast.error("笔法提炼失败，请重试。");
-    } finally {
-      setExtractingFeatureIds((prev) => {
-        const next = new Set(prev);
-        next.delete(chunkId);
-        return next;
-      });
-    }
-  }
-
-  async function runGenerate() {
-    if (!workId || !work || busy) return;
-    if (isCloudProvider && !cloudAllowed) {
-      setError("请先在设置中同意云端 AI 并允许调用。");
-      return;
-    }
-    if (generateMode === "write" && !outline.trim()) {
-      setError("按纲仿写模式：请先填写「大纲与文策」。");
-      return;
-    }
-    if ((generateMode === "rewrite" || generateMode === "polish") && !output.trim()) {
-      setError(`${generateMode === "rewrite" ? "重写" : "精炼"}模式需先有草稿内容。`);
-      return;
-    }
-    if ((generateMode === "skeleton" || generateMode === "dialogue_first") && !outline.trim()) {
-      setError("请先填写「大纲与文策」。");
-      return;
-    }
-
-    // 两步模式：判断当前处于第几步
-    const isTwoStep = generateMode === "skeleton" || generateMode === "dialogue_first";
-    const twoStepPhase: 1 | 2 = isTwoStep && twoStepIntermediate ? 2 : 1;
-    // 分段接龙：使用上一段末尾作为 bodyTail
-    const isSegment = generateMode === "segment";
-
-    let skipSnapshotAppend = false;
-    setError(null);
-    setOutput("");
-    accRef.current = "";
-    abortRef.current?.abort();
-    const ac = new AbortController();
-    abortRef.current = ac;
-    setBusy(true);
-
-    try {
-      let bibleFormatted = "";
-      if (chapterId && includeBible) {
-        const row = await getChapterBible(chapterId);
-        bibleFormatted = formatChapterBibleForPrompt(row);
-      }
-      const summary = chapterId && includeSummary ? (selectedChapter?.summary ?? "").trim() : "";
-      const bodyTailRaw = chapterId && bodyTailCount !== false ? (selectedChapter?.content ?? "").trim() : "";
-      const bodyTail = bodyTailRaw ? takeTailByParagraphs(bodyTailRaw, bodyTailCount as BodyTailParagraphCount) : "";
-
-      assertShengHuiPrivacy(settings, { includeChapterSummary: Boolean(summary) });
-
-      const cfg = getProviderConfig(settings, settings.provider);
-      if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
-        setError("请先在设置中填写当前模型的 API Key。");
-        return;
-      }
-
-      // 有提炼结果的用笔法描述，没有的用原文 preview
-      const referenceStyleExcerpts = ragResults
-        .filter((h) => selectedExcerptIds.has(h.chunkId))
-        .map((h) => {
-          const feature = styleFeatures.get(h.chunkId);
-          return feature ? `[笔法特征] ${feature}` : (h.preview ?? "").trim();
-        })
-        .filter(Boolean);
-
-      const needsDraft = generateMode === "continue" || generateMode === "rewrite" || generateMode === "polish";
-      // 分段接龙：强制带上末尾 1 段（若未开启续接则自动补）
-      const effectiveBodyTail = isSegment && !bodyTail
-        ? takeTailByParagraphs((selectedChapter?.content ?? "").trim(), 1)
-        : bodyTail;
-
-      // 情绪温度 → 注入 extraRules 尾部
-      const emotionTempHint =
-        emotionTemperature <= 2
-          ? "叙述克制，情绪内化，少用形容词，多用行为描写表达情感。"
-          : emotionTemperature >= 4
-            ? "情绪饱满，意象丰富，可适当抒情，感官描写密集。"
-            : "";
-      const baseStyle = styleCardToSlice(styleCard);
-      const effectiveWorkStyle: typeof baseStyle = emotionTempHint
-        ? { ...baseStyle, extraRules: [baseStyle.extraRules, emotionTempHint].filter(Boolean).join("\n") }
-        : baseStyle;
-
-      const generateArgs = {
-        workTitle: work.title.trim() || "未命名",
-        chapterTitle: selectedChapter?.title?.trim() || undefined,
-        outlineAndStrategy: outline,
-        chapterSummary: summary || undefined,
-        chapterBodyTail: effectiveBodyTail || undefined,
-        chapterBibleFormatted: bibleFormatted || undefined,
-        settingIndexText: includeSettingIndex && settingIndexText.trim() ? settingIndexText : undefined,
-        workStyle: effectiveWorkStyle,
-        tagProfileText: tagProfileText || undefined,
-        referenceStyleExcerpts: referenceStyleExcerpts.length > 0 ? referenceStyleExcerpts : undefined,
-        generateMode,
-        draftToProcess: needsDraft ? (output.trim() || undefined) : undefined,
-        targetWordCount: targetWords > 0 ? targetWords : undefined,
-        sceneStateText: !isSceneStateCardEmpty(sceneState) ? formatSceneStateForPrompt(sceneState) : undefined,
-        characterVoiceLocks: (() => {
-          const locks: CharacterVoiceLock[] = [];
-          for (const name of lockedCharNames) {
-            const c = bibleCharacters.find((ch) => ch.name === name);
-            if (c && (c.voiceNotes.trim() || c.taboos.trim())) {
-              locks.push({ name: c.name, voiceNotes: c.voiceNotes, taboos: c.taboos });
-            }
-          }
-          return locks.length > 0 ? locks : undefined;
-        })(),
-        twoStepPhase: isTwoStep ? twoStepPhase : undefined,
-        intermediateResult: isTwoStep && twoStepPhase === 2 ? (twoStepIntermediate ?? undefined) : undefined,
-      };
-
-      const messages = buildShengHuiChatMessages(generateArgs);
-      const rough = estimateShengHuiRoughTokens(messages);
-      setLastRoughEstimate(rough);
-
-      const confirmPrompt = resolveInjectionConfirmPrompt({
-        messages,
-        settings,
-        willSendBibleToCloud: isCloudProvider && Boolean(bibleFormatted.trim()),
-      });
-      const roughPlain = `生辉粗估：输入约 ${rough.inputApprox.toLocaleString()} tokens，输出预留约 ${rough.outputEstimateApprox.toLocaleString()} tokens，合计约 ${rough.totalApprox.toLocaleString()}。`;
-      if (confirmPrompt.shouldPrompt) {
-        if (
-          !confirmInjectionPrompt({
-            shouldPrompt: true,
-            reasons: confirmPrompt.reasons,
-            interaction: confirmPrompt.interaction,
-            extraLines: [roughPlain],
-          })
-        ) {
-          return;
-        }
-      }
-
-      const r = await generateShengHuiProseStream({
-        ...generateArgs,
-        settings,
-        signal: ac.signal,
-        workId,
-        onDelta: (d) => {
-          accRef.current += d;
-          setOutput((prev) => prev + d);
-        },
-      });
-      const tail = (r.text ?? "").trim();
-      if (rough.totalApprox > 0) addTodayApproxTokens(rough.totalApprox);
-      if (tail && !accRef.current.trim()) accRef.current = tail;
-      setOutput((prev) => (prev.trim() ? prev : tail));
-      // 两步模式：第一步完成后保存中间结果，第二步完成后清除
-      if (isTwoStep) {
-        if (twoStepPhase === 1) {
-          setTwoStepIntermediate(accRef.current.trim() || tail);
-          skipSnapshotAppend = true; // 第一步骨架不存快照
-        } else {
-          setTwoStepIntermediate(null);
-        }
-      }
-    } catch (e) {
-      if (isFirstAiGateCancelledError(e)) {
-        skipSnapshotAppend = true;
-        return;
-      }
-      const aborted = e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message));
-      if (!aborted) setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      if (!skipSnapshotAppend && workId) {
-        const t = accRef.current.trim();
-        if (t) {
-          const snap = appendShengHuiSnapshot(workId, chapterId, outline, t);
-          setSnapshotBucket(loadShengHuiSnapshotBucket(workId, chapterId));
-          setSelectedSnapshotId(snap.id);
-          setOutput(t);
-        }
-      }
-      accRef.current = "";
-      setBusy(false);
-      abortRef.current = null;
-    }
-  }
-
-  function stop() {
-    abortRef.current?.abort();
+  function extractStyleFeature(chunkId: string, text: string) {
+    void runExtract(settings, chunkId, text, () => {
+      setSelectedExcerptIds((prev) => new Set(prev).add(chunkId));
+    });
   }
 
   async function importFromTuiyan() {
@@ -847,7 +762,7 @@ ${text.slice(0, 1500)}`;
 
   function handleWriteBack() {
     if (!workId || !chapterId || !output.trim()) return;
-    const result = writeAiPanelDraft(workId, chapterId, output.trim());
+    const result = writeAiPanelDraftWithHistory(workId, chapterId, output.trim());
     if (result.ok) {
       setWriteBackStatus("ok");
       setWriteBackError("");
@@ -862,33 +777,6 @@ ${text.slice(0, 1500)}`;
     if (!workId || !selectedSnapshotId) return;
     const b = setShengHuiAdoptedSnapshot(workId, chapterId, selectedSnapshotId);
     setSnapshotBucket(b);
-  }
-
-  function removeSelectedSnapshot() {
-    if (!workId || !selectedSnapshotId) return;
-    setDeleteSnapshotDialogOpen(true);
-  }
-
-  function confirmDeleteSnapshot() {
-    if (!workId || !selectedSnapshotId) return;
-    const b = deleteShengHuiSnapshot(workId, chapterId, selectedSnapshotId);
-    setSnapshotBucket(b);
-    if (b.snapshots.length === 0) {
-      setOutput("");
-      setSelectedSnapshotId(null);
-      return;
-    }
-    if (b.adoptedId) {
-      const ad = b.snapshots.find((s) => s.id === b.adoptedId);
-      if (ad) {
-        setOutput(ad.prose);
-        setSelectedSnapshotId(ad.id);
-        return;
-      }
-    }
-    const latest = [...b.snapshots].sort((a, b) => b.createdAt - a.createdAt)[0]!;
-    setOutput(latest.prose);
-    setSelectedSnapshotId(latest.id);
   }
 
   // ─── Render guards ──────────────────────────
@@ -925,6 +813,133 @@ ${text.slice(0, 1500)}`;
     );
   }
 
+  // 共享子树：大屏栅格 + 小屏 Sheet 只择一挂载，避免双份受控树。
+  const leftChapterRail = (
+    <ShengHuiLeftChapterRail
+      works={works}
+      workId={workId}
+      onWorkIdChange={(v) => {
+        setWorkId(v);
+        setError(null);
+      }}
+      lastWorkStorageKey={LS_LAST_WORK}
+      chapters={chapters}
+      chapterId={chapterId}
+      onChapterIdChange={setChapterId}
+      isLg={isLg}
+      leftExpanded={leftExpanded}
+      onSetLeftOpen={setLeftOpen}
+    />
+  );
+
+  const rightWorkspacePanel = (
+    <ShengHuiRightPanel
+      inputApprox={lastRoughEstimate?.inputApprox ?? null}
+      outputEstimateApprox={lastRoughEstimate?.outputEstimateApprox ?? null}
+      activeTab={rightPanelTab}
+      onTabChange={setRightPanelTab}
+      collapsed={rightCollapsed}
+      onCollapsedChange={setRightCollapsed}
+      compose={
+        <ShengHuiRightComposeBlock
+          generateMode={generateMode}
+          onGenerateModeChange={setGenerateMode}
+          onResetTwoStep={resetTwoStep}
+          twoStepIntermediate={twoStepIntermediate}
+          onResetTwoStepIntermediate={resetTwoStep}
+          targetWords={targetWords}
+          onTargetWordsChange={setTargetWords}
+          emotionTemperature={emotionTemperature}
+          onEmotionTemperatureChange={setEmotionTemperature}
+          settings={settings}
+          outline={outline}
+          onOutlineChange={setOutline}
+          busy={busy}
+          tuiyanImporting={tuiyanImporting}
+          workId={workId}
+          onImportFromTuiyan={importFromTuiyan}
+          onRunGenerate={runGenerate}
+          onStop={stop}
+          lastRoughEstimate={lastRoughEstimate}
+          selectedExcerptCount={selectedExcerptIds.size}
+          error={error}
+        />
+      }
+      materials={
+        <ShengHuiRightMaterialsBlock
+          workId={workId}
+          work={work}
+          settings={settings}
+          canInjectWorkMeta={canInjectWorkMeta}
+          snapshotsNewestFirst={snapshotsNewestFirst}
+          selectedChapter={selectedChapter}
+          ragQuery={ragQuery}
+          onRagQueryChange={setRagQuery}
+          ragResults={ragResults}
+          ragSearching={ragSearching}
+          onSearchRag={searchRag}
+          selectedExcerptIds={selectedExcerptIds}
+          onToggleExcerpt={toggleExcerpt}
+          styleFeatures={styleFeatures}
+          extractingFeatureIds={extractingFeatureIds}
+          onExtractStyleFeature={extractStyleFeature}
+          sceneState={sceneState}
+          onSceneStateChange={setSceneState}
+          sceneStateOpen={sceneStateOpen}
+          onSceneStateOpenChange={setSceneStateOpen}
+          sceneStateExtracting={sceneStateExtracting}
+          onExtractSceneStateFromSnapshot={extractSceneStateFromLatestSnapshot}
+          bibleCharacters={bibleCharacters}
+          detectedCharNames={detectedCharNames}
+          lockedCharNames={lockedCharNames}
+          onToggleLockedCharName={toggleLockedCharName}
+          includeSummary={includeSummary}
+          onIncludeSummaryChange={setIncludeSummary}
+          includeBible={includeBible}
+          onIncludeBibleChange={setIncludeBible}
+          bodyTailCount={bodyTailCount}
+          onBodyTailCountChange={setBodyTailCount}
+          includeSettingIndex={includeSettingIndex}
+          onIncludeSettingIndexChange={setIncludeSettingIndex}
+          settingIndexLoading={settingIndexLoading}
+          chapterId={chapterId}
+        />
+      }
+      versions={
+        <ShengHuiRightVersionsBlock
+          snapshotsNewestFirst={snapshotsNewestFirst}
+          snapshotBucket={snapshotBucket}
+          selectedSnapshotId={selectedSnapshotId}
+          onSelectSnapshot={(s) => {
+            setSelectedSnapshotId(s.id);
+            setOutput(s.prose);
+          }}
+          selectedChapter={selectedChapter}
+          compareSnapshotId={compareSnapshotId}
+          onCompareSnapshotIdChange={setCompareSnapshotId}
+          showDiff={showDiff}
+          onShowDiffChange={setShowDiff}
+          formatRelativeUpdateMs={formatRelativeUpdateMs}
+          busy={busy}
+          onMarkAdopted={markSnapshotAdopted}
+          onRemoveSelected={requestDeleteSelectedSnapshot}
+        />
+      }
+      help={
+        <ShengHuiRightColumnSyncHint
+          isLg={isLg}
+          leftExpanded={leftExpanded}
+          onExpandLeft={() => setLeftOpen(true)}
+          contextSummary={contextInjectSummary}
+          ragSummary={ragSelectionSummary}
+          targetWords={targetWords}
+          emotionTemperature={emotionTemperature}
+          modelTemperatureLabel={modelTemperatureLabel}
+        />
+      }
+    />
+  );
+
   // ─── Main render ───────────────────────────
 
   return (
@@ -932,59 +947,41 @@ ${text.slice(0, 1500)}`;
       className={`relative flex h-dvh min-h-0 w-full flex-col overflow-hidden ${SHENG_HUI_WORKSPACE_BG}`}
     >
       <ShengHuiAmbientBg />
-      {/* 顶栏：与推演页同高、独立全屏无 AppShell */}
-      <header className="relative z-10 flex h-12 shrink-0 items-center justify-between gap-2 border-b border-border/40 bg-card/45 px-3 backdrop-blur sm:px-4">
-        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
-          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" asChild title="返回作品库" aria-label="返回作品库">
-            <Link to="/library">
-              <Undo2 className="h-4 w-4" />
-            </Link>
-          </Button>
-        </div>
-        <div className="flex min-w-0 shrink-0 items-center gap-1 sm:gap-2">
-          <ShengHuiModelTrigger
-            settings={settings}
-            onOpen={() => setModelPickerOpen(true)}
-            disabled={loading}
-          />
-          {workId ? (
-            <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" asChild>
-              <Link to={work ? buildWorkEditorUrl(work, chapterId, true) : `/work/${workId}`}>写作</Link>
-            </Button>
-          ) : null}
-          <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" asChild>
-            <Link to="/logic">推演</Link>
-          </Button>
-          <Button variant="ghost" size="sm" className="hidden h-8 px-2 text-xs sm:inline-flex" asChild>
-            <Link to="/reference">藏经</Link>
-          </Button>
-        </div>
-      </header>
+      <ShengHuiWorkspaceTopBar
+        works={works}
+        workId={workId}
+        onWorkIdChange={(v) => {
+          setWorkId(v);
+          setError(null);
+        }}
+        lastWorkStorageKey={LS_LAST_WORK}
+        chapters={chapters}
+        chapterId={chapterId}
+        onChapterIdChange={setChapterId}
+        work={work}
+        selectedChapter={selectedChapter}
+        settings={settings}
+        onOpenModelPicker={() => setModelPickerOpen(true)}
+        loading={loading}
+        busy={busy}
+        genElapsedSec={genElapsedSec}
+        lastTotalApprox={lastRoughEstimate?.totalApprox ?? null}
+        todayTokensSnapshot={todayTokensSnapshot}
+        focusMode={focusMode}
+        onToggleFocus={toggleFocusMode}
+      />
 
-      {/* 左章节目录 / 中主稿 / 右工具+版本+说明（对齐写作编辑页三栏动线） */}
+      {/* 三栏：小屏只显示主稿，目录/右栏经底部按钮进 Sheet；大屏专注模式仅主稿。 */}
       <div
         className={cn(
-          "relative z-10 grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2",
-          isLg && !leftExpanded
-            ? "lg:grid-cols-[2.75rem_1fr_minmax(20rem,24rem)]"
-            : "lg:grid-cols-[14rem_1fr_minmax(20rem,24rem)]",
+          "relative z-10 flex min-h-0 flex-1 flex-col overflow-hidden p-2 lg:grid lg:min-h-0",
+          isLg && !focusMode && !leftExpanded && "lg:grid-cols-[2.75rem_1fr_minmax(20rem,24rem)]",
+          isLg && !focusMode && leftExpanded && "lg:grid-cols-[14rem_1fr_minmax(20rem,24rem)]",
+          isLg && focusMode && "lg:grid-cols-1",
+          !isLg && "grid-cols-1",
         )}
       >
-        <ShengHuiLeftChapterRail
-          works={works}
-          workId={workId}
-          onWorkIdChange={(v) => {
-            setWorkId(v);
-            setError(null);
-          }}
-          lastWorkStorageKey={LS_LAST_WORK}
-          chapters={chapters}
-          chapterId={chapterId}
-          onChapterIdChange={setChapterId}
-          isLg={isLg}
-          leftExpanded={leftExpanded}
-          onSetLeftOpen={setLeftOpen}
-        />
+        {isLg && !focusMode ? leftChapterRail : null}
 
         <ShengHuiCenterManuscriptColumn
           showStepHint={Boolean(prefsHydrated && !stepHintDismissed)}
@@ -1005,120 +1002,62 @@ ${text.slice(0, 1500)}`;
           work={work}
           workId={workId}
           chapterId={chapterId}
+          emotionTemperature={emotionTemperature}
+          focusMode={focusMode}
+          targetWords={targetWords}
         />
 
-        <ShengHuiRightPanel
-          activeTab={rightPanelTab}
-          onTabChange={setRightPanelTab}
-          collapsed={rightCollapsed}
-          onCollapsedChange={setRightCollapsed}
-          compose={
-            <ShengHuiRightComposeBlock
-              generateMode={generateMode}
-              onGenerateModeChange={setGenerateMode}
-              onResetTwoStep={() => setTwoStepIntermediate(null)}
-              twoStepIntermediate={twoStepIntermediate}
-              onResetTwoStepIntermediate={() => setTwoStepIntermediate(null)}
-              targetWords={targetWords}
-              onTargetWordsChange={setTargetWords}
-              emotionTemperature={emotionTemperature}
-              onEmotionTemperatureChange={setEmotionTemperature}
-              settings={settings}
-              outline={outline}
-              onOutlineChange={setOutline}
-              busy={busy}
-              tuiyanImporting={tuiyanImporting}
-              workId={workId}
-              onImportFromTuiyan={importFromTuiyan}
-              onRunGenerate={runGenerate}
-              onStop={stop}
-              lastRoughEstimate={lastRoughEstimate}
-              selectedExcerptCount={selectedExcerptIds.size}
-              error={error}
-            />
-          }
-          materials={
-            <ShengHuiRightMaterialsBlock
-              workId={workId}
-              work={work}
-              settings={settings}
-              canInjectWorkMeta={canInjectWorkMeta}
-              snapshotsNewestFirst={snapshotsNewestFirst}
-              selectedChapter={selectedChapter}
-              ragQuery={ragQuery}
-              onRagQueryChange={setRagQuery}
-              ragResults={ragResults}
-              ragSearching={ragSearching}
-              onSearchRag={searchRag}
-              selectedExcerptIds={selectedExcerptIds}
-              onToggleExcerpt={toggleExcerpt}
-              styleFeatures={styleFeatures}
-              extractingFeatureIds={extractingFeatureIds}
-              onExtractStyleFeature={extractStyleFeature}
-              sceneState={sceneState}
-              onSceneStateChange={setSceneState}
-              sceneStateOpen={sceneStateOpen}
-              onSceneStateOpenChange={setSceneStateOpen}
-              sceneStateExtracting={sceneStateExtracting}
-              onExtractSceneStateFromSnapshot={extractSceneStateFromLatestSnapshot}
-              bibleCharacters={bibleCharacters}
-              detectedCharNames={detectedCharNames}
-              lockedCharNames={lockedCharNames}
-              onToggleLockedCharName={(name, hasData) => {
-                if (!hasData) return;
-                setLockedCharNames((prev) => {
-                  const next = new Set(prev);
-                  if (next.has(name)) next.delete(name);
-                  else next.add(name);
-                  return next;
-                });
-              }}
-              includeSummary={includeSummary}
-              onIncludeSummaryChange={setIncludeSummary}
-              includeBible={includeBible}
-              onIncludeBibleChange={setIncludeBible}
-              bodyTailCount={bodyTailCount}
-              onBodyTailCountChange={setBodyTailCount}
-              includeSettingIndex={includeSettingIndex}
-              onIncludeSettingIndexChange={setIncludeSettingIndex}
-              settingIndexLoading={settingIndexLoading}
-              chapterId={chapterId}
-            />
-          }
-          versions={
-            <ShengHuiRightVersionsBlock
-              snapshotsNewestFirst={snapshotsNewestFirst}
-              snapshotBucket={snapshotBucket}
-              selectedSnapshotId={selectedSnapshotId}
-              onSelectSnapshot={(s) => {
-                setSelectedSnapshotId(s.id);
-                setOutput(s.prose);
-              }}
-              selectedChapter={selectedChapter}
-              compareSnapshotId={compareSnapshotId}
-              onCompareSnapshotIdChange={setCompareSnapshotId}
-              showDiff={showDiff}
-              onShowDiffChange={setShowDiff}
-              formatRelativeUpdateMs={formatRelativeUpdateMs}
-              busy={busy}
-              onMarkAdopted={markSnapshotAdopted}
-              onRemoveSelected={removeSelectedSnapshot}
-            />
-          }
-          help={
-            <ShengHuiRightColumnSyncHint
-              isLg={isLg}
-              leftExpanded={leftExpanded}
-              onExpandLeft={() => setLeftOpen(true)}
-              contextSummary={contextInjectSummary}
-              ragSummary={ragSelectionSummary}
-              targetWords={targetWords}
-              emotionTemperature={emotionTemperature}
-              modelTemperatureLabel={modelTemperatureLabel}
-            />
-          }
-        />
+        {isLg && !focusMode ? rightWorkspacePanel : null}
       </div>
+
+      {!isLg && !focusMode ? (
+        <div
+          className="pointer-events-none fixed bottom-3 left-1/2 z-20 flex -translate-x-1/2 gap-2 lg:hidden"
+          role="navigation"
+          aria-label="小屏章节目录与侧栏"
+        >
+          <Button
+            type="button"
+            variant="secondary"
+            className="pointer-events-auto h-10 rounded-full shadow-md"
+            onClick={() => setMobileSheet("left")}
+          >
+            <PanelLeft className="size-4" />
+            目录
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="pointer-events-auto h-10 rounded-full shadow-md"
+            onClick={() => setMobileSheet("right")}
+          >
+            <BookOpen className="size-4" />
+            侧栏
+          </Button>
+        </div>
+      ) : null}
+
+      <Sheet
+        open={!isLg && mobileSheet === "left"}
+        onOpenChange={(open) => {
+          if (!open) setMobileSheet((s) => (s === "left" ? null : s));
+        }}
+      >
+        <SheetContent side="left" className="w-[min(20rem,92vw)] p-0">
+          {leftChapterRail}
+        </SheetContent>
+      </Sheet>
+
+      <Sheet
+        open={!isLg && mobileSheet === "right"}
+        onOpenChange={(open) => {
+          if (!open) setMobileSheet((s) => (s === "right" ? null : s));
+        }}
+      >
+        <SheetContent side="right" className="flex h-[100dvh] w-[min(24rem,96vw)] max-w-[100vw] flex-col p-0 sm:max-w-md">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-1">{rightWorkspacePanel}</div>
+        </SheetContent>
+      </Sheet>
 
       <AiPanelModelPickerDialog
         open={modelPickerOpen}
@@ -1128,24 +1067,11 @@ ${text.slice(0, 1500)}`;
         updateProvider={updateProvider}
       />
 
-      {/* 快照删除确认 Dialog */}
-      <AlertDialog open={deleteSnapshotDialogOpen} onOpenChange={setDeleteSnapshotDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>删除生成快照</AlertDialogTitle>
-            <AlertDialogDescription>确定删除该条生成快照？此操作不可恢复。</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => { confirmDeleteSnapshot(); setDeleteSnapshotDialogOpen(false); }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              确认删除
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ShengHuiDeleteSnapshotDialog
+        open={deleteSnapshotDialogOpen}
+        onOpenChange={onDeleteSnapshotDialogOpenChange}
+        onConfirm={confirmDeleteSelectedSnapshot}
+      />
     </div>
   );
 }

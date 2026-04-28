@@ -50,7 +50,7 @@ import { useTuiyanReferenceActions } from "../hooks/useTuiyanReferenceActions"
 import { useTuiyanReferenceConfig } from "../hooks/useTuiyanReferenceConfig"
 import { useTuiyanWenCeActions } from "../hooks/useTuiyanWenCeActions"
 import { useToast } from "../components/ui/use-toast"
-import type { WritingWorkStyleSlice } from "../ai/assemble-context"
+import { workStyleCardToWritingSlice } from "../util/work-style-card-to-slice"
 import { loadAiSettings, saveAiSettings } from "../ai/storage"
 import { aiModelIdToProvider, aiProviderToModelId } from "../util/ai-ui-model-map"
 import {
@@ -575,13 +575,7 @@ export default function V0TuiyanPage() {
       try {
         const [card, w] = await Promise.all([getWorkStyleCard(workId), getWork(workId)])
         const tagProfile = workTagsToProfileText(w?.tags)
-        const workStyle: WritingWorkStyleSlice = {
-          pov: card?.pov ?? "",
-          tone: card?.tone ?? "",
-          bannedPhrases: card?.bannedPhrases ?? "",
-          styleAnchor: card?.styleAnchor ?? "",
-          extraRules: card?.extraRules ?? "",
-        }
+        const workStyle = workStyleCardToWritingSlice(card)
         const tpl = selectedPromptTemplateRef.current
         const baseHint = tpl
           ? `【提示词模板：${tpl.title}】\n${renderPromptTemplate(tpl.body, {

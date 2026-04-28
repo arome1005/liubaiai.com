@@ -1,5 +1,6 @@
 import { BookOpen, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import type { Chapter, Work } from "../../db/types";
+import { wordCount } from "../../util/wordCount";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
 
@@ -48,7 +49,12 @@ export function ShengHuiLeftChapterRail(props: {
   }
 
   return (
-    <aside className="order-2 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-border/50 bg-card/60 shadow-sm backdrop-blur-sm lg:order-1">
+    <aside
+      className={cn(
+        "sheng-hui-glass-panel order-2 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-white/[0.06] bg-card/65 shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_8px_24px_-12px_rgba(0,0,0,0.28)] backdrop-blur-md lg:order-1",
+      )}
+    >
+      <div className="flex h-0.5 shrink-0 rounded-t-2xl bg-gradient-to-r from-primary/50 via-chart-2/40 to-primary/30" aria-hidden />
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/40 bg-card/30 px-2.5 py-2">
         <div className="min-w-0 flex items-center gap-1.5">
           <BookOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
@@ -102,19 +108,34 @@ export function ShengHuiLeftChapterRail(props: {
             <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto" aria-label="章节目录">
               {chapters.map((c) => {
                 const active = chapterId === c.id;
+                const n = c.wordCountCache ?? wordCount(c.content ?? "");
+                const has = n > 0;
                 return (
                   <button
                     key={c.id}
                     type="button"
                     onClick={() => onChapterIdChange(c.id)}
                     className={cn(
-                      "shrink-0 rounded-lg px-2 py-1.5 text-left text-[12px] leading-snug transition-colors",
+                      "flex shrink-0 items-start gap-1.5 rounded-lg px-2 py-1.5 text-left text-[12px] leading-snug transition-colors",
                       active
                         ? "bg-primary/12 font-medium text-primary"
                         : "text-muted-foreground hover:bg-accent/80 hover:text-foreground",
                     )}
                   >
-                    <span className="line-clamp-3">{c.title || "未命名章节"}</span>
+                    <span
+                      className={cn(
+                        "mt-1.5 size-1.5 shrink-0 rounded-full",
+                        has ? "bg-emerald-500/90 shadow-[0_0_0_1px_rgba(16,185,129,0.35)]" : "bg-muted-foreground/25",
+                      )}
+                      title={has ? "正文有字" : "正文为空"}
+                      aria-hidden
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="line-clamp-3 block">{c.title || "未命名章节"}</span>
+                      <span className="mt-0.5 block text-[10px] text-muted-foreground/70 tabular-nums">
+                        {n > 0 ? `${n} 字` : "空"}
+                      </span>
+                    </span>
                   </button>
                 );
               })}

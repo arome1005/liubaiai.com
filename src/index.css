@@ -2710,6 +2710,25 @@ select {
   line-height: var(--editor-line-height, 1.8);
 }
 
+/* 生辉主稿：阅读向衬线（与默认 UI sans 区隔）。不限制 max-width，避免整栏 textarea 被 38em 压成细条；行宽由中间栏 grid 与「专注模式」的 max-w 控制。 */
+.sheng-hui-paper-typography {
+  font-family: "Source Serif 4", "Noto Serif SC", "PingFang SC", "Songti SC", "SimSun", serif;
+  font-feature-settings: "ss01" 1;
+  line-height: 1.85;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.sheng-hui-paper--cool {
+  background: color-mix(in oklch, var(--background) 92%, oklch(0.55 0.02 250)) !important;
+}
+.sheng-hui-paper--neutral {
+  background: color-mix(in oklch, var(--background) 94%, oklch(0.75 0.04 85)) !important;
+}
+.sheng-hui-paper--warm {
+  background: color-mix(in oklch, var(--background) 90%, oklch(0.82 0.06 75)) !important;
+}
+
 /* 流光 /inspiration — 步 35 碎片 */
 .inspiration-page {
   max-width: 40rem;

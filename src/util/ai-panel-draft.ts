@@ -77,3 +77,19 @@ export function deleteDraftHistoryEntry(workId: string, chapterId: string, saved
   }
 }
 
+/**
+ * 写入侧栏当前章草稿槽，**成功**后再将同一内容推入「草稿历史」（与 AiPanel 侧栏 `useAiPanelDraftHistory` 同源）。
+ * 生辉「写回侧栏」等跨页入口应使用此，避免只覆盖当前槽、写作页历史里看不到从生辉推来的版本。
+ */
+export function writeAiPanelDraftWithHistory(
+  workId: string,
+  chapterId: string,
+  draft: string,
+): { ok: true } | { ok: false; error: string } {
+  const result = writeAiPanelDraft(workId, chapterId, draft);
+  if (result.ok) {
+    pushDraftHistory(workId, chapterId, draft);
+  }
+  return result;
+}
+

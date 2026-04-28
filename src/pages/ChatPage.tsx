@@ -30,6 +30,7 @@ import {
   type WenceChatWorkAttach,
 } from "../ai/assemble-context";
 import { readLastWorkId } from "../util/lastWorkId";
+import { workStyleCardToWritingSlice } from "../util/work-style-card-to-slice";
 import type { AiChatMessage } from "../ai/types";
 import {
   addBibleCharacter,
@@ -580,13 +581,7 @@ export function ChatPage() {
         const card = await getWorkStyleCard(attachedWorkId).catch(() => undefined);
         attached = {
           workTitle: attachedWork.title ?? "未命名作品",
-          workStyle: {
-            pov: card?.pov ?? "",
-            tone: card?.tone ?? "",
-            bannedPhrases: card?.bannedPhrases ?? "",
-            styleAnchor: card?.styleAnchor ?? "",
-            extraRules: card?.extraRules ?? "",
-          },
+          workStyle: workStyleCardToWritingSlice(card),
           tagProfileText: workTagsToProfileText(attachedWork.tags),
           settingIndexText: includeSettingIndex ? settingIndexText : undefined,
         };

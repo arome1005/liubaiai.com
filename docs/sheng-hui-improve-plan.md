@@ -1,31 +1,33 @@
 # 生辉仿写工作台 — 专业升级计划
 
 > 创建：2026-04-18  
-> 目标：把「生辉」从「有功能的 AI 生成页」升级为「专业仿写工作流」  
+> 目标：把「有功能的 AI 生成页」升级为「专业仿写工作流」  
 > 执行顺序按 ROI 排列：先做影响质量最大、改动量最小的。
 
 ---
 
 ## 进度总览
 
+以下第 1–8 行已落地，以删除线标出，便于和「待做需求」区分。
 
-| #   | 功能                                  | 状态              | 文件                                      |
-| --- | ----------------------------------- | --------------- | --------------------------------------- |
-| 1   | 场景状态卡 (Scene State Card)            | ✅ 完成 2026-04-18 | ShengHuiPage.tsx, sheng-hui-generate.ts |
-| 2   | 滑动段落窗口（正文末尾 N 段选择）                  | ⬜ 待做            | ShengHuiPage.tsx, sheng-hui-generate.ts |
-| 3   | RAG 风格解构器（先提炼笔法再注入）                 | ⬜ 待做            | ShengHuiPage.tsx, sheng-hui-generate.ts |
-| 4   | 人物声音锁（对话场景动态注入人物语气卡）                | ⬜ 待做            | ShengHuiPage.tsx, sheng-hui-generate.ts |
-| 5   | 风格指纹扩展（句节奏/标点/对话密度等6维）              | ⬜ 待做            | db/types.ts, WorkStyleCardForm          |
-| 6   | 生成模式扩展（场景骨架/对话优先/分段接龙）              | ⬜ 待做            | sheng-hui-generate.ts, ShengHuiPage.tsx |
-| 7   | 快照删除改用应用内 Dialog（替换 window.confirm） | ⬜ 待做            | ShengHuiPage.tsx                        |
-| 8   | 情绪温度 slider（控制形容词密度/语气热度）           | ⬜ 待做            | sheng-hui-generate.ts, ShengHuiPage.tsx |
+
+| #   | 功能                                  | 状态              | 文件                                                                                                                                            |
+| --- | ----------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| ~~1 | 场景状态卡 (Scene State Card)            | ✅ 完成 2026-04-18 | ShengHuiPage.tsx, sheng-hui-generate.ts~~                                                                                                     |
+| ~~2 | 滑动段落窗口（正文末尾 N 段选择）                  | ✅ 完成 2026-04-28 | `ShengHuiContextInjectSection.tsx`（1/3/5/全部）·`takeTailByParagraphs` · `util/sheng-hui-body-tail.ts` ·`useShengHuiBodyTailPreference`（LS 记忆）~~ |
+| ~~3 | RAG 风格解构器（先提炼笔法再注入）                 | ✅ 完成 2026-04-28 | `ai/sheng-hui-style-extract.ts` · `useShengHuiRagStyleFeatures`（sessionStorage 按 workId）·`ShengHuiRightMaterialsBlock`~~                      |
+| ~~4 | 人物声音锁（对话场景动态注入人物语气卡）                | ✅ 完成 2026-04-28 | `useShengHuiVoiceLock` · `sheng-hui-outline-character-detect` · `sheng-hui-voice-lock` · `ShengHuiRightMaterialsBlock`~~                      |
+| ~~5 | 风格指纹扩展（句节奏/标点/对话密度等6维）              | ✅ 完成 2026-04-28 | 类型/写作侧栏已具备；补 `workStyleCardToWritingSlice` 供生辉/问策/推演注入，防漏字段~~                                                                                 |
+| ~~6 | 生成模式扩展（场景骨架/对话优先/分段接龙）              | ✅ 完成 2026-04-28 | `sheng-hui-generate.ts`（模式常量/两步 helper/主按钮文案）·`useShengHuiGenerateMode`（LS 记主模式）·`ShengHuiRightComposeBlock`~~                                |
+| ~~7 | 快照删除改用应用内 Dialog（替换 window.confirm） | ✅ 完成 2026-04-28 | `useShengHuiSnapshotDelete` · `ShengHuiDeleteSnapshotDialog`~~                                                                                |
+| ~~8 | 情绪温度 slider（控制形容词密度/语气热度）           | ✅ 完成 2026-04-28 | `sheng-hui-generate.ts`（类型/三档文案）·`useShengHuiEmotionTemperature`（LS）·`ShengHuiEmotionTemperatureRow`~~                                        |
 
 
 ---
 
 ## 详细设计
 
----
+
 
 ### 1 · 场景状态卡 (Scene State Card) ✅
 
@@ -83,7 +85,9 @@ type SceneStateCard = {
 
 ---
 
-### 3 · RAG 风格解构器
+### 3 · RAG 风格解构器 ✅
+
+**落点**：`src/ai/sheng-hui-style-extract.ts`（prompt + `runShengHuiStyleFeatureExtract`）、`src/hooks/useShengHuiRagStyleFeatures.ts`（Map + `sessionStorage` 按 `workId`、新搜索清空）。
 
 **目标**：选中参考段落后，不直接注入原文，而是先 AI 提炼「这段的笔法特征」再注入。
 
@@ -110,7 +114,9 @@ type SceneStateCard = {
 
 ---
 
-### 4 · 人物声音锁
+### 4 · 人物声音锁 ✅
+
+**落点**：`src/hooks/useShengHuiVoiceLock.ts`（状态+自动勾选）、`src/util/sheng-hui-outline-character-detect.ts`（长名优先非重叠）、`src/util/sheng-hui-voice-lock.ts`（装配 `CharacterVoiceLock[]`）。`detectCharactersInOutline` 仍从 `sheng-hui-generate` 导出，内部转调新检测。
 
 **目标**：当大纲中提到某个人物名时，动态匹配锦囊人物卡并注入该角色的语气描述。
 
@@ -124,11 +130,13 @@ type SceneStateCard = {
 
 ---
 
-### 5 · 风格指纹扩展
+### 5 · 风格指纹扩展 ✅
 
-**目标**：扩展 `WorkStyleCard` 的维度，让风格约束更精准。
+**现状**：`WorkStyleCard` 与写作侧 `AiPanelStyleCardSection`（「高级风格指纹」折叠）及 `appendWorkStyleAndTagProfileLines` 已含五维；**缺口**是各模块手写 `pov…extraRules` 时漏选填维。**已补** `src/util/work-style-card-to-slice.ts` 的 `workStyleCardToWritingSlice`，生辉 / 问策 / 推演三处统一使用。
 
-**新增字段**（加到 db/types.ts `WorkStyleCard`）：
+**目标**（历史）：扩展 `WorkStyleCard` 的维度，让风格约束更精准。
+
+**新增字段**（已在 db/types.ts `WorkStyleCard`；以下为规格备忘）：
 
 ```ts
 sentenceRhythm?: string;   // 句节奏描述（如：多用短句，节奏急促；长句收尾）
@@ -142,7 +150,9 @@ narrativeDistance?: "omniscient" | "limited" | "deep_pov"; // 叙述距离
 
 ---
 
-### 6 · 生成模式扩展
+### 6 · 生成模式扩展 ✅
+
+**落点**：主/高级模式列表与两步工具函数集中在 `src/ai/sheng-hui-generate.ts`；`generateMode` 与 `twoStepIntermediate` 由 `src/hooks/useShengHuiGenerateMode.ts` 管理（主模式 `localStorage: liubai:shengHuiGenerateMode:v1`）；右栏组合区只消费导出常量与 `shengHuiComposePrimaryButtonLabel`。
 
 **新增模式**：
 
@@ -158,34 +168,31 @@ narrativeDistance?: "omniscient" | "limited" | "deep_pov"; // 叙述距离
 
 ---
 
-### 7 · 快照删除改用应用内 Dialog
+### 7 · 快照删除改用应用内 Dialog ✅
 
-**当前**：`window.confirm("确定删除该条生成快照？不可恢复。")`  
-**目标**：使用应用内 AlertDialog（已有 `@radix-ui/react-alert-dialog`）
+**落点**：`src/hooks/useShengHuiSnapshotDelete.ts`（确认态 + 删除后桶/主稿/选中收敛）；`src/components/sheng-hui/ShengHuiDeleteSnapshotDialog.tsx`（Radix `AlertDialog`）；`ShengHuiPage` 只接线，不堆删除逻辑。
 
-**实现**：在 `removeSelectedSnapshot` 前弹出确认 Dialog，样式与其他危险操作一致。
+**目标**：使用应用内 AlertDialog（`@radix-ui/react-alert-dialog`），**禁止**对快照删除使用 `window.confirm`。
 
 ---
 
-### 8 · 情绪温度 Slider
+### 8 · 情绪温度 Slider ✅
+
+**落点**：`shengHuiEmotionTemperaturePromptLine` / `clampShengHuiEmotionTemperature` 在 `src/ai/sheng-hui-generate.ts`；状态与 `localStorage: liubai:shengHuiEmotionTemperature:v1` 在 `useShengHuiEmotionTemperature`；右栏滑块行在 `ShengHuiEmotionTemperatureRow`；`ShengHuiPage` 仅合并进 `workStyle.extraRules`。
 
 **目标**：让用户控制生成文字的「热度」——克制/平淡/热烈。
 
-**UI**：参数栏中，目标字数右侧新增：
+**UI**：参数区目标字数下为「情绪温度」range（1–5），附克制/热烈标签与当前档位数字。
 
-```
-情绪温度  [克制 ○──●── 热烈]
-           1    3    5
-```
+**实现**：`ShengHuiEmotionTemperature` 即 `1 | 2 | 3 | 4 | 5`；三档文案注入 `extraRules`：
 
-**实现**：`emotionTemperature: 1 | 2 | 3 | 4 | 5`  
-注入 Prompt 末尾：
-
-- 1-2：「叙述克制，情绪内化，少用形容词，多用行为描写表达情感」
-- 3：「情绪适中，自然表达」
-- 4-5：「情绪饱满，意象丰富，可适当抒情，感官描写密集」
+- 1-2：叙述克制，情绪内化，少用形容词，多用行为描写表达情感。
+- 3：情绪适中，自然表达。
+- 4-5：情绪饱满，意象丰富，可适当抒情，感官描写密集。
 
 ---
+
+
 
 ## 实现约定
 
@@ -198,9 +205,9 @@ narrativeDistance?: "omniscient" | "limited" | "deep_pov"; // 叙述距离
 
 ## 当前已完成（本 session 之外）
 
-- 版本快照 + Diff 对比 ✅
-- 写回侧栏草稿 ✅
-- RAG 藏经风格参考（基础版）✅
-- 四种生成模式（写/续/重写/精炼）✅
-- `window.alert` → toast 替换 ✅
+- ~~版本快照 + Diff 对比 ✅~~
+- ~~写回侧栏草稿 ✅~~
+- ~~RAG 藏经风格参考（基础版）✅~~
+- ~~四种生成模式（写/续/重写/精炼）✅~~
+- ~~`window.alert` → toast 替换 ✅~~
 
