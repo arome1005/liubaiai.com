@@ -223,6 +223,8 @@ create table if not exists tuiyan_state (
   finalized_node_ids jsonb not null default '[]'::jsonb,
   status_by_node_id jsonb not null default '{}'::jsonb,
   linked_ref_work_ids jsonb not null default '[]'::jsonb,
+  reference_bindings jsonb not null default '[]'::jsonb,
+  reference_policy jsonb not null default '{}'::jsonb,
   mindmap jsonb not null default '{}'::jsonb,
   scenes jsonb not null default '[]'::jsonb,
   selected_prompt_template_id text null,
@@ -235,6 +237,8 @@ create table if not exists tuiyan_state (
   unique(user_id, work_id)
 );
 alter table tuiyan_state
+  add column if not exists reference_bindings jsonb not null default '[]'::jsonb,
+  add column if not exists reference_policy jsonb not null default '{}'::jsonb,
   add column if not exists selected_prompt_template_id text null,
   add column if not exists planning_idea text null,
   add column if not exists planning_tree jsonb not null default '[]'::jsonb,

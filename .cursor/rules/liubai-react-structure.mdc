@@ -12,6 +12,34 @@ alwaysApply: true
 2) 若向 `*Page.tsx` 增加 **> ~30 行** 可抽离逻辑：先问是否抽成 `src/hooks/use*.ts` 或 `src/components/<area>/`。**向 `V0TuiyanPage.tsx` 或 `EditorPage.tsx` 增加 > ~50 行** 时，默认应先拆分再继续（分别见 `v0-tuiyan-page.mdc`、`editor-page.mdc`）。  
 3) 纯函数、魔法字符串、与 UI 无关的配置 → **`src/util/`** 或 **`src/ai/`**，不要留在组件里硬编码。
 
+## 落点决策表（先查表再写代码）
+
+细微改动也适用：默认**不**把新逻辑堆进巨型组件；若表中「禁止」一栏会触发，则必须先拆再改。
+
+| 你在做什么 | 默认落点 | 避免 |
+| --- | --- | --- |
+| 新状态 + `useEffect`/订阅/异步收尾 | 新或现有 **`src/hooks/use*.ts`**；仅服务某块 UI 时可放 **`src/components/<域>/use*.ts`**（如 `ai-panel/`） | 在 `EditorPage.tsx` / `AiPanel.tsx` 里再叠一长串 state/effect |
+| 与 AI 侧栏强相关（生成、RAG、草稿、模型弹窗等） | **`src/components/ai-panel/`**（hook 或子组件） | 让 `AiPanel.tsx` 单文件继续膨胀 |
+| 与推砚/规划台强相关 | 按 **`v0-tuiyan-page.mdc`** 落在 `hooks` / `components/tuiyan/` 等 | 往 `V0TuiyanPage.tsx` 硬塞 |
+| 纯函数、类型、常量、与 React 无关 | **`src/util/`** 或 **`src/ai/`** | 组件内大段 `function foo` / 魔法字符串 |
+| 可复用 UI 块（含局部状态） | **`src/components/<域>/Xxx.tsx`** | 在页面文件里 JSX 复制粘贴膨胀 |
+| 数据读写 | **`src/db/repo.ts`**（或经其暴露的 API） | 组件内直接绑存储实现细节 |
+
+**与「~30 / ~50 行」规则的关系**：本表是**按职责选目录**；行数阈值是**强制拆分信号**。二者同时满足时，优先满足「正确落点」。
+
+## 用户任务前缀（复制即用）
+
+细微改动也可贴在需求**最前面**（与 `alwaysApply` 规则叠加，强化「先落点再写码」）：
+
+```
+遵守 .cursor/rules/liubai-react-structure.mdc 与 editor-page.mdc。
+本次改动若会让我在 EditorPage.tsx 或 AiPanel.tsx 里新增超过约 30 行可抽离逻辑，
+必须先说明落点（新 hook / 新 util / 子组件路径），并直接按该落点实现，禁止把逻辑堆回这两个文件。
+不改 UI 位置、不删对外 props/接口（除非我明确说可以）。
+```
+
+若主要改推砚页，将第二句里的页面换成 **`V0TuiyanPage.tsx`**，并同时点名 **`v0-tuiyan-page.mdc`**。
+
 **工程习惯（与现有代码一致，例如 `useEditorPersist`）/ Engineering habits**
 - `useEffect` 里：异步、定时器、订阅、**`window.addEventListener`** → 必须在 return 中 **清理**（`clearTimeout` / `abort` / `removeEventListener`）。  
 - **不要** 使用 `window.confirm` / `window.prompt`；用项目里已有的 **Dialog**（Radix / 现有弹窗组件）。  

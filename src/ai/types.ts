@@ -141,10 +141,27 @@ export type AiChatMessage = {
   content: string;
 };
 
+/**
+ * 单次调用的 token 统计。
+ * - `source: "api"`：来自各厂商响应对应的 `usage` 字段（与计费口径一致，以各 API 实际返回为准）
+ * - `source: "approx"`：本机对 prompt/正文的 `approxRoughTokenCount` 粗估，仅作参考
+ */
+export type AiTokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  source: "api" | "approx";
+};
+
 export type AiGenerateResult = {
   text: string;
   raw?: unknown;
-  /** OpenAI 兼容等接口返回的 total_tokens；未返回时省略，由调用方粗估 */
+  /** 优先使用，用于侧栏/日累计/展示 */
+  tokenUsage?: AiTokenUsage;
+  /**
+   * OpenAI 兼容等接口的 total_tokens 汇总（兼容旧代码）。
+   * 若存在 `tokenUsage` 可忽略；否则调用方可仍用本字段作 fallback。
+   */
   usageTotalTokens?: number;
 };
 

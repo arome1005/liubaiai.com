@@ -613,6 +613,7 @@ export function ChatPage() {
         config,
         messages: apiMessages,
         signal: abortRef.current.signal,
+        usageLog: { task: "文策·对话", workId: attachedWorkId },
         onDelta: (delta) => {
           aiText += delta;
           setStreamingContent(aiText);

@@ -589,37 +589,107 @@ export type TuiyanPushedOutlineEntry = {
   structuredMeta?: PlanningNodeStructuredMeta;
 };
 
+/** 文策条目类型枚举（决策 / 修订 / AI 建议 / 灵感笔记 / 里程碑） */
+export type TuiyanWenCeType =
+  | "decision"
+  | "revision"
+  | "ai_suggestion"
+  | "user_note"
+  | "milestone";
+
+/**
+ * 文策条目（持久化形式：timestamp 为毫秒数）。
+ * 引入 `planningNodeId` 字段以便把每条记录与「五层规划树」节点强绑定，
+ * 实现『当前规划节点 → 文策日志』的精准回溯（旧记录无此字段也兼容）。
+ */
+export type TuiyanWenCeStored = {
+  id: string;
+  timestamp: number;
+  type: TuiyanWenCeType;
+  title: string;
+  content: string;
+  /** 旧字段：与卷/章 outline 节点的弱关联 */
+  relatedOutlineId?: string;
+  /** 新字段：与五层规划树节点 id 的强关联（自动绑定） */
+  planningNodeId?: string;
+  isPinned?: boolean;
+  tags?: string[];
+};
+
+/** 推演 AI 对话：单条消息的持久化形态（与旧版 chatHistory 项一致） */
+export type TuiyanChatMessageRow = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  timestamp: number;
+  relatedOutlineId?: string;
+};
+
+/** 推演 AI 对话：多会话中的一条会话（15 天未活动则从库中剔除） */
+export type TuiyanChatThreadStored = {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: TuiyanChatMessageRow[];
+};
+
+/** 推演参考策略：引用角色（主参考优先影响风格） */
+export type TuiyanReferenceRole = "primary" | "secondary";
+/** 推演参考策略：本次仿写关注面向 */
+export type TuiyanReferenceAspect = "voice" | "pacing" | "structure" | "genre";
+/** 推演参考策略：引用范围（控制 token 与复刻风险） */
+export type TuiyanReferenceRangeMode = "summary_only" | "summary_plus_excerpt" | "selected_sections";
+/** 推演参考策略：模式预设 */
+export type TuiyanImitationMode = "balanced" | "style" | "structure" | "genre";
+
+/** 推演参考绑定：一部书在本作品中的仿写角色与范围配置 */
+export type TuiyanReferenceBinding = {
+  refWorkId: string;
+  role: TuiyanReferenceRole;
+  aspects: TuiyanReferenceAspect[];
+  rangeMode: TuiyanReferenceRangeMode;
+  sectionIds?: string[];
+  note?: string;
+  updatedAt: number;
+};
+
+/** 推演参考全局策略：适用于总纲到细纲与对话全链路 */
+export type TuiyanReferencePolicy = {
+  /** 版本号：用于后续字段迭代迁移 */
+  version: number;
+  imitationMode: TuiyanImitationMode;
+  antiPatterns?: string;
+  /** 构思优先（强建议默认 true） */
+  conceptFirst: boolean;
+};
+
 /** 推演：与作品绑定的推演工作台状态（对话/文策/定稿标记等），用于刷新不丢与云同步 */
 export type TuiyanState = {
   /** 主键（= workId） */
   id: string;
   workId: string;
   updatedAt: number;
-  /** 对话历史（页面层结构序列化后存储；timestamp 用毫秒数） */
-  chatHistory: Array<{
-    id: string;
-    role: "user" | "assistant";
-    content: string;
-    timestamp: number;
-    relatedOutlineId?: string;
-  }>;
+  /**
+   * 当前活跃会话的消息镜像（兼容旧客户端与只读 chat_history 列）；
+   * 新数据以 `chatThreads` + `activeChatThreadId` 为准。
+   */
+  chatHistory: TuiyanChatMessageRow[];
+  /** 多会话列表；缺省时由 `chatHistory` 迁移出一条会话 */
+  chatThreads?: TuiyanChatThreadStored[];
+  /** 当前编辑中的会话 id */
+  activeChatThreadId?: string | null;
   /** 文策条目（timestamp 用毫秒数） */
-  wenCe: Array<{
-    id: string;
-    timestamp: number;
-    type: "decision" | "revision" | "ai_suggestion" | "user_note" | "milestone";
-    title: string;
-    content: string;
-    relatedOutlineId?: string;
-    isPinned?: boolean;
-    tags?: string[];
-  }>;
+  wenCe: TuiyanWenCeStored[];
   /** 显式定稿标记：nodeId 列表（章/卷/节点） */
   finalizedNodeIds: string[];
   /** 节点状态覆盖：nodeId -> status（用于卷/章/scene 等不落在 core 表字段的状态） */
   statusByNodeId?: Record<string, "draft" | "refining" | "locked">;
   /** 关联的藏经书目（ReferenceLibraryEntry.id） */
   linkedRefWorkIds?: string[];
+  /** 参考绑定配置（仿写策略主数据）；为空时可由 linkedRefWorkIds 迁移默认项 */
+  referenceBindings?: TuiyanReferenceBinding[];
+  /** 参考全局策略（模式、反向约束、构思优先开关） */
+  referencePolicy?: TuiyanReferencePolicy;
   /** 可编辑导图（reactflow）：节点/连线/视口 */
   mindmap?: {
     nodes: unknown[];
@@ -665,6 +735,14 @@ export type TuiyanState = {
    * 五层规划：节点结构化元数据（按层级不同字段集；AI 生成后用户可修改）
    */
   planningStructuredMetaByNodeId?: Record<string, PlanningNodeStructuredMeta>;
+  /**
+   * 五层规划：一级大纲节点 id → 该分支目标卷数（未写入时回退到全局规模里的目标卷数）。
+   */
+  planningOutlineTargetVolumesByNodeId?: Record<string, number>;
+  /**
+   * 五层规划：卷纲节点 id → 该卷下要生成的章细纲条数（未写入时回退到全局「每卷章节」）。
+   */
+  planningVolumeTargetChaptersByNodeId?: Record<string, number>;
   /** 推演页推送给写作编辑页「章纲」栏的只读快照；不创建正文章节。 */
   planningPushedOutlines?: TuiyanPushedOutlineEntry[];
   /**

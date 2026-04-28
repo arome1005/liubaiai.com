@@ -1,4 +1,4 @@
-import { useRef, useCallback } from "react"
+import { useCallback } from "react"
 import { Bot, Send, Brain, Zap, Swords, Users, GitMerge, ThumbsUp, ThumbsDown, Copy, Wand2 } from "lucide-react"
 import { Button } from "../ui/button"
 import { Textarea } from "../ui/textarea"
@@ -145,7 +145,7 @@ export interface TuiyanChatPanelProps {
   onSend: (text: string) => void
   onWriteToDraft: (content: string) => void
   onGoWence: (content: string) => void
-  chatScrollRef: React.RefObject<HTMLDivElement>
+  chatScrollRef: React.RefObject<HTMLDivElement | null>
 }
 
 export function TuiyanChatPanel({
@@ -256,7 +256,7 @@ export function TuiyanChatPanel({
               key={p.text}
               type="button"
               className="flex items-center gap-1 rounded-full border border-border/60 bg-background/60 px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors"
-              onClick={() => setChatInput((prev: string) => prev ? prev + " " + p.text : p.text)}
+              onClick={() => setChatInput(chatInput ? chatInput + " " + p.text : p.text)}
             >
               <p.icon className="h-3 w-3" />
               {p.text}

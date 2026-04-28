@@ -1,12 +1,17 @@
 import { useEffect, useRef } from "react"
 import type { PlanningNodeStructuredMeta, TuiyanPlanningLevel, TuiyanPlanningMeta, TuiyanPlanningNode } from "../../db/types"
-import { cn } from "../../lib/utils"
 import { PLANNING_LEVEL_LABEL, STRUCTURED_FIELDS_BY_LEVEL } from "../../util/tuiyan-planning"
 import { Badge } from "../ui/badge"
 import { Button } from "../ui/button"
-import { Input } from "../ui/input"
-import { Textarea } from "../ui/textarea"
 import { StructuredMetaChips } from "./StructuredMetaChips"
+
+/**
+ * 推演中栏「大纲」纸面样式：故意不复用 shadcn Input/Textarea，
+ * 改用 native input/textarea + 自定义类，避免 shadcn 自带的 border/shadow
+ * 在「合并进同一张纸」时露出内嵌方框。
+ */
+const PAPER_INPUT_BASE =
+  "block w-full border-0 bg-transparent p-0 outline-none ring-0 placeholder:text-muted-foreground/60 focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
 
 /** 让 textarea 随内容自动伸高，不产生内部滚动条 */
 function useAutoResize(value: string) {
@@ -60,10 +65,16 @@ export function TuiyanPlanningNodeCenterEditor({
   const hasStructuredFields = STRUCTURED_FIELDS_BY_LEVEL[node.level].length > 0
   const mainTextareaRef = useAutoResize(mainText)
 
+  const bodyLabel = node.level === "chapter_detail" ? "详细细纲（800-1500 字）" : "本层摘要"
+
   return (
     <div className="mx-auto w-full max-w-6xl p-3 md:p-4">
-      <div className="flex flex-col rounded-xl border border-border/30 bg-card/20 p-3 md:p-4">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+      {/* 推演中栏「一张纸」：保留页面原 bg-card/20 配色，把「层级 / 标题 / 摘要正文 / 结构化字段」并入同一框；title/summary/body 全用 native 元素以彻底避开 shadcn 默认边框，靠虚线分段而非内嵌方框。 */}
+      <div
+        className="flex flex-col rounded-xl border border-border/30 bg-card/20"
+        style={{ padding: "1.25rem clamp(1rem, 4vw, 2rem) 1.5rem" }}
+      >
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Badge variant="outline">{PLANNING_LEVEL_LABEL[node.level]}</Badge>
             <span className="text-xs text-muted-foreground">{modeHint}</span>
@@ -80,28 +91,35 @@ export function TuiyanPlanningNodeCenterEditor({
             </Button>
           )}
         </div>
-        <Input
+
+        {/* 标题：大字号 + 虚线下划线（同 .editor-chapter-title 视觉） */}
+        <input
+          type="text"
           value={node.title}
           onChange={(e) => onTitleChange(node.id, e.target.value)}
-          className="h-11 border-border/50 bg-background/30 text-base font-semibold"
+          className={`${PAPER_INPUT_BASE} pb-3 text-xl font-bold leading-snug text-foreground md:text-2xl`}
+          style={{ borderBottom: "1px dashed color-mix(in srgb, var(--border) 60%, transparent)" }}
           placeholder="请输入标题"
           disabled={disabled}
         />
+
+        {/* chapter_detail 多一行单句摘要（贴在标题之下，作小副标） */}
         {node.level === "chapter_detail" && (
-          <div className="mt-2">
-            <Input
-              value={node.summary}
-              onChange={(e) => onSummaryChange(node.id, e.target.value)}
-              className="h-10 border-border/50 bg-background/30"
-              placeholder="一句话概括本章细纲..."
-              disabled={disabled}
-            />
-          </div>
+          <input
+            type="text"
+            value={node.summary}
+            onChange={(e) => onSummaryChange(node.id, e.target.value)}
+            className={`${PAPER_INPUT_BASE} mt-2 text-sm text-muted-foreground`}
+            placeholder="一句话概括本章细纲..."
+            disabled={disabled}
+          />
         )}
-        <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
-          <span>{node.level === "chapter_detail" ? "详细细纲（800-1500 字）" : "本层摘要"}</span>
+
+        {/* 正文区：和标题在同一张纸内连续，仅靠小标签和留白分段 */}
+        <div className="mt-4 mb-2 text-[11px] uppercase tracking-wide text-muted-foreground/80">
+          {bodyLabel}
         </div>
-        <Textarea
+        <textarea
           ref={mainTextareaRef}
           value={mainText}
           onChange={(e) =>
@@ -109,20 +127,26 @@ export function TuiyanPlanningNodeCenterEditor({
               ? onDraftChange(node.id, e.target.value)
               : onSummaryChange(node.id, e.target.value)
           }
-          className="mt-1 min-h-[160px] resize-none overflow-hidden border-border/50 bg-background/30 text-sm leading-relaxed"
+          className={`${PAPER_INPUT_BASE} min-h-[200px] resize-none overflow-hidden text-[15px] leading-[1.85] text-foreground`}
           placeholder={node.level === "chapter_detail" ? "详细细纲会显示在这里..." : "可手动编辑本层摘要..."}
           disabled={disabled}
         />
+
         {hasStructuredFields && (
-          <StructuredMetaChips
-            nodeId={node.id}
-            level={node.level}
-            meta={structuredMeta}
-            workId={workId}
-            disabled={disabled}
-            onChange={onStructuredMetaChange}
-            libraryRefreshKey={libraryRefreshKey}
-          />
+          <div
+            className="mt-5 pt-4"
+            style={{ borderTop: "1px dashed color-mix(in srgb, var(--border) 60%, transparent)" }}
+          >
+            <StructuredMetaChips
+              nodeId={node.id}
+              level={node.level}
+              meta={structuredMeta}
+              workId={workId}
+              disabled={disabled}
+              onChange={onStructuredMetaChange}
+              libraryRefreshKey={libraryRefreshKey}
+            />
+          </div>
         )}
       </div>
     </div>

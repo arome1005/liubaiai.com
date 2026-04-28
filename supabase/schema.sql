@@ -442,10 +442,14 @@ create table if not exists public.tuiyan_state (
   work_id uuid not null references public.work(id) on delete cascade,
   updated_at bigint not null,
   chat_history jsonb not null default '[]'::jsonb,
+  chat_threads jsonb not null default '[]'::jsonb,
+  active_chat_thread_id text null,
   wence jsonb not null default '[]'::jsonb,
   finalized_node_ids jsonb not null default '[]'::jsonb,
   status_by_node_id jsonb not null default '{}'::jsonb,
   linked_ref_work_ids jsonb not null default '[]'::jsonb,
+  reference_bindings jsonb not null default '[]'::jsonb,
+  reference_policy jsonb not null default '{}'::jsonb,
   mindmap jsonb not null default '{}'::jsonb,
   scenes jsonb not null default '[]'::jsonb,
   selected_prompt_template_id text null,
@@ -467,6 +471,14 @@ alter table public.tuiyan_state
   add column if not exists planning_pushed_outlines jsonb not null default '[]'::jsonb,
   add column if not exists planning_selected_node_id text null,
   add column if not exists planning_structured_meta_by_node_id jsonb not null default '{}'::jsonb;
+alter table public.tuiyan_state
+  add column if not exists chat_threads jsonb not null default '[]'::jsonb,
+  add column if not exists active_chat_thread_id text null,
+  add column if not exists reference_bindings jsonb not null default '[]'::jsonb,
+  add column if not exists reference_policy jsonb not null default '{}'::jsonb;
+alter table public.tuiyan_state
+  add column if not exists planning_outline_target_volumes_by_node_id jsonb not null default '{}'::jsonb,
+  add column if not exists planning_volume_target_chapters_by_node_id jsonb not null default '{}'::jsonb;
 create index if not exists idx_tuiyan_state_user_work on public.tuiyan_state (user_id, work_id);
 alter table public.tuiyan_state            enable row level security;
 alter table public.wence_chat_session     enable row level security;

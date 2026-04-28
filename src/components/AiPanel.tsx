@@ -1,19 +1,15 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type SetStateAction } from "react";
 import { createPortal } from "react-dom";
-import { useNavigate } from "react-router-dom";
-import { exportBibleMarkdown } from "../db/repo";
 import type {
   BibleCharacter,
   BibleGlossaryTerm,
   GlobalPromptTemplate,
   ReferenceExcerpt,
-  ReferenceSearchHit,
   Work,
   Chapter,
 } from "../db/types";
 import { approxRoughTokenCount } from "../ai/approx-tokens";
-import { addSessionApproxTokens, readSessionApproxTokens, resetSessionApproxTokens } from "../ai/sidepanel-session-tokens";
-import { addTodayApproxTokens, readTodayApproxTokens } from "../ai/daily-approx-tokens";
+import { resetSessionApproxTokens } from "../ai/sidepanel-session-tokens";
 import {
   buildWritingSidepanelInjectBlocks,
   buildWritingSidepanelMaterialsSummaryLines,
@@ -24,47 +20,36 @@ import {
   type WritingSkillMode,
   type WritingStyleSampleSlice,
   type WritingGlossaryTermSlice,
-  type WritingStudyCharacterCardSlice,
 } from "../ai/assemble-context";
 import { filterWorkBibleMarkdownBySections } from "../ai/work-bible-sections";
-import { generateWithProviderStream, isFirstAiGateCancelledError } from "../ai/client";
-import { ownerModeWillBypassBudget } from "../util/owner-mode";
-import {
-  getProviderConfig,
-  getProviderTemperature,
-  loadAiSettings,
-  patchProviderTemperature,
-  saveAiSettings,
-} from "../ai/storage";
+import { getProviderConfig, loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiChatMessage, AiProviderConfig, AiProviderId, AiSettings } from "../ai/types";
 import { resolveInjectionConfirmPrompt } from "../util/ai-injection-confirm";
-import { CostGateModal, type CostGatePayload } from "./CostGateModal";
-import {
-  buildContextDegradeOverrides,
-  errorSuggestsContextDegrade,
-  type AiRunContextOverrides,
-} from "../util/ai-degrade-retry";
+import { CostGateModal } from "./CostGateModal";
+import { buildContextDegradeOverrides } from "../util/ai-degrade-retry";
 import { normalizeWorkTagList, workTagsToProfileText } from "../util/work-tags";
-import { computeToneDriftHints } from "../util/tone-drift-hint";
-import { cosineDistance } from "../util/vector-math";
-import { readEmbeddingCache, writeEmbeddingCache } from "../util/embedding-cache";
-import { embedWithProvider } from "../ai/client";
-import { searchWritingRagMerged, type WritingRagSources } from "../util/work-rag-runtime";
+import { useAiPanelToneDrift } from "./ai-panel/useAiPanelToneDrift";
+import { useAiPanelStudySelection } from "./ai-panel/useAiPanelStudySelection";
+import type { WritingRagSources } from "../util/work-rag-runtime";
 import { AiDraftMergeDialog, type AiDraftMergePayload } from "./AiDraftMergeDialog";
 import { AiInlineErrorNotice } from "./AiInlineErrorNotice";
-import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { AiPanelWritingPromptsRow } from "./ai-panel/AiPanelWritingPromptsRow";
 import { renderPromptTemplate } from "../util/render-prompt-template";
-import { cn } from "../lib/utils";
-import { listModelPersonas } from "../util/model-personas";
-import { aiPanelDraftStorageKey, pushDraftHistory, readDraftHistory, type AiDraftHistoryEntry } from "../util/ai-panel-draft";
 import { loadChapterTargetWordCount, saveChapterTargetWordCount } from "../util/chapter-target-wordcount-storage";
+import type { AiUsageEventRow } from "../storage/ai-usage-db";
 import { isLocalAiProvider } from "../ai/local-provider";
-import { doubaoModelDisplayLabel } from "../util/doubao-ui";
-import { AiPanelRagSection, runAiPanelRagPreview } from "./ai-panel/AiPanelRagSection";
+import { AiPanelRagSection } from "./ai-panel/AiPanelRagSection";
 import { AiPanelStudyChapterSection } from "./ai-panel/AiPanelStudyChapterSection";
-import { useGenPhase } from "./ai-panel/useGenPhase";
 import { useOutlineSource } from "./ai-panel/useOutlineSource";
+import { useAiPanelDraftHistory } from "./ai-panel/useAiPanelDraftHistory";
+import { useAiPanelRunState } from "./ai-panel/useAiPanelRunState";
+import { useAiPanelStreamingRun } from "./ai-panel/useAiPanelStreamingRun";
+import { useAiPanelOutlineBodyStreamRun } from "./ai-panel/useAiPanelOutlineBodyStreamRun";
+import { estimateMaxOutputTokensForTargetChineseChars } from "../ai/writing-body-output-budget";
+import { useAiPanelContextAssembly } from "./ai-panel/useAiPanelContextAssembly";
+import { useAiPanelRagSession } from "./ai-panel/useAiPanelRagSession";
+import { AiPanelModelPickerDialog } from "./ai-panel/AiPanelModelPickerDialog";
+import { PROVIDER_UI, providerLogoImgSrc } from "./ai-panel/provider-ui";
 import { OutlineGenerationDialog } from "./ai-panel/OutlineGenerationDialog";
 import { AiPanelHistoryDialog } from "./ai-panel/AiPanelHistoryDialog";
 import { LINKED_CHAPTERS_UPDATED_EVENT, loadLinkedChapters } from "../util/linked-chapters-storage";
@@ -73,8 +58,6 @@ import {
   loadChapterOutlinePaste,
   saveChapterOutlinePaste,
 } from "../util/chapter-outline-paste-storage";
-import { readStudyChapterSelection, writeStudyChapterSelection } from "../util/study-chapter-selection-storage";
-import { buildStudyNeedleText, pickSuggestedCharacterIds, pickSuggestedGlossaryIds } from "../util/study-suggestions";
 import type {
   AiPanelWorkRagInjectDefaults,
   AiPanelWorkRagInjectDefaultsPatch,
@@ -83,79 +66,6 @@ import type {
 } from "./ai-panel/types";
 import { Bot } from "lucide-react";
 
-function providerLogoImgSrc(p: AiProviderId): string | null {
-  switch (p) {
-    case "openai":
-      return "/logos/openai.png";
-    case "anthropic":
-      return "/logos/claude.png";
-    case "gemini":
-      return "/logos/gemini.png";
-    case "ollama":
-    case "mlx":
-      return "/logos/ollama.png";
-    case "doubao":
-      return "/logos/doubao.png";
-    case "zhipu":
-      return "/logos/zhipu.png";
-    case "kimi":
-      return "/logos/kimi.png";
-    case "xiaomi":
-      return "/logos/xiaomi.png";
-    default:
-      return null;
-  }
-}
-
-function providerLogoFallbackText(p: AiProviderId): string {
-  switch (p) {
-    case "openai":
-      return "";
-    case "anthropic":
-      return "雨";
-    case "gemini":
-      return "云";
-    case "doubao":
-      return "豆";
-    case "zhipu":
-      return "谱";
-    case "kimi":
-      return "月";
-    case "xiaomi":
-      return "米";
-    case "ollama":
-    case "mlx":
-      return "龙";
-    default:
-      return "·";
-  }
-}
-
-/** 单一视觉：PNG 或一字回退，避免与侧栏列表双行文字错位 */
-function AiProviderLogo(props: { provider: AiProviderId }) {
-  const p = props.provider;
-  const imgSrc = providerLogoImgSrc(p);
-  const text = providerLogoFallbackText(p);
-  const [imgFailed, setImgFailed] = useState(false);
-  const showImg = Boolean(imgSrc) && !imgFailed;
-
-  return (
-    <span aria-hidden className="provider-logo" data-provider={p} title={p}>
-      {showImg ? (
-        <img
-          src={imgSrc!}
-          alt=""
-          className="provider-logo-img"
-          onError={() => setImgFailed(true)}
-        />
-      ) : (
-        <span className="provider-logo-fallback">{text || "·"}</span>
-      )}
-    </span>
-  );
-}
-
-// eslint-disable-next-line react-refresh/only-export-components
 export const AiPanel = memo(function AiPanelBase(props: {
   onClose: () => void;
   /** 在右侧栏壳层内使用时隐藏标题行（避免重复两行标题） */
@@ -222,7 +132,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
   /** 章纲树是否为空：用于让「从章纲拉取」按钮禁用并给出提示。 */
   outlineEntriesCount?: number;
 }) {
-  const navigate = useNavigate();
   const {
     storyBackground,
     characters,
@@ -268,187 +177,29 @@ export const AiPanel = memo(function AiPanelBase(props: {
   };
   void _setWorkBibleSectionMaskUp;
 
-  const GEMINI_MIND = {
-    初见: "gemini-3.1-flash-lite-preview",
-    入微: "gemini-3-flash-preview",
-    化境: "gemini-3.1-pro-preview",
-  } as const;
-
-  const _GEMINI_GEAR_KEYS = ["初见", "入微", "化境"] as const;
-  void _GEMINI_GEAR_KEYS;
-
-  function _geminiGearIndex(model: string): number {
-    if (model === GEMINI_MIND["初见"]) return 0;
-    if (model === GEMINI_MIND["入微"]) return 1;
-    return 2;
-  }
-  void _geminiGearIndex;
-
-  function tempBand(t: number): "沉稳" | "意兴渐起" | "灵感喷发" {
-    if (t <= 0.7) return "沉稳";
-    if (t <= 1.2) return "意兴渐起";
-    return "灵感喷发";
-  }
-
-  function tempSides(t: number): { left: string; right: string; center: string } {
-    const band = tempBand(t);
-    const center = `${band}（${t.toFixed(1)}）`;
-    if (band === "沉稳") return { left: "沉稳", right: "意兴渐起", center };
-    if (band === "意兴渐起") return { left: "沉稳", right: "灵感喷发", center };
-    return { left: "意兴渐起", right: "灵感喷发", center };
-  }
-
-  function Meter(props: { value: number; max?: number }) {
-    const max = props.max ?? 5;
-    const v = Math.max(0, Math.min(max, Math.floor(props.value)));
-    return (
-      <span style={{ display: "inline-flex", gap: 6, verticalAlign: "middle" }} aria-label={`${v}/${max}`}>
-        {Array.from({ length: max }).map((_, i) => (
-          <span
-            key={i}
-            aria-hidden
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: 3,
-              background: i < v ? "rgba(250, 204, 21, 0.95)" : "rgba(148, 163, 184, 0.55)",
-            }}
-          />
-        ))}
-      </span>
-    );
-  }
-
-  /** 云端「神思」温度 → 字数消耗星级（与各云端弹窗底部滑条联动） */
-  function geminiCostStarsFromShensi(t: number) {
-    const x = Math.max(0.1, Math.min(2.0, t));
-    if (x < 0.8) return 3;
-    if (x < 1.3) return 4;
-    return 5;
-  }
-
-  const PROVIDER_UI: Record<
-    AiProviderId,
-    {
-      label: string;
-      subtitle: string;
-      tip: string;
-      quote: string;
-      core: string;
-      meters: { prose: number; follow: number; cost: number; costText?: string };
-      note: string;
-    }
-  > = {
-    openai: {
-      label: "见山",
-      subtitle: "逻辑之宗 · 纲举目张",
-      tip: "见山（OpenAI）",
-      quote: '"初看是山，看久了还是那座稳健的大山。"',
-      core:
-        "逻辑之宗，纲举目张。指令遵循极强，如利刃破竹，最擅长梳理宏大的世界观设定与严密的剧情逻辑。",
-      meters: { prose: 5, follow: 5, cost: 2 },
-      note: "适合\"一览众山小\"的逻辑架构，若追求极致的辞藻修饰，建议配合\"听雨\"使用。",
-    },
-    anthropic: {
-      label: "听雨",
-      subtitle: "辞藻丰盈 · 情感细腻",
-      tip: "听雨（Claude）",
-      quote: '"如檐下听雨，文字绵密入骨，最懂人心。"',
-      core:
-        "辞藻丰盈，情感细腻。像一位共情力极强的老友，成文质感极佳，自带一种天然的去\"AI味\"滤镜，是描写人物内心与凄美画面的首选。",
-      meters: { prose: 5, follow: 4, cost: 3 },
-      note: "如遇敏感剧情可能像雨天一样\"多愁善感\"而断更，建议微调措辞或跳过该段落。",
-    },
-    gemini: {
-      label: "观云",
-      subtitle: "创意如云 · 变幻万千",
-      tip: "观云（Gemini）",
-      quote: '"坐看云起，奇思妙想如漫天流云，不可捉摸。"',
-      core:
-        "创意如云，变幻万千。拥有惊人的上下文联想能力，最擅长在陷入瓶颈时为你提供打破常规的\"神来之笔\"，让剧情走向峰回路转。",
-      meters: { prose: 4, follow: 3, cost: 2 },
-      note: "云海辽阔，长文推理可能需要稍作等待，建议在开启\"高思考预算\"时保持耐心。",
-    },
-    ollama: {
-      label: "潜龙",
-      subtitle: "本地 · Ollama",
-      tip: "潜龙（Ollama）",
-      quote: '"藏龙于渊，不假外求，深藏不露的底气。"',
-      core:
-        "根植本地，稳如泰山。不依赖云端，私密且纯粹。虽然平时深潜不出，但在处理基础创作任务时，有着龙跃于渊般的稳健爆发力。",
-      meters: { prose: 3, follow: 3, cost: 1, costText: "极低消耗" },
-      note: "本地运行受限于设备性能，适合快速草拟或在离线环境下作为创作基座。",
-    },
-    mlx: {
-      label: "潜龙",
-      subtitle: "本地 · MLX",
-      tip: "潜龙（Apple MLX）",
-      quote: '"藏龙于渊，不假外求，深藏不露的底气。"',
-      core:
-        "根植本地，稳如泰山。通过 Apple MLX 在本机推理，私密且纯粹；请确保已启动兼容 OpenAI 接口的本地服务并正确填写 Base URL。",
-      meters: { prose: 3, follow: 3, cost: 1, costText: "极低消耗" },
-      note: "MLX 的模型名与端口以你的部署为准；浏览器若遇 CORS 请用 dev 代理或桌面端。",
-    },
-    doubao: {
-      label: "燎原",
-      subtitle: "墨落星火 · 势成燎原",
-      tip: "燎原（豆包）",
-      quote: '"墨落星火，势成燎原。"',
-      core:
-        "它是扎根于东方文脉的智慧火种，不只是精准解析你的一字一句，更深谙汉语背后的山河底蕴与人文温度。于方寸屏幕间，赋你一支生花妙笔；借燎原之势，让你的文思，跨越山海，写尽天下。",
-      meters: { prose: 3, follow: 5, cost: 2, costText: "极低" },
-      note: "若遇到调用失败，多半是 Base URL 或 Model 命名不一致；请以你控制台/通用接口参数为准。",
-    },
-    zhipu: {
-      label: "智谱",
-      subtitle: "墨竹清劲 · 文理兼备",
-      tip: "智谱 GLM",
-      quote: '"竹影扫阶尘不动，月穿潭底水无痕。"',
-      core:
-        "GLM-5 / GLM-4.7 系列在中文理解与指令遵循上扎实，适合长文写作中的结构梳理、设定补全与多轮改写；模型 ID 请以开放平台文档（如 glm-5、glm-4.7、glm-4.7-flash）为准。",
-      meters: { prose: 4, follow: 4, cost: 2 },
-      note: "使用 OpenAI 兼容接口（/chat/completions）；若报错请核对 Base URL、Key 与模型 ID。",
-    },
-    kimi: {
-      label: "Kimi",
-      subtitle: "长卷如月 · 徐徐展开",
-      tip: "Kimi（Moonshot）",
-      quote: '"月色入户，清辉满纸。"',
-      core:
-        "Kimi 擅长在长上下文里保持线索不断裂，适合需要\"带着前文记忆\"续写与扩写的场景；流式输出与本 App 的生成体验契合。",
-      meters: { prose: 4, follow: 4, cost: 3 },
-      note: "默认 Base URL 为 Moonshot 文档中的 v1 根路径；模型名以控制台为准。",
-    },
-    xiaomi: {
-      label: "小米",
-      subtitle: "锋刃内敛 · 务实为文",
-      tip: "小米 MiMo",
-      quote: '"工欲善其事，必先利其器。"',
-      core:
-        "小米 MiMo 提供 OpenAI 兼容接口；写作常用 mimo-v2-pro（偏强）与 mimo-v2-flash（偏快），在高级后端配置中可一键选择。",
-      meters: { prose: 3, follow: 4, cost: 2 },
-      note: "Base URL 填官方 api.mimo-v2.com/v1 即可。本地开发请用 npm run dev，已走同源代理避免浏览器跨域拦截；静态部署或遇 Failed to fetch 时需后端转发。",
-    },
-    // owner-only：不出现在选择器（picker 数组里被排除），保留键以满足 Record 类型
-    "claude-code-local": {
-      label: "Claude Code（订阅）",
-      subtitle: "Owner · 本机 sidecar",
-      tip: "Claude Code 本地直连",
-      quote: '"我自用我的订阅。"',
-      core: "通过本机 sidecar（127.0.0.1:7788）调 Claude Pro/Max 订阅，不计入 API 计费。仅作者本人可见。",
-      meters: { prose: 5, follow: 4, cost: 1, costText: "订阅" },
-      note: "需在终端 npm run sidecar 启动本机 sidecar，并在「Owner 模式」粘贴 Token。",
-    },
-  };
-
   const [settings, setSettings] = useState<AiSettings>(() => loadAiSettings());
   const [chapterOutlinePaste, setChapterOutlinePaste] = useState("");
-  const [studyPickedCharacterIds, setStudyPickedCharacterIds] = useState<string[]>([]);
-  const [studyPickedGlossaryIds, setStudyPickedGlossaryIds] = useState<string[]>([]);
-  const [studyCharacterSource, setStudyCharacterSource] = useState<"cards" | "npc">("cards");
-  const [studyNpcText, setStudyNpcText] = useState("");
-  /** 防章节切换瞬间把 localStorage 默认值写覆盖到上一章 */
-  const studySelectionHydratedForChapterRef = useRef<string | null>(null);
+  const {
+    studyPickedCharacterIds,
+    setStudyPickedCharacterIds,
+    studyPickedGlossaryIds,
+    setStudyPickedGlossaryIds,
+    studyCharacterSource,
+    setStudyCharacterSource,
+    studyNpcText,
+    setStudyNpcText,
+    studyCharacterCardSlices,
+    studyGlossarySlices,
+    glossaryTermCountForSummary,
+  } = useAiPanelStudySelection({
+    workId: props.workId,
+    chapterId: props.chapter?.id ?? null,
+    bibleCharacters: props.bibleCharacters,
+    glossaryTerms: props.glossaryTerms,
+    chapterContent: props.chapterContent,
+    chapterSummary: props.chapter?.summary,
+    chapterBibleCharacterStateText: props.chapterBible.characterStateText,
+  });
   /** 快捷窗选入的写作风格 / 要求（渲染后的正文），与下方「额外要求」文本框合并后参与组装 */
   const [writingStyleInject, setWritingStyleInject] = useState("");
   const [writingReqInject, setWritingReqInject] = useState("");
@@ -461,78 +212,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
   const [styleCustomText, setStyleCustomText] = useState("");
   const [reqCustomText, setReqCustomText] = useState("");
 
-  // 书斋：本章勾选（localStorage）；新章节给一套默认推荐（可改）
-  useEffect(() => {
-    if (!props.workId || !props.chapter) {
-      setStudyPickedCharacterIds([]);
-      setStudyPickedGlossaryIds([]);
-      setStudyCharacterSource("cards");
-      setStudyNpcText("");
-      studySelectionHydratedForChapterRef.current = null;
-      return;
-    }
-    const chapterId = props.chapter.id;
-    studySelectionHydratedForChapterRef.current = null;
-
-    const saved = readStudyChapterSelection(props.workId, chapterId);
-    const charSet = new Set(props.bibleCharacters.map((c) => c.id));
-    const glossSet = new Set(props.glossaryTerms.map((g) => g.id));
-
-    if (saved) {
-      const charIds = saved.characterIds.filter((id) => charSet.has(id));
-      let glossIds = saved.glossaryIds.filter((id) => glossSet.has(id));
-      if (saved.glossaryMode === "full_book") {
-        glossIds = props.glossaryTerms.map((g) => g.id).filter((id) => glossSet.has(id));
-      }
-      setStudyPickedCharacterIds(charIds);
-      setStudyPickedGlossaryIds(glossIds);
-      setStudyCharacterSource(saved.characterSource === "npc" ? "npc" : "cards");
-      setStudyNpcText(saved.npcText ?? "");
-      studySelectionHydratedForChapterRef.current = chapterId;
-      return;
-    }
-
-    const needleEarly = buildStudyNeedleText([
-      props.chapterContent,
-      props.chapter.summary,
-      props.chapterBible.characterStateText,
-    ]);
-    const sugChar = pickSuggestedCharacterIds(props.bibleCharacters, needleEarly);
-    const sugGloss = pickSuggestedGlossaryIds(props.glossaryTerms, needleEarly);
-    setStudyPickedCharacterIds(sugChar);
-    setStudyPickedGlossaryIds(sugGloss);
-    setStudyCharacterSource("cards");
-    setStudyNpcText("");
-    studySelectionHydratedForChapterRef.current = chapterId;
-  }, [
-    props.workId,
-    props.chapter?.id,
-    props.bibleCharacters,
-    props.glossaryTerms,
-    props.chapterContent,
-    props.chapter?.summary,
-    props.chapterBible.characterStateText,
-  ]);
-
-  useEffect(() => {
-    if (!props.workId || !props.chapter) return;
-    if (studySelectionHydratedForChapterRef.current !== props.chapter.id) return;
-    writeStudyChapterSelection(props.workId, props.chapter.id, {
-      v: 2,
-      characterIds: studyPickedCharacterIds,
-      glossaryIds: studyPickedGlossaryIds,
-      glossaryMode: "chapter_pick",
-      characterSource: studyCharacterSource,
-      npcText: studyNpcText,
-    });
-  }, [
-    props.chapter,
-    props.workId,
-    studyCharacterSource,
-    studyNpcText,
-    studyPickedCharacterIds,
-    studyPickedGlossaryIds,
-  ]);
 
   useEffect(() => {
     // 兼容旧入口：仍消费一次性 prefill，但不再显示「额外要求」输入框
@@ -541,8 +220,18 @@ export const AiPanel = memo(function AiPanelBase(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onPrefillUserHintConsumed intentionally omitted
   }, [props.prefillUserHint]);
 
-  /** 「本章正文生成」状态机（preparing → streaming → done/error/aborted），见 useGenPhase */
-  const { phase: genPhase, dispatch: dispatchGenPhase, reset: resetGenPhase } = useGenPhase();
+  const {
+    genPhase, dispatchGenPhase, resetGenPhase,
+    busy, setBusy,
+    error, setError,
+    showDegradeRetry, setShowDegradeRetry,
+    mergePayload, setMergePayload,
+    costGatePending, setCostGatePending,
+    setSessionBudgetUiTick,
+    setDailyUsageTick,
+    sessionTokensUsed, todayTokensUsed,
+    abortRef, lastReqRef, runContextOverridesRef, degradeAttemptedRef,
+  } = useAiPanelRunState({ aiSessionApproxTokenBudget: settings.aiSessionApproxTokenBudget });
   /** 细纲来源（manual_paste / outline_pull / mixed / unknown），按章持久化 */
   const { source: outlineSource, markManual: markOutlineSourceManual, markPull: markOutlineSourcePull } =
     useOutlineSource(props.workId, props.chapter?.id ?? null);
@@ -569,32 +258,36 @@ export const AiPanel = memo(function AiPanelBase(props: {
     return () => window.removeEventListener(CHAPTER_OUTLINE_PASTE_UPDATED_EVENT, on as EventListener);
   }, [props.workId, props.chapter?.id, markOutlineSourcePull]);
 
-  const [sessionBudgetUiTick, setSessionBudgetUiTick] = useState(0);
-  /** P1-04：今日用量刷新触发器（发送完成后 +1） */
-  const [dailyUsageTick, setDailyUsageTick] = useState(0);
-  /** P1-04：成本门控弹窗 pending（deferred-promise 模式） */
-  const [costGatePending, setCostGatePending] = useState<(CostGatePayload & { resolve: (ok: boolean) => void }) | null>(null);
-  const [busy, setBusy] = useState(false);
-  const sessionTokensUsed = useMemo(() => {
-    void sessionBudgetUiTick;
-    return settings.aiSessionApproxTokenBudget > 0 ? readSessionApproxTokens() : 0;
-  }, [settings.aiSessionApproxTokenBudget, sessionBudgetUiTick, busy]);
-  /** P1-04：今日已用 tokens（始终展示，随 dailyUsageTick / busy 变化刷新） */
-  const todayTokensUsed = useMemo(() => {
-    void dailyUsageTick;
-    void busy;
-    return readTodayApproxTokens();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dailyUsageTick, busy]);
-  const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [draftDialogOpen, setDraftDialogOpen] = useState(false);
   /** 生成弹窗当前是否处于「细纲已带入、待点击生成正文」模式 */
   const [draftSeedMode, setDraftSeedMode] = useState(false);
-  /** P1-C：草稿历史列表 */
-  const [draftHistory, setDraftHistory] = useState<AiDraftHistoryEntry[]>([]);
-  /** AI 侧栏「历史」独立弹窗开关（弹窗内部管理选中态/排序，见 AiPanelHistoryDialog） */
-  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const {
+    draftStorageKey,
+    draftHistory,
+    setDraftHistory,
+    historyDialogOpen,
+    setHistoryDialogOpen,
+    pushGeneratedDraftHistory,
+  } = useAiPanelDraftHistory({
+    workId: props.workId,
+    chapterId: props.chapter?.id ?? null,
+  });
+
+  const { executeStream } = useAiPanelStreamingRun({
+    settings,
+    workId: props.workId ?? null,
+    setError,
+    setShowDegradeRetry,
+    setDraft,
+    setCostGatePending,
+    setSessionBudgetUiTick,
+    setDailyUsageTick,
+    dispatchGenPhase,
+    pushGeneratedDraftHistory,
+    degradeAttemptedRef,
+  });
+  const { runOutlineBodyWithContinuation } = useAiPanelOutlineBodyStreamRun(executeStream);
   /** 用户自定义的本章正文字数（0/空 → 不约束）。包含标点。 */
   const [targetWordCount, setTargetWordCount] = useState<number>(0);
   const [biblePreview, setBiblePreview] = useState<{ text: string; chars: number } | null>(null);
@@ -610,49 +303,32 @@ export const AiPanel = memo(function AiPanelBase(props: {
     return () => window.removeEventListener(LINKED_CHAPTERS_UPDATED_EVENT, onLinked as EventListener);
   }, []);
 
-  const [ragQuery, setRagQuery] = useState("");
-  const [ragHits, setRagHits] = useState<ReferenceSearchHit[]>([]);
-  const [ragLoading, setRagLoading] = useState(false);
-  /** 用户单独取消的命中 chunkId 集合；换 query 时自动清空 */
-  const [ragExcluded, setRagExcluded] = useState<ReadonlySet<string>>(new Set());
+  const {
+    ragQuery,
+    setRagQuery,
+    ragHits,
+    setRagHits,
+    ragLoading,
+    setRagLoading,
+    ragExcluded,
+    setRagExcluded,
+    runRagPreview,
+  } = useAiPanelRagSession({
+    workId: props.workId,
+    work: props.work,
+    chapters: props.chapters,
+    activeChapterId: props.chapter?.id ?? null,
+    ragK,
+    ragWorkSources,
+    setError,
+  });
 
-  // 换关键词时清空单条排除集合
-  useEffect(() => { setRagExcluded(new Set()); }, [ragQuery]);
-
-  const runRagPreview = useCallback(() => {
-    void runAiPanelRagPreview({
-      workId: props.workId,
-      work: props.work,
-      chapters: props.chapters,
-      activeChapterId: props.chapter?.id ?? null,
-      ragQuery,
-      ragK,
-      ragWorkSources,
-      setRagHits,
-      setRagLoading,
-      setError,
-    });
-  }, [props.workId, props.work, props.chapters, props.chapter?.id, ragQuery, ragK, ragWorkSources]);
-
-  const abortRef = useRef<AbortController | null>(null);
-  const lastReqRef = useRef<{
-    provider: AiProviderId;
-    providerCfg: AiSettings["openai"];
-    messages: AiChatMessage[];
-  } | null>(null);
-  const runContextOverridesRef = useRef<AiRunContextOverrides | null>(null);
-  const degradeAttemptedRef = useRef(false);
-  const [showDegradeRetry, setShowDegradeRetry] = useState(false);
-  const [mergePayload, setMergePayload] = useState<AiDraftMergePayload | null>(null);
   const skipDraftPersistRef = useRef(false);
-
-  const draftStorageKey = props.chapter && props.workId ? aiPanelDraftStorageKey(props.workId, props.chapter.id) : null;
 
   useLayoutEffect(() => {
     if (!draftStorageKey) {
       setDraft("");
       setDraftSeedMode(false);
-      setDraftHistory([]);
       return;
     }
     skipDraftPersistRef.current = true;
@@ -662,7 +338,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
       setDraft("");
     }
     setDraftSeedMode(false);
-    setDraftHistory(props.workId && props.chapter ? readDraftHistory(props.workId, props.chapter.id) : []);
     setTargetWordCount(
       props.workId && props.chapter ? loadChapterTargetWordCount(props.workId, props.chapter.id) : 0,
     );
@@ -696,27 +371,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     ? true
     : settings.privacy.consentAccepted && settings.privacy.allowCloudProviders;
   const [providerPickerOpen, setProviderPickerOpen] = useState(false);
-  const [pickerActive, setPickerActive] = useState<AiProviderId>("ollama");
-  /** 选模型弹窗底部：观云有「模型档位」+「神思」；其它云端仅有「神思」；Ollama 无温度条 */
-  const [modelPickerTune, setModelPickerTune] = useState<null | "gear" | "shensi">(null);
-
-  useEffect(() => {
-    if (!providerPickerOpen) setModelPickerTune(null);
-  }, [providerPickerOpen]);
-
-  useEffect(() => {
-    if (isLocalAiProvider(pickerActive)) {
-      setModelPickerTune(null);
-      return;
-    }
-
-    // 允许任意云端提供方使用「模型档位」，前提是该提供方存在 >=2 个可用 persona（档位）。
-    // 否则切换 provider 时会把无效的 gear 面板关掉。
-    if (modelPickerTune === "gear") {
-      const personasAll = listModelPersonas(pickerActive).filter((p) => (p.modelId ?? "").trim());
-      if (personasAll.length < 2) setModelPickerTune(null);
-    }
-  }, [pickerActive, modelPickerTune]);
 
   const selectedText = useMemo(() => props.getSelectedText(), [props]);
 
@@ -790,90 +444,15 @@ export const AiPanel = memo(function AiPanelBase(props: {
     [promptRenderVars],
   );
 
-  const toneDriftHints = useMemo(() => {
-    if (!settings.toneDriftHintEnabled) return [];
-    const t = draft.trim();
-    if (!t) return [];
-    return computeToneDriftHints({
-      bannedPhrases: props.workStyle.bannedPhrases,
-      styleAnchor: props.workStyle.styleAnchor,
-      draftText: draft,
-    });
-  }, [settings.toneDriftHintEnabled, draft, props.workStyle.bannedPhrases, props.workStyle.styleAnchor]);
-
-  const [toneEmbedHint, setToneEmbedHint] = useState<string | null>(null);
-  const [toneEmbedBusy, setToneEmbedBusy] = useState(false);
-  const [toneEmbedErr, setToneEmbedErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!settings.toneDriftHintEnabled) {
-      setToneEmbedHint(null);
-      setToneEmbedErr(null);
-      setToneEmbedBusy(false);
-      return;
-    }
-    const provider = settings.provider;
-    if (isLocalAiProvider(provider) || !cloudAllowed) {
-      setToneEmbedHint(null);
-      setToneEmbedErr(null);
-      setToneEmbedBusy(false);
-      return;
-    }
-    const embModel = (providerCfg.embeddingModel ?? "").trim();
-    const anchor = (props.workStyle.styleAnchor ?? "").trim();
-    const t = draft.trim();
-    if (!embModel || anchor.length < 24 || t.length < 24) {
-      setToneEmbedHint(null);
-      setToneEmbedErr(null);
-      setToneEmbedBusy(false);
-      return;
-    }
-
-    let cancelled = false;
-    const ac = new AbortController();
-    setToneEmbedBusy(true);
-    setToneEmbedErr(null);
-    void (async () => {
-      try {
-        const aText = anchor.slice(0, 2400);
-        const bText = t.slice(0, 2400);
-        const cachedA = readEmbeddingCache(provider, embModel, aText);
-        const cachedB = readEmbeddingCache(provider, embModel, bText);
-        const a =
-          cachedA ??
-          (await embedWithProvider({ provider, config: providerCfg, input: aText, signal: ac.signal })).embedding;
-        const b =
-          cachedB ??
-          (await embedWithProvider({ provider, config: providerCfg, input: bText, signal: ac.signal })).embedding;
-        if (!cachedA) writeEmbeddingCache(provider, embModel, aText, a);
-        if (!cachedB) writeEmbeddingCache(provider, embModel, bText, b);
-        const dist = cosineDistance(a, b);
-        if (dist == null) throw new Error("embedding 距离计算失败");
-
-        // 经验阈值：>0.22 认为差异明显；>0.30 强提示。仅提示不阻断。
-        const line =
-          dist >= 0.3
-            ? `标杆段距离偏大（cos 距离≈${dist.toFixed(2)}），草稿调性可能明显偏离文风锚点。`
-            : dist >= 0.22
-              ? `标杆段距离略大（cos 距离≈${dist.toFixed(2)}），建议对照文风锚点检查节奏/用词。`
-              : null;
-        if (cancelled) return;
-        setToneEmbedHint(line);
-      } catch (e) {
-        if (cancelled) return;
-        const msg = e instanceof Error ? e.message : "embedding 计算失败";
-        setToneEmbedErr(msg);
-        setToneEmbedHint(null);
-      } finally {
-        if (!cancelled) setToneEmbedBusy(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      ac.abort();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- 该 effect 仅关心调性提示相关输入
-  }, [settings.toneDriftHintEnabled, cloudAllowed, providerCfg, props.workStyle.styleAnchor, draft]);
+  const { toneDriftHints, toneEmbedHint, toneEmbedBusy, toneEmbedErr } = useAiPanelToneDrift({
+    toneDriftHintEnabled: settings.toneDriftHintEnabled,
+    cloudAllowed,
+    provider: settings.provider,
+    providerCfg,
+    bannedPhrases: props.workStyle.bannedPhrases,
+    styleAnchor: props.workStyle.styleAnchor,
+    draft,
+  });
 
   const sessionBudget = settings.aiSessionApproxTokenBudget;
 
@@ -974,41 +553,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     }));
   }, [props.glossaryTerms]);
 
-  const studyCharacterCardSlices = useMemo((): WritingStudyCharacterCardSlice[] => {
-    if (studyCharacterSource !== "cards") return [];
-    const byId = new Map(props.bibleCharacters.map((c) => [c.id, c]));
-    const out: WritingStudyCharacterCardSlice[] = [];
-    for (const id of studyPickedCharacterIds) {
-      const c = byId.get(id);
-      if (!c) continue;
-      if (!(c.name ?? "").trim()) continue;
-      out.push({
-        name: c.name,
-        motivation: c.motivation ?? "",
-        relationships: c.relationships ?? "",
-        voiceNotes: c.voiceNotes ?? "",
-        taboos: c.taboos ?? "",
-      });
-    }
-    return out;
-  }, [props.bibleCharacters, studyCharacterSource, studyPickedCharacterIds]);
-
-  const studyGlossarySlices = useMemo((): WritingGlossaryTermSlice[] => {
-    const byId = new Map(props.glossaryTerms.map((g) => [g.id, g]));
-    const out: WritingGlossaryTermSlice[] = [];
-    for (const id of studyPickedGlossaryIds) {
-      const g = byId.get(id);
-      if (!g) continue;
-      if (!(g.term ?? "").trim()) continue;
-      out.push({ term: g.term, category: g.category, note: g.note ?? "" });
-    }
-    return out;
-  }, [props.glossaryTerms, studyPickedGlossaryIds]);
-
-  const glossaryTermCountForSummary = useMemo(
-    () => studyGlossarySlices.filter((g) => (g.term ?? "").trim()).length,
-    [studyGlossarySlices],
-  );
 
   const styleSampleCountForSummary = useMemo(
     () => props.styleSampleSlices.filter((s) => (s.body ?? "").trim()).length,
@@ -1243,6 +787,56 @@ export const AiPanel = memo(function AiPanelBase(props: {
     updateSettings({ provider: p });
   }
 
+  const { buildAssembledRequest } = useAiPanelContextAssembly({
+    workId: props.workId,
+    work: props.work,
+    chapter: props.chapter,
+    chapters: props.chapters,
+    chapterContent: props.chapterContent,
+    chapterBible: props.chapterBible,
+    workStyle: props.workStyle,
+    linkedExcerptsForChapter: props.linkedExcerptsForChapter,
+    styleSampleSlices: props.styleSampleSlices,
+    settings,
+    providerCfg,
+    isCloudProvider,
+    currentContextMode,
+    includeRecentSummaries,
+    includeLinkedExcerpts,
+    recentN,
+    chapterBibleInjectMask,
+    workBibleSectionMask,
+    ragEnabled,
+    ragWorkSources,
+    ragK,
+    ragQuery,
+    ragHits,
+    ragExcluded,
+    setRagHits,
+    setRagLoading,
+    setBibleLoading,
+    setBiblePreview,
+    tagProfileText,
+    storyBackground,
+    characters,
+    relations,
+    skillPresetText,
+    recentSummaryText,
+    linkedChapterSummaryText,
+    linkedChapterFullText,
+    linkedChapters,
+    neighborSummaryIncludedCount,
+    chapterOutlinePaste,
+    glossarySlices,
+    studyCharacterCardSlices,
+    studyGlossarySlices,
+    studyCharacterSource,
+    studyNpcText,
+    selectedText,
+    composedUserHint,
+    runContextOverridesRef,
+  });
+
   async function run(
     input?: { provider: AiProviderId; providerCfg: AiProviderConfig; messages: AiChatMessage[] },
     opts?: { mode?: WritingSkillMode; fromDegrade?: boolean; outlineOverride?: string },
@@ -1285,227 +879,63 @@ export const AiPanel = memo(function AiPanelBase(props: {
       let messages: AiChatMessage[];
       let usedProvider: AiProviderId;
       let usedProviderCfg: AiProviderConfig;
+      let assembledContextBuckets: AiUsageEventRow["contextInputBuckets"];
       if (input) {
         messages = input.messages;
         usedProvider = input.provider;
         usedProviderCfg = input.providerCfg;
+        assembledContextBuckets = undefined;
       } else {
-        const ov = runContextOverridesRef.current;
-        runContextOverridesRef.current = null;
-
-        const effMax = ov?.maxContextChars ?? settings.maxContextChars;
-        const effIncludeBible =
-          ov?.includeBible !== undefined ? ov.includeBible : settings.includeBible;
-        const effRag = ov?.ragEnabled !== undefined ? ov.ragEnabled : ragEnabled;
-        const effRecent =
-          ov?.includeRecentSummaries !== undefined ? ov.includeRecentSummaries : includeRecentSummaries;
-        const effLinked =
-          ov?.includeLinkedExcerpts !== undefined ? ov.includeLinkedExcerpts : includeLinkedExcerpts;
-        const effCtxMode = ov?.currentContextMode ?? currentContextMode;
-
-        const qRag = ragQuery.trim();
-        const needBibleForRagChunks =
-          effRag &&
-          !!qRag &&
-          ragWorkSources.workBibleExport &&
-          (!isCloudProvider || settings.privacy.allowRagSnippets);
-
-        let bibleRaw = "";
-        const needBibleFull = effIncludeBible && (!isCloudProvider || settings.privacy.allowBible);
-        if (needBibleFull || needBibleForRagChunks) {
-          if (needBibleFull) {
-            try {
-              setBibleLoading(true);
-              bibleRaw = await exportBibleMarkdown(props.workId);
-              setBiblePreview({ text: bibleRaw, chars: bibleRaw.length });
-            } finally {
-              setBibleLoading(false);
-            }
-          } else {
-            bibleRaw = await exportBibleMarkdown(props.workId);
-          }
-        }
-        const bibleForPrompt =
-          effIncludeBible && bibleRaw.trim()
-            ? filterWorkBibleMarkdownBySections(bibleRaw, workBibleSectionMask)
-            : "";
-
-        let ragHitsForRequest: ReferenceSearchHit[] = effRag ? ragHits.filter((h) => !ragExcluded.has(h.chunkId)) : [];
-        if (effRag && (!isCloudProvider || settings.privacy.allowRagSnippets) && qRag) {
-          try {
-            setRagLoading(true);
-            const hits = await searchWritingRagMerged({
-              workId: props.workId,
-              query: qRag,
-              limit: Math.max(1, Math.min(20, ragK)),
-              sources: ragWorkSources,
-              chapters: props.chapters,
-              progressCursorChapterId: props.work.progressCursor,
-              excludeManuscriptChapterId: props.chapter?.id ?? null,
-              bibleMarkdownOverride: bibleRaw.trim() ? bibleRaw : undefined,
-            });
-            setRagHits(hits);
-            ragHitsForRequest = hits.filter((h) => !ragExcluded.has(h.chunkId));
-          } finally {
-            setRagLoading(false);
-          }
-        }
-
-        const recentForAssemble = effRecent ? recentSummaryText : "";
-        const linkedForAssemble = effLinked
-          ? props.linkedExcerptsForChapter.map((e) => ({ refTitle: e.refTitle, text: e.text }))
-          : [];
-        const linkedChapterSummariesForAssemble = linkedChapterSummaryText;
-        const linkedChapterFullForAssemble = linkedChapterFullText;
-
-        const chapterOutlineForAssemble = opts?.outlineOverride ?? chapterOutlinePaste;
-        const assembleInput: WritingSidepanelAssembleInput = {
-          workStyle: props.workStyle,
-          tagProfileText,
-          workTitle: props.work.title,
-          chapterTitle: props.chapter.title,
-          storyBackground,
-          characters,
-          relations,
-          chapterBible: props.chapterBible,
-          chapterBibleInjectMask,
-          workBibleSectionMask,
-          skillPresetText,
-          includeLinkedExcerpts: effLinked,
-          linkedExcerpts: linkedForAssemble,
-          maxContextChars: effMax,
-          isCloudProvider,
-          privacy: settings.privacy,
-          includeBible: effIncludeBible,
-          bibleMarkdown: bibleForPrompt,
-          recentSummaryText: recentForAssemble,
-          includeRecentSummaries: effRecent,
-          linkedChapterSummaryText: linkedChapterSummariesForAssemble,
-          linkedChapterFullText: linkedChapterFullForAssemble,
-          linkedChapterSummaryCount: linkedChapters?.summaryChapterIds.length ?? 0,
-          linkedChapterFullCount: linkedChapters?.fullChapterIds.length ?? 0,
-          neighborSummaryIncludedCount,
-          ragEnabled: effRag,
-          ragQuery,
-          ragK,
-          ragHits: ragHitsForRequest,
-          ragSources: ragWorkSources,
-          chapterContent: props.chapterContent,
-          chapterSummary: props.chapter.summary,
-          selectedText,
-          currentContextMode: effCtxMode,
-          userHint: composedUserHint,
-          mode: modeForAssemble,
-          recentN,
-          chapterOutlinePaste: chapterOutlineForAssemble,
-          styleSamples: props.styleSampleSlices,
-          glossaryTerms: glossarySlices,
-          chapterStudyCharacterCards: studyCharacterCardSlices,
-          chapterStudyNpcNotes: studyCharacterSource === "npc" ? studyNpcText : "",
-          studyGlossaryMode: "chapter_pick",
-          chapterStudyGlossaryTerms: studyGlossarySlices,
-        };
-        messages = buildWritingSidepanelMessages(assembleInput);
-        usedProvider = settings.provider;
-        usedProviderCfg = providerCfg;
-
         // 注入量确认改为「细纲标签旁内联展示 + 点击查看详情」，不再阻断生成流程。
         // 仍保留下方的「单次调用预警」与「日预算预警」作为硬护栏。
         // 历史路径：见 design/editor-outline-generate-dialog-implementation-plan-2026-04-26.md。
-      }
-
-      const sessionBudgetCap = settings.aiSessionApproxTokenBudget;
-      const requestTokApprox = messages.reduce((sum, m) => sum + approxRoughTokenCount(m.content), 0);
-
-      // Owner 模式：调用走本机 sidecar → Pro 订阅，不计入 API token 预算。跳过下方所有预算 / 预警检查。
-      const skipBudget = ownerModeWillBypassBudget();
-
-      // P1-04：单次调用预警（singleCallWarnTokens）—— 低于 injectConfirmOnOversizeTokens 才生效
-      if (!skipBudget && settings.singleCallWarnTokens > 0 && requestTokApprox >= settings.singleCallWarnTokens) {
-        const ok = await new Promise<boolean>((resolve) => {
-          setCostGatePending({
-            reasons: [`本次请求粗估约 ${requestTokApprox.toLocaleString()} tokens，已超过单次预警阈值 ${settings.singleCallWarnTokens.toLocaleString()}。`],
-            tokensApprox: requestTokApprox,
-            dailyUsed: readTodayApproxTokens(),
-            dailyBudget: settings.dailyTokenBudget,
-            triggerLabel: "单次调用预警",
-            resolve,
-          });
+        const built = await buildAssembledRequest({
+          mode: modeForAssemble,
+          outlineOverride: opts?.outlineOverride,
         });
-        if (!ok) return;
-      }
-
-      // P1-04：日预算超出预警
-      if (!skipBudget && settings.dailyTokenBudget > 0) {
-        const todayUsed = readTodayApproxTokens();
-        if (todayUsed + requestTokApprox > settings.dailyTokenBudget) {
-          const ok = await new Promise<boolean>((resolve) => {
-            setCostGatePending({
-              reasons: [`今日累计（${todayUsed.toLocaleString()} tokens）加本次（约 ${requestTokApprox.toLocaleString()} tokens）将超过日预算 ${settings.dailyTokenBudget.toLocaleString()} tokens。`],
-              tokensApprox: requestTokApprox,
-              dailyUsed: todayUsed,
-              dailyBudget: settings.dailyTokenBudget,
-              triggerLabel: "日预算预警",
-              resolve,
-            });
-          });
-          if (!ok) return;
-        }
-      }
-
-      if (!skipBudget && sessionBudgetCap > 0) {
-        const used = readSessionApproxTokens();
-        if (used + requestTokApprox > sessionBudgetCap) {
-          setError(
-            `本会话累计粗估约 ${used.toLocaleString()} tokens，本次请求约 ${requestTokApprox.toLocaleString()}，将超过上限 ${sessionBudgetCap.toLocaleString()}。可在「后端模型配置 → 默认与上下文」调高上限或设为 0；也可点草稿区「清零本会话累计」。`,
-          );
-          return;
-        }
+        messages = built.messages;
+        usedProvider = built.provider;
+        usedProviderCfg = built.providerCfg;
+        assembledContextBuckets = built.contextInputBuckets;
       }
 
       lastReqRef.current = { provider: usedProvider, providerCfg: usedProviderCfg, messages };
-      const r = await generateWithProviderStream({
-        provider: usedProvider,
-        config: usedProviderCfg,
-        messages,
-        signal: ac.signal,
-        onDelta: (d) => {
-          dispatchGenPhase({ type: "delta" });
-          setDraft((prev) => prev + d);
-        },
-        temperature: !isLocalAiProvider(usedProvider) ? getProviderTemperature(settings, usedProvider) : undefined,
-      });
-      if (!draft.trim() && (r.text ?? "").trim()) {
-        setDraft((r.text ?? "").trim());
+      if (input) {
+        await executeStream({
+          provider: usedProvider,
+          providerCfg: usedProviderCfg,
+          messages,
+          signal: ac.signal,
+          maxOutputTokens:
+            targetWordCount > 0
+              ? estimateMaxOutputTokensForTargetChineseChars(targetWordCount)
+              : undefined,
+        });
+      } else {
+        const outlineTextForCont = (opts?.outlineOverride ?? chapterOutlinePaste).trim();
+        await runOutlineBodyWithContinuation({
+          provider: usedProvider,
+          providerCfg: usedProviderCfg,
+          firstMessages: messages,
+          mode: modeForAssemble,
+          targetWordCount,
+          outlineText: outlineTextForCont,
+          signal: ac.signal,
+          contextInputBuckets: assembledContextBuckets,
+          onPostAllRounds: (full) => {
+            pushGeneratedDraftHistory(full);
+            dispatchGenPhase({ type: "done" });
+          },
+        });
       }
-      const outTok = approxRoughTokenCount((r.text ?? "").trim());
-      // Owner 模式不累计 token：sidecar 走的是 Pro session 配额，metering 维度不同
-      if (!skipBudget) {
-        addSessionApproxTokens(requestTokApprox + Math.max(0, outTok));
-        addTodayApproxTokens(requestTokApprox + Math.max(0, outTok));
-      }
-      if (props.workId && props.chapter && (r.text ?? "").trim()) {
-        pushDraftHistory(props.workId, props.chapter.id, (r.text ?? "").trim());
-        setDraftHistory(readDraftHistory(props.workId, props.chapter.id));
-      }
-      setSessionBudgetUiTick((x) => x + 1);
-      setDailyUsageTick((x) => x + 1);
-      dispatchGenPhase({ type: "done" });
     } catch (e) {
-      if (isFirstAiGateCancelledError(e)) {
-        dispatchGenPhase({ type: "abort" });
-        return;
-      }
+      // 仅捕获上下文组装阶段（bible 导出、RAG 检索等）抛出的异常
       const aborted = e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message));
       if (aborted) {
         dispatchGenPhase({ type: "abort" });
       } else {
-        const msg = e instanceof Error ? e.message : "AI 调用失败";
-        setError(msg);
+        setError(e instanceof Error ? e.message : "AI 调用失败");
         dispatchGenPhase({ type: "error" });
-        if (errorSuggestsContextDegrade(msg) && !degradeAttemptedRef.current) {
-          setShowDegradeRetry(true);
-        }
       }
     } finally {
       setBusy(false);
@@ -1617,352 +1047,13 @@ export const AiPanel = memo(function AiPanelBase(props: {
           />
         ) : null}
 
-      <Dialog open={providerPickerOpen} onOpenChange={setProviderPickerOpen}>
-        <DialogContent
-          showCloseButton={false}
-          overlayClassName="work-form-modal-overlay"
-          aria-describedby={undefined}
-          className={cn(
-            "model-picker-dialog z-[var(--z-modal-app-content)] max-h-[min(92vh,880px)] w-full max-w-[min(880px,100vw-2rem)] gap-0 overflow-hidden border-border bg-[var(--surface)] p-0 shadow-lg sm:max-w-[min(880px,calc(100vw-2rem))]",
-          )}
-        >
-          <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-3 sm:px-5">
-            <DialogTitle className="text-left text-lg font-semibold">选择模型</DialogTitle>
-            <button type="button" className="icon-btn" title="关闭" onClick={() => setProviderPickerOpen(false)}>
-              ×
-            </button>
-          </div>
-
-          <div className="model-picker model-picker--dialog">
-            <div className="model-picker-body">
-              <div className="model-picker-left" role="tablist" aria-label="模型列表">
-                {(
-                  [
-                    "openai",
-                    "anthropic",
-                    "gemini",
-                    "doubao",
-                    "zhipu",
-                    "kimi",
-                    "xiaomi",
-                    "ollama",
-                    "mlx",
-                  ] as AiProviderId[]
-                ).map((id) => {
-                  const ui = PROVIDER_UI[id];
-                  const isCloud = !isLocalAiProvider(id);
-                  const disabled = isCloud && !(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);
-                  const active = pickerActive === id;
-                  return (
-                    <button
-                      key={id}
-                      type="button"
-                      role="tab"
-                      data-provider={id}
-                      aria-selected={active}
-                      className={
-                        "model-picker-item" +
-                        (active ? " is-active" : "") +
-                        (disabled ? " is-disabled" : "")
-                      }
-                      title={
-                        disabled
-                          ? `${ui.tip}（云端未开启：可查看介绍，确认使用请点右下角「使用」）`
-                          : ui.tip
-                      }
-                      onClick={() => setPickerActive(id)}
-                    >
-                      <AiProviderLogo provider={id} />
-                      <span className="model-picker-item-main">
-                        <span className="model-picker-item-title">{ui.label}</span>
-                        <span className="model-picker-item-sub muted small">{ui.subtitle}</span>
-                      </span>
-                      <span className="model-picker-item-tag muted small">{settings.provider === id ? "当前" : ""}</span>
-                    </button>
-                  );
-                })}
-              </div>
-
-              {(() => {
-                const ui = PROVIDER_UI[pickerActive];
-                const isCloud = !isLocalAiProvider(pickerActive);
-                const disabled = isCloud && !(settings.privacy.consentAccepted && settings.privacy.allowCloudProviders);
-                return (
-                  <div className="model-picker-right" role="tabpanel" aria-label="模型介绍" data-provider={pickerActive}>
-                    <div className="model-picker-right-scroll">
-                      <div className="model-picker-right-head">
-                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <AiProviderLogo provider={pickerActive} />
-                          <div>
-                            <div style={{ fontWeight: 900, fontSize: 18 }}>{ui.label}</div>
-                            <div className="muted small">{ui.subtitle}</div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="model-picker-quote">{ui.quote}</div>
-                      <div className="model-picker-core">{ui.core}</div>
-
-                      <div className="model-picker-meters">
-                        <div className="model-meter">
-                          <div className="muted small">文采水平</div>
-                          <Meter value={ui.meters.prose} />
-                        </div>
-                        <div className="model-meter">
-                          <div className="muted small">指令遵从</div>
-                          <Meter value={ui.meters.follow} />
-                        </div>
-                        <div className="model-meter">
-                          <div className="muted small">字数消耗</div>
-                          <Meter
-                            value={
-                            !isLocalAiProvider(pickerActive)
-                              ? geminiCostStarsFromShensi(getProviderTemperature(settings, pickerActive))
-                              : ui.meters.cost
-                            }
-                          />
-                          {isLocalAiProvider(pickerActive) && ui.meters.costText ? (
-                            <span className="muted small" style={{ marginLeft: 8 }}>
-                              （{ui.meters.costText}）
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-
-                      {(() => {
-                        const cfg = getProviderConfig(settings, pickerActive);
-                        const personas = listModelPersonas(pickerActive).filter((p) => p.modelId);
-                        if (personas.length === 0) return null;
-                        return (
-                          <div className="model-persona">
-                            <div style={{ fontWeight: 800, margin: "14px 0 8px" }}>推荐模型</div>
-                            <div className="model-persona-grid" role="list" aria-label="推荐模型列表">
-                              {personas.map((p) => {
-                                const on = (cfg.model ?? "").trim() === p.modelId;
-                                const stars = p.costStars ?? ui.meters.cost;
-                                return (
-                                  <button
-                                    key={p.modelId}
-                                    type="button"
-                                    role="listitem"
-                                    className={"model-persona-card" + (on ? " is-on" : "")}
-                                    title={p.modelId}
-                                    onClick={() => {
-                                      const cur = getProviderConfig(settings, pickerActive);
-                                      updateSettings({ [pickerActive]: { ...cur, model: p.modelId } } as Partial<AiSettings>);
-                                    }}
-                                  >
-                                    <div className="model-persona-card-head">
-                                      <div className="model-persona-card-title">{p.title}</div>
-                                      <div className="model-persona-card-badges">
-                                        {p.tags?.slice(0, 2).map((t) => (
-                                          <span key={t} className="model-persona-badge muted small">
-                                            {t}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    </div>
-                                    <div className="muted small">{p.subtitle}</div>
-                                    <div className="model-persona-card-desc muted small">{p.description}</div>
-                                    <div className="model-persona-card-foot muted small">
-                                      <span className="model-persona-modelid">{p.modelId}</span>
-                                      <span className="model-persona-cost">
-                                        {Array.from({ length: stars }).fill("★").join("")}
-                                      </span>
-                                    </div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                            {pickerActive === "doubao" ? (
-                              <p className="muted small" style={{ marginTop: 10, lineHeight: 1.55 }}>
-                                当前展示：<strong>{doubaoModelDisplayLabel(getProviderConfig(settings, "doubao"))}</strong>
-                                {(getProviderConfig(settings, "doubao").modelDisplayName ?? "").trim() ? (
-                                  <>
-                                    <br />
-                                    <span style={{ opacity: 0.88 }}>
-                                      实际 endpoint：
-                                      <code style={{ fontSize: "0.85em" }}>
-                                        {(getProviderConfig(settings, "doubao").model ?? "").trim()}
-                                      </code>
-                                    </span>
-                                  </>
-                                ) : null}
-                              </p>
-                            ) : null}
-                          </div>
-                        );
-                      })()}
-
-                      <div className="model-picker-note">
-                        <div style={{ fontWeight: 800, marginBottom: 6 }}>注意事项</div>
-                        <div className="muted small" style={{ lineHeight: 1.65 }}>
-                          {ui.note}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="model-picker-tune model-picker-tune--dock">
-                      <div
-                        className="model-picker-tune-dock"
-                        role="toolbar"
-                        aria-label={
-                          pickerActive === "gemini"
-                            ? "观云调参"
-                            : isLocalAiProvider(pickerActive)
-                              ? "本地模型"
-                              : "云端调参"
-                        }
-                      >
-                        {(() => {
-                          if (isLocalAiProvider(pickerActive)) return null;
-                          const personasAll = listModelPersonas(pickerActive).filter((p) => (p.modelId ?? "").trim());
-                          const gearPersonas = personasAll;
-                          if (gearPersonas.length < 2) return null;
-
-                          const activeModelId = (getProviderConfig(settings, pickerActive).model ?? "").trim();
-                          const idx = Math.max(
-                            0,
-                            Math.min(
-                              gearPersonas.length - 1,
-                              Math.max(
-                                0,
-                                gearPersonas.findIndex((p) => (p.modelId ?? "").trim() === activeModelId),
-                              ),
-                            ),
-                          );
-                          const pct = gearPersonas.length <= 1 ? 0 : (idx / (gearPersonas.length - 1)) * 100;
-                          const invPct = 100 - pct;
-                          const tubeBg = `linear-gradient(to top,
-                            rgba(0,0,0,0.78) 0%,
-                            rgba(0,0,0,0.78) ${pct}%,
-                            rgba(0,0,0,0.12) ${pct}%,
-                            rgba(0,0,0,0.12) 100%)`;
-                          const label = gearPersonas[idx]?.title ?? "档位";
-
-                          return (
-                            <div className="model-picker-dock-anchor">
-                              {modelPickerTune === "gear" ? (
-                                <div className="model-picker-mini-pop model-picker-mini-pop--gear" role="dialog" aria-label="模型档位">
-                                  <div className="temp-wrap model-picker-gear-thermo">
-                                    <div className="temp-float temp-float--mini muted small" style={{ top: `${invPct}%` }}>
-                                      {label}
-                                    </div>
-                                    <div className="temp-vert temp-vert--mini" aria-label="模型档位">
-                                      <div className="temp-tube" aria-hidden="true" style={{ background: tubeBg }} />
-                                      <input
-                                        className="temp-slider temp-slider--vert"
-                                        type="range"
-                                        min={0}
-                                        max={gearPersonas.length - 1}
-                                        step={1}
-                                        value={idx}
-                                        onChange={(e) => {
-                                          const i = Math.max(0, Math.min(gearPersonas.length - 1, Number(e.target.value) || 0));
-                                          const m = (gearPersonas[i]?.modelId ?? "").trim();
-                                          if (!m) return;
-                                          const cur = getProviderConfig(settings, pickerActive);
-                                          updateSettings({ [pickerActive]: { ...cur, model: m } } as Partial<AiSettings>);
-                                        }}
-                                      />
-                                    </div>
-                                  </div>
-                                  <div className="model-picker-mini-pop-caret" aria-hidden />
-                                </div>
-                              ) : null}
-                              <button
-                                type="button"
-                                className={"model-picker-dock-btn" + (modelPickerTune === "gear" ? " is-active" : "")}
-                                aria-pressed={modelPickerTune === "gear"}
-                                aria-expanded={modelPickerTune === "gear"}
-                                onClick={() => setModelPickerTune((p) => (p === "gear" ? null : "gear"))}
-                              >
-                                模型档位
-                              </button>
-                            </div>
-                          );
-                        })()}
-
-                        {!isLocalAiProvider(pickerActive) ? (
-                          <div className="model-picker-dock-anchor">
-                            {modelPickerTune === "shensi" ? (
-                              <div className="model-picker-mini-pop model-picker-mini-pop--shensi" role="dialog" aria-label="深思">
-                                {(() => {
-                                  const t = getProviderTemperature(settings, pickerActive);
-                                  const pct = Math.max(0, Math.min(100, ((t - 0.1) / 1.9) * 100));
-                                  const invPct = 100 - pct;
-                                  return (
-                                    <div className="model-picker-shensi-pop">
-                                      <div className="model-picker-shensi-col">
-                                        <div className="temp-wrap model-picker-shensi-body temp-pop-thermo">
-                                          <div className="temp-float temp-float--mini muted small" style={{ top: `${invPct}%` }}>
-                                            {tempSides(t).center}
-                                          </div>
-                                          <div className="temp-vert temp-vert--mini" aria-label="Temperature">
-                                            <div
-                                              className="temp-tube temp-tube--fill"
-                                              aria-hidden="true"
-                                              style={{ ["--fill" as never]: `${pct}%` }}
-                                            />
-                                            <input
-                                              className="temp-slider temp-slider--vert"
-                                              type="range"
-                                              min={0.1}
-                                              max={2.0}
-                                              step={0.1}
-                                              value={t}
-                                              onChange={(e) => {
-                                                const v = Math.max(0.1, Math.min(2.0, Number(e.target.value) || 1.2));
-                                                updateSettings(patchProviderTemperature(settings, pickerActive, v));
-                                              }}
-                                            />
-                                          </div>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  );
-                                })()}
-                                <div className="model-picker-mini-pop-caret" aria-hidden />
-                              </div>
-                            ) : null}
-                            <button
-                              type="button"
-                              className={"model-picker-dock-btn" + (modelPickerTune === "shensi" ? " is-active" : "")}
-                              aria-pressed={modelPickerTune === "shensi"}
-                              aria-expanded={modelPickerTune === "shensi"}
-                              onClick={() => setModelPickerTune((p) => (p === "shensi" ? null : "shensi"))}
-                            >
-                              深思
-                            </button>
-                          </div>
-                        ) : null}
-
-                        <button
-                          type="button"
-                          className="btn primary model-picker-dock-use"
-                          aria-disabled={disabled}
-                          title={disabled ? "去设置开启" : ""}
-                          onClick={() => {
-                            if (disabled) {
-                              setProviderPickerOpen(false);
-                              void navigate("/settings#ai-privacy");
-                              return;
-                            }
-                            updateProvider(pickerActive);
-                            setProviderPickerOpen(false);
-                          }}
-                        >
-                          使用
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <AiPanelModelPickerDialog
+        open={providerPickerOpen}
+        onOpenChange={setProviderPickerOpen}
+        settings={settings}
+        updateSettings={updateSettings}
+        updateProvider={updateProvider}
+      />
       </div>
 
       <AiPanelWritingPromptsRow
@@ -2329,7 +1420,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
           mode="info"
           reasons={previewInjectionPrompt.reasons}
           tokensApprox={previewInjectionPrompt.tokensApprox}
-          dailyUsed={readTodayApproxTokens()}
+          dailyUsed={todayTokensUsed}
           dailyBudget={settings.dailyTokenBudget}
           triggerLabel="本次注入量预估"
           onConfirm={() => setTokenInfoOpen(false)}

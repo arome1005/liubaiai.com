@@ -151,10 +151,14 @@ export class WritingStoreSupabase implements WritingStore {
       workId: String(row.work_id),
       updatedAt: Number(row.updated_at ?? 0) || now(),
       chatHistory: (row.chat_history as TuiyanState["chatHistory"]) ?? [],
+      chatThreads: (row.chat_threads as TuiyanState["chatThreads"] | undefined) ?? undefined,
+      activeChatThreadId: (row.active_chat_thread_id as string | null | undefined) ?? undefined,
       wenCe: (row.wence as TuiyanState["wenCe"]) ?? [],
       finalizedNodeIds: (row.finalized_node_ids as string[]) ?? [],
       statusByNodeId: (row.status_by_node_id as TuiyanState["statusByNodeId"]) ?? {},
       linkedRefWorkIds: (row.linked_ref_work_ids as string[]) ?? [],
+      referenceBindings: (row.reference_bindings as TuiyanState["referenceBindings"] | undefined) ?? [],
+      referencePolicy: (row.reference_policy as TuiyanState["referencePolicy"] | undefined) ?? undefined,
       mindmap: (row.mindmap as TuiyanState["mindmap"]) ?? undefined,
       scenes: (row.scenes as TuiyanState["scenes"]) ?? [],
       selectedPromptTemplateId: (row.selected_prompt_template_id as string | null | undefined) ?? null,
@@ -167,6 +171,10 @@ export class WritingStoreSupabase implements WritingStore {
       planningSelectedNodeId: (row.planning_selected_node_id as string | null | undefined) ?? null,
       planningStructuredMetaByNodeId:
         (row.planning_structured_meta_by_node_id as TuiyanState["planningStructuredMetaByNodeId"]) ?? {},
+      planningOutlineTargetVolumesByNodeId:
+        (row.planning_outline_target_volumes_by_node_id as TuiyanState["planningOutlineTargetVolumesByNodeId"]) ?? {},
+      planningVolumeTargetChaptersByNodeId:
+        (row.planning_volume_target_chapters_by_node_id as TuiyanState["planningVolumeTargetChaptersByNodeId"]) ?? {},
       planningPushedOutlines: (() => {
         const col = row.planning_pushed_outlines as TuiyanState["planningPushedOutlines"] | null | undefined;
         if (col?.length) return col;
@@ -196,10 +204,21 @@ export class WritingStoreSupabase implements WritingStore {
 
     const prev = existing as Json | null;
     const chatHistory = (patch.chatHistory ?? (prev?.chat_history as TuiyanState["chatHistory"]) ?? []) as TuiyanState["chatHistory"];
+    const chatThreads = (patch.chatThreads !== undefined
+      ? patch.chatThreads
+      : (prev?.chat_threads as TuiyanState["chatThreads"] | undefined)) as
+      | TuiyanState["chatThreads"]
+      | undefined;
+    const activeChatThreadId =
+      patch.activeChatThreadId !== undefined
+        ? patch.activeChatThreadId
+        : ((prev?.active_chat_thread_id as string | null | undefined) ?? null);
     const wenCe = (patch.wenCe ?? (prev?.wence as TuiyanState["wenCe"]) ?? []) as TuiyanState["wenCe"];
     const finalizedNodeIds = (patch.finalizedNodeIds ?? (prev?.finalized_node_ids as string[]) ?? []) as string[];
     const statusByNodeId = (patch.statusByNodeId ?? (prev?.status_by_node_id as TuiyanState["statusByNodeId"]) ?? {}) as TuiyanState["statusByNodeId"];
     const linkedRefWorkIds = (patch.linkedRefWorkIds ?? (prev?.linked_ref_work_ids as string[]) ?? []) as string[];
+    const referenceBindings = (patch.referenceBindings ?? (prev?.reference_bindings as TuiyanState["referenceBindings"] | undefined) ?? []) as TuiyanState["referenceBindings"];
+    const referencePolicy = (patch.referencePolicy ?? (prev?.reference_policy as TuiyanState["referencePolicy"] | undefined) ?? undefined) as TuiyanState["referencePolicy"] | undefined;
     const mindmap = (patch.mindmap ?? (prev?.mindmap as TuiyanState["mindmap"]) ?? undefined) as
       | TuiyanState["mindmap"]
       | undefined;
@@ -222,6 +241,12 @@ export class WritingStoreSupabase implements WritingStore {
     const planningStructuredMetaByNodeId = (patch.planningStructuredMetaByNodeId ??
       (prev?.planning_structured_meta_by_node_id as TuiyanState["planningStructuredMetaByNodeId"]) ??
       {}) as TuiyanState["planningStructuredMetaByNodeId"];
+    const planningOutlineTargetVolumesByNodeId = (patch.planningOutlineTargetVolumesByNodeId ??
+      (prev?.planning_outline_target_volumes_by_node_id as TuiyanState["planningOutlineTargetVolumesByNodeId"]) ??
+      {}) as TuiyanState["planningOutlineTargetVolumesByNodeId"];
+    const planningVolumeTargetChaptersByNodeId = (patch.planningVolumeTargetChaptersByNodeId ??
+      (prev?.planning_volume_target_chapters_by_node_id as TuiyanState["planningVolumeTargetChaptersByNodeId"]) ??
+      {}) as TuiyanState["planningVolumeTargetChaptersByNodeId"];
     const planningPushedOutlines = (patch.planningPushedOutlines ??
       (prev?.planning_pushed_outlines as TuiyanState["planningPushedOutlines"]) ??
       ((prev?.planning_meta_by_node_id as Json | undefined)?.[PLANNING_PUSHED_OUTLINES_META_KEY] as
@@ -238,10 +263,14 @@ export class WritingStoreSupabase implements WritingStore {
       work_id: workId,
       updated_at: t,
       chat_history: chatHistory as unknown,
+      chat_threads: (Array.isArray(chatThreads) ? chatThreads : []) as unknown,
+      active_chat_thread_id: activeChatThreadId,
       wence: wenCe as unknown,
       finalized_node_ids: finalizedNodeIds as unknown,
       status_by_node_id: statusByNodeId as unknown,
       linked_ref_work_ids: linkedRefWorkIds as unknown,
+      reference_bindings: (referenceBindings ?? []) as unknown,
+      reference_policy: (referencePolicy ?? {}) as unknown,
       mindmap: (mindmap ?? {}) as unknown,
       scenes: (scenes ?? []) as unknown,
       selected_prompt_template_id: selectedPromptTemplateId,
@@ -251,6 +280,8 @@ export class WritingStoreSupabase implements WritingStore {
       planning_meta_by_node_id: (planningMetaByNodeId ?? {}) as unknown,
       planning_selected_node_id: planningSelectedNodeId,
       planning_structured_meta_by_node_id: (planningStructuredMetaByNodeId ?? {}) as unknown,
+      planning_outline_target_volumes_by_node_id: (planningOutlineTargetVolumesByNodeId ?? {}) as unknown,
+      planning_volume_target_chapters_by_node_id: (planningVolumeTargetChaptersByNodeId ?? {}) as unknown,
       planning_pushed_outlines: (planningPushedOutlines ?? []) as unknown,
     };
 
@@ -267,10 +298,14 @@ export class WritingStoreSupabase implements WritingStore {
       workId,
       updatedAt: Number(persisted.updated_at ?? t) || t,
       chatHistory,
+      chatThreads,
+      activeChatThreadId,
       wenCe,
       finalizedNodeIds,
       statusByNodeId,
       linkedRefWorkIds,
+      referenceBindings,
+      referencePolicy,
       mindmap: mindmap ?? undefined,
       scenes,
       selectedPromptTemplateId,
@@ -280,6 +315,8 @@ export class WritingStoreSupabase implements WritingStore {
       planningMetaByNodeId,
       planningSelectedNodeId,
       planningStructuredMetaByNodeId,
+      planningOutlineTargetVolumesByNodeId,
+      planningVolumeTargetChaptersByNodeId,
       planningPushedOutlines,
     };
   }

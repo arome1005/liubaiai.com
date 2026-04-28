@@ -17,7 +17,7 @@ import { workPathSegment } from "../util/work-url";
 import type { Chapter, Work } from "../db/types";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
+import { CreatorCenterDialog } from "./creator-center/creator-center-dialog";
 import { authLogout } from "../api/auth";
 import { uploadUserAvatar } from "../api/avatar";
 import {
@@ -143,16 +143,6 @@ function IconBell(props: { className?: string }) {
     <svg className={props.className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
       <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
       <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
-    </svg>
-  );
-}
-
-function IconMore(props: { className?: string }) {
-  return (
-    <svg className={props.className} width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
-      <circle cx="12" cy="12" r="1.5" />
-      <circle cx="19" cy="12" r="1.5" />
-      <circle cx="5" cy="12" r="1.5" />
     </svg>
   );
 }
@@ -661,150 +651,26 @@ export function AppShell() {
           </div>
         </header>
 
-        <Dialog open={creatorCenterOpen} onOpenChange={(o) => { setCreatorCenterOpen(o); if (o) setCreatorUsageTick((n) => n + 1); }}>
-          <DialogContent className="w-full max-w-3xl overflow-hidden p-0">
-            <DialogHeader className="border-b border-border/40 bg-card/30 px-5 py-4">
-              <DialogTitle className="flex items-center justify-between gap-3">
-                <span className="flex items-center gap-2">
-                  <IconUser className="h-4 w-4 text-primary" />
-                  创作中心
-                </span>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label="创作中心菜单">
-                      <IconMore className="h-4 w-4" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-40">
-                    <DropdownMenuItem disabled={!authUser || creatorUploading} onClick={() => { if (!creatorUploading) onCreatorPickFile(); }}>
-                      {creatorUploading ? "头像上传中…" : "更换头像"}
-                    </DropdownMenuItem>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      className="text-red-600 focus:text-red-600"
-                      disabled={!authUser}
-                      onClick={() => void onCreatorLogout()}
-                    >
-                      退出登录
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </DialogTitle>
-            </DialogHeader>
-            <div className="p-5">
-              <div className="rounded-xl border border-border/50 bg-card/40 p-4">
-                <input
-                  ref={creatorFileRef}
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,image/gif"
-                  className="visually-hidden"
-                  aria-hidden
-                  onChange={(ev) => void onCreatorFileChange(ev)}
-                />
-                {/* 身份卡：只放身份信息 */}
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <div className="h-10 w-10 overflow-hidden rounded-full bg-primary/10 text-primary flex items-center justify-center font-semibold">
-                        {creatorAvatarUrl ? (
-                          <img src={creatorAvatarUrl} alt="" className="h-full w-full object-cover" />
-                        ) : (
-                          <span aria-hidden>{creatorInitials}</span>
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="truncate text-sm font-semibold text-foreground">
-                            {creatorEmail ?? "创作者账号"}
-                          </p>
-                          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">ID: —</span>
-                          <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
-                            {creatorEmail ? "会员：未开通" : "游客"}
-                          </span>
-                        </div>
-                        <p className="mt-0.5 text-xs text-muted-foreground">账号 · 权益 · 资产（后续会在这里持续增加能力入口）</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 今日 AI 用量 + 创作资产 — 两列并排 */}
-                <div className="mt-4 grid grid-cols-2 gap-3">
-                  {/* 左：今日 AI 用量 */}
-                  <div className="rounded-xl border border-border/40 bg-background/40 p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-foreground">今日 AI 用量</h3>
-                      <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground" onClick={() => setCreatorUsageTick((n) => n + 1)}>刷新</button>
-                    </div>
-                    <div className="grid grid-cols-1 gap-2">
-                      {[
-                        { label: "本会话",  value: creatorSessionTokens,  highlight: false },
-                        { label: "今日累计", value: creatorTodayTokens,   highlight: true  },
-                        { label: "本机累计", value: creatorLifetimeTokens, highlight: false },
-                      ].map(({ label, value, highlight }) => (
-                        <div key={label} className={`flex items-center justify-between rounded-lg px-3 py-2 ${highlight ? "bg-primary/8 border border-primary/20" : "bg-background/60"}`}>
-                          <span className="text-xs text-muted-foreground">{label}</span>
-                          <div className="text-right">
-                            <span className={`font-bold tabular-nums text-sm ${highlight ? "text-primary" : "text-foreground"}`}>
-                              {value >= 10_000 ? `${(value / 1_000).toFixed(0)}k` : value.toLocaleString()}
-                            </span>
-                            <span className="ml-1 text-[9px] text-muted-foreground/60">tokens</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <p className="mt-2 text-[10px] text-muted-foreground/50">粗估本机统计，非厂商计费。</p>
-                  </div>
-
-                  {/* 右：创作资产 */}
-                  <div className="rounded-xl border border-border/40 bg-background/40 p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-foreground">创作资产</h3>
-                      <span className="text-[10px] text-muted-foreground">后续接入</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                      {[
-                        { label: "字数仓剩余",  value: "—" },
-                        { label: "留白笺可用",   value: "—" },
-                        { label: "每日免费重塑", value: "0 / 0" },
-                        { label: "会员时效",    value: "未开通" },
-                      ].map(({ label, value }) => (
-                        <div key={label} className="rounded-lg bg-background/60 p-2.5">
-                          <div className="text-[10px] text-muted-foreground">{label}</div>
-                          <div className="mt-1 text-sm font-semibold text-foreground">{value}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                {/* 快捷入口 + 权益 — 两列并排 */}
-                <div className="mt-3 grid grid-cols-2 gap-3">
-                  {/* 快捷入口 */}
-                  <div className="rounded-xl border border-border/40 bg-background/40 p-4">
-                    <h3 className="mb-3 text-sm font-semibold text-foreground">快捷入口</h3>
-                    <div className="grid grid-cols-1 gap-2">
-                      <Button type="button" variant="outline" className="h-9 justify-start text-xs" asChild><Link to="/prompts">提示词库</Link></Button>
-                      <Button type="button" variant="outline" className="h-9 justify-start text-xs" asChild><Link to="/reference">藏经</Link></Button>
-                      <Button type="button" variant="outline" className="h-9 justify-start text-xs" asChild><Link to="/settings">设置</Link></Button>
-                    </div>
-                  </div>
-
-                  {/* 权益与服务 */}
-                  <div className="rounded-xl border border-border/40 bg-background/40 p-4">
-                    <h3 className="mb-3 text-sm font-semibold text-foreground">权益与服务</h3>
-                    <div className="space-y-2">
-                      <Button type="button" className="h-9 w-full text-sm">开通 / 升级会员</Button>
-                      <Button type="button" variant="secondary" className="h-8 w-full text-xs">获得更多字数</Button>
-                      <Button type="button" variant="outline" className="h-8 w-full text-xs">兑换留白笺</Button>
-                      <Button type="button" variant="outline" className="h-8 w-full text-xs">个人主页</Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+        <CreatorCenterDialog
+          open={creatorCenterOpen}
+          onOpenChange={(o) => {
+            setCreatorCenterOpen(o);
+            if (o) setCreatorUsageTick((n) => n + 1);
+          }}
+          creatorEmail={creatorEmail}
+          creatorAvatarUrl={creatorAvatarUrl}
+          creatorInitials={creatorInitials}
+          creatorSessionTokens={creatorSessionTokens}
+          creatorTodayTokens={creatorTodayTokens}
+          creatorLifetimeTokens={creatorLifetimeTokens}
+          onRefreshUsage={() => setCreatorUsageTick((n) => n + 1)}
+          creatorFileRef={creatorFileRef}
+          onCreatorPickFile={onCreatorPickFile}
+          onCreatorFileChange={onCreatorFileChange}
+          creatorUploading={creatorUploading}
+          authUser={authUser}
+          onLogout={onCreatorLogout}
+        />
 
         {showPageTopbar ? (
           <header

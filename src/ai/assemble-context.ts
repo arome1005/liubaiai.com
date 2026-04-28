@@ -1,5 +1,8 @@
+import { approxRoughTokenCount } from "./approx-tokens";
 import type { AiChatMessage, AiSettings } from "./types";
+import type { AiUsageEventRow } from "../storage/ai-usage-db";
 import type { WritingRagSources } from "../util/work-rag-runtime";
+import { clampReferenceRagSnippetForAssembleBody } from "../util/tuiyan-reference-inject-text";
 import { DEFAULT_WRITING_RAG_SOURCES } from "../util/work-rag-runtime";
 import { defaultWorkBibleSectionMask, filterWorkBibleMarkdownBySections } from "./work-bible-sections";
 
@@ -394,6 +397,218 @@ export function buildWritingSidepanelCtxParts(input: WritingSidepanelAssembleInp
   return ctxParts;
 }
 
+/** 与 {@link buildWritingSidepanelCtxParts} 同源；用于用量洞察输入侧分桶（不含「上下文：」前缀与截断） */
+function buildWritingSidepanelCtxPartTags(
+  input: WritingSidepanelAssembleInput,
+): { text: string; bucket: keyof NonNullable<AiUsageEventRow["contextInputBuckets"]> }[] {
+  const out: { text: string; bucket: keyof NonNullable<AiUsageEventRow["contextInputBuckets"]> }[] = [];
+  const { isCloudProvider, privacy } = input;
+  const chapterBible = applyChapterBibleInjectMask(input.chapterBible, input.chapterBibleInjectMask);
+  if (!isCloudProvider || privacy.allowMetadata) {
+    out.push({ text: `作品：${input.workTitle}`, bucket: "other" });
+    out.push({ text: `章节：${input.chapterTitle}`, bucket: "other" });
+  }
+  if (input.workStyle.styleAnchor.trim()) {
+    out.push({
+      text: "文风锚点（尽量贴近其用词/节奏/句法）：\n" + input.workStyle.styleAnchor.trim(),
+      bucket: "other",
+    });
+  }
+  const sampleBodies = input.styleSamples.filter((s) => (s.body ?? "").trim());
+  if (sampleBodies.length > 0) {
+    const joined = sampleBodies
+      .map((s, i) => {
+        const lab = (s.title ?? "").trim() || `样本${i + 1}`;
+        return `【${lab}】\n${(s.body ?? "").trim()}`;
+      })
+      .join("\n\n---\n\n");
+    out.push({
+      text: "笔感样本（仅模仿语气、节奏与句法；勿将样本中的陈述当作本书事实）：\n\n" + joined,
+      bucket: "other",
+    });
+  }
+  if (input.storyBackground.trim()) out.push({ text: `故事背景：\n${input.storyBackground.trim()}`, bucket: "bible" });
+  if (input.characters.trim()) out.push({ text: `角色清单：\n${input.characters.trim()}`, bucket: "bible" });
+  if (input.relations.trim()) out.push({ text: `角色关系：\n${input.relations.trim()}`, bucket: "bible" });
+  if (chapterBible.goalText.trim()) out.push({ text: `本章目标：\n${chapterBible.goalText.trim()}`, bucket: "bible" });
+  if (chapterBible.forbidText.trim()) out.push({ text: `禁止：\n${chapterBible.forbidText.trim()}`, bucket: "bible" });
+  if (chapterBible.povText.trim()) out.push({ text: `视角/口吻：\n${chapterBible.povText.trim()}`, bucket: "bible" });
+  if (chapterBible.sceneStance.trim()) out.push({ text: `场景状态：\n${chapterBible.sceneStance.trim()}`, bucket: "bible" });
+  if (chapterBible.characterStateText.trim()) {
+    out.push({
+      text: `本章人物状态（备忘，可与全书人物卡对照）：\n${chapterBible.characterStateText.trim()}`,
+      bucket: "bible",
+    });
+  }
+  if (input.skillPresetText) out.push({ text: input.skillPresetText, bucket: "other" });
+
+  const canSendGlossary = !isCloudProvider || privacy.allowMetadata;
+  if (canSendGlossary) {
+    const gloss = [...input.glossaryTerms]
+      .filter((g) => (g.term ?? "").trim())
+      .sort((a, b) => b.term.length - a.term.length);
+    if (gloss.length > 0) {
+      const catLab = (c: WritingGlossaryTermSlice["category"]) =>
+        c === "name" ? "人名" : c === "dead" ? "已死" : "术语";
+      const body = gloss
+        .map((g) => {
+          const t = g.term.trim();
+          const lab = catLab(g.category);
+          const n = (g.note ?? "").trim();
+          return n ? `- **${t}**（${lab}）\n  备注：${n}` : `- **${t}**（${lab}）`;
+        })
+        .join("\n");
+      out.push({ text: "本书术语表（请与下列写法一致；备注为设定说明）：\n" + body, bucket: "bible" });
+    }
+  }
+
+  if (
+    input.includeLinkedExcerpts &&
+    input.linkedExcerpts.length > 0 &&
+    (!isCloudProvider || privacy.allowLinkedExcerpts)
+  ) {
+    const ex = input.linkedExcerpts
+      .slice(0, 8)
+      .map((e, i) => `【摘录${i + 1}｜${e.refTitle}】\n${e.text}`)
+      .join("\n\n");
+    out.push({ text: `参考摘录（与本章关联）：\n${ex}`, bucket: "other" });
+  }
+  return out;
+}
+
+function approxTok(s: string): number {
+  if (!s.trim()) return 0;
+  return approxRoughTokenCount(s);
+}
+
+/**
+ * 与 {@link buildWritingSidepanelMessages} 同源，按块粗估各桶 token 权重（**未**按 API input 缩放，由 {@link recordAiUsageFromGenerateResult} 统一缩放到 `inputTokens`）。
+ * 供侧栏 `usageLog.contextInputBuckets` 使用，以替代基于关键词的消息启发式。
+ */
+export function buildWritingSidepanelContextInputBuckets(
+  input: WritingSidepanelAssembleInput,
+): NonNullable<AiUsageEventRow["contextInputBuckets"]> {
+  const out: NonNullable<AiUsageEventRow["contextInputBuckets"]> = {};
+  const bump = (b: keyof NonNullable<AiUsageEventRow["contextInputBuckets"]>, t: string) => {
+    const n = approxTok(t);
+    if (n <= 0) return;
+    out[b] = (out[b] ?? 0) + n;
+  };
+
+  bump("system", buildWritingSidepanelSystemContent(input));
+
+  const max = input.maxContextChars;
+  const partTags = buildWritingSidepanelCtxPartTags(input);
+  const ctxJoined = partTags.map((x) => x.text).join("\n\n");
+  const ctxClamped = "上下文：\n" + clampContextText(ctxJoined, Math.floor(max * 0.25));
+  const tClamped = approxTok(ctxClamped);
+  const wSum = partTags.reduce((a, p) => a + approxTok(p.text), 0);
+  if (tClamped > 0) {
+    if (wSum > 0) {
+      for (const p of partTags) {
+        const w = approxTok(p.text);
+        if (w <= 0) continue;
+        const share = (tClamped * w) / wSum;
+        if (share <= 0) continue;
+        out[p.bucket] = (out[p.bucket] ?? 0) + share;
+      }
+    } else {
+      bump("other", ctxClamped);
+    }
+  }
+
+  const cloud = input.isCloudProvider;
+  const p = input.privacy;
+
+  if (input.recentSummaryText.trim() && (!cloud || p.allowRecentSummaries)) {
+    const s = "最近章节概要（仅供回忆事实）：\n" + clampContextText(input.recentSummaryText, Math.floor(max * 0.2));
+    bump("chapter", s);
+  }
+
+  const bibleRaw = input.bibleMarkdown.trim();
+  const bible =
+    bibleRaw && input.workBibleSectionMask
+      ? filterWorkBibleMarkdownBySections(bibleRaw, input.workBibleSectionMask)
+      : bibleRaw;
+  if (input.includeBible && bible && (!cloud || p.allowBible)) {
+    const s = "本书锦囊（如与正文冲突，以锦囊为准）：\n" + clampContextText(bible, Math.floor(max * 0.45));
+    bump("bible", s);
+  }
+
+  if (input.ragEnabled && input.ragQuery.trim() && (!cloud || p.allowRagSnippets)) {
+    const picked = input.ragHits.slice(0, Math.max(0, Math.min(20, input.ragK)));
+    if (picked.length > 0) {
+      const rs = input.ragSources ?? DEFAULT_WRITING_RAG_SOURCES;
+      const srcLbl = [
+        rs.referenceLibrary && "参考库",
+        rs.workBibleExport && "本书锦囊",
+        rs.workManuscript && "本书正文",
+      ]
+        .filter(Boolean)
+        .join("·");
+      const s = [
+        `（来源：${srcLbl || "参考库"} · query=${input.ragQuery.trim()} · top-k=${picked.length}）`,
+        ...picked.map((h, i) => {
+          const snippet = clampReferenceRagSnippetForAssembleBody(
+            `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`,
+          );
+          return `【命中${i + 1}｜${h.refTitle}｜段${h.ordinal + 1}】\n${snippet}`;
+        }),
+      ].join("\n\n");
+      const full = "检索片段（参考库 / 本书；仅供引用，不要编造）：\n" + clampContextText(s, Math.floor(max * 0.25));
+      bump("rag", full);
+    }
+  }
+
+  const content = input.chapterContent ?? "";
+  if (input.mode === "draw") {
+    const summary = (input.chapterSummary ?? "").trim();
+    const body = content.trim();
+    if (summary && (!cloud || p.allowRecentSummaries)) {
+      const s = "章节概要（作大纲参考）：\n" + clampContextText(summary, Math.floor(max * 0.22));
+      bump("chapter", s);
+    }
+    if (body && (!cloud || p.allowChapterContent)) {
+      const tail = takeTailText(body, 50_000);
+      const s = "本章已写前文（末尾部分，用于承接）：\n" + clampContextText(tail, Math.floor(max * 0.38));
+      bump("chapter", s);
+    }
+  } else if (input.currentContextMode === "full" && content.trim() && (!cloud || p.allowChapterContent)) {
+    bump("chapter", "当前正文：\n" + clampContextText(content, Math.floor(max * 0.45)));
+  } else if (
+    input.currentContextMode === "summary" &&
+    (input.chapterSummary ?? "").trim() &&
+    (!cloud || p.allowRecentSummaries)
+  ) {
+    bump(
+      "chapter",
+      "当前章节概要（仅供回忆事实）：\n" + clampContextText((input.chapterSummary ?? "").trim(), Math.floor(max * 0.2)),
+    );
+  } else if (
+    input.currentContextMode === "selection" &&
+    input.selectedText.trim() &&
+    (!cloud || p.allowSelection)
+  ) {
+    bump("selection", "当前选区：\n" + clampContextText(input.selectedText.trim(), Math.floor(max * 0.25)));
+  }
+
+  const hint = input.userHint.trim();
+  if (hint && input.mode !== "draw") bump("other", "额外要求：\n" + hint);
+
+  const { task, appendSelectedForRewrite } = writingSidepanelTask(input.mode, input.selectedText);
+  bump("other", "\n\n任务：\n" + task);
+  if (appendSelectedForRewrite) {
+    bump("selection", `\n\n所选文本：\n${input.selectedText}`);
+  }
+
+  const rounded: NonNullable<AiUsageEventRow["contextInputBuckets"]> = {};
+  for (const k of ["chapter", "bible", "system", "selection", "rag", "planning", "other"] as const) {
+    const v = out[k];
+    if (typeof v === "number" && v > 0) rounded[k] = Math.max(0, Math.round(v));
+  }
+  return rounded;
+}
+
 /** 拼装发往模型的 user 消息正文（含「任务：」与重写所选附录） */
 export function buildWritingSidepanelUserContent(input: WritingSidepanelAssembleInput): string {
   const max = input.maxContextChars;
@@ -433,7 +648,9 @@ export function buildWritingSidepanelUserContent(input: WritingSidepanelAssemble
       const s = [
         `（来源：${srcLbl || "参考库"} · query=${input.ragQuery.trim()} · top-k=${picked.length}）`,
         ...picked.map((h, i) => {
-          const snippet = `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`.trim();
+          const snippet = clampReferenceRagSnippetForAssembleBody(
+            `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`,
+          );
           return `【命中${i + 1}｜${h.refTitle}｜段${h.ordinal + 1}】\n${snippet}`;
         }),
       ].join("\n\n");
@@ -563,7 +780,9 @@ export function buildWritingSidepanelInjectBlocks(
           ? [
               `（来源：${srcLbl || "参考库"} · top-k=${picked.length} · query=${key}）`,
               ...picked.map((h, i) => {
-                const snippet = `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`.trim();
+                const snippet = clampReferenceRagSnippetForAssembleBody(
+                  `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`,
+                );
                 return `【命中${i + 1}｜${h.refTitle}｜段${h.ordinal + 1}】\n${snippet}`;
               }),
             ].join("\n\n")

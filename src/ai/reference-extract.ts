@@ -135,8 +135,9 @@ export async function extractReferenceContent(args: {
   bookTitle: string;
   onDelta?: (delta: string) => void;
   signal?: AbortSignal;
+  workId?: string | null;
 }): Promise<string> {
-  const { chunkTexts, type, bookTitle, onDelta, signal } = args;
+  const { chunkTexts, type, bookTitle, onDelta, signal, workId } = args;
   const settings = loadAiSettings();
   assertCanExtract(settings);
   const config = getProviderConfig(settings, settings.provider);
@@ -178,6 +179,7 @@ ${instruction}`;
         { role: "user", content: userPrompt },
       ],
       signal,
+      usageLog: { task: `藏经·${label}`, workId },
       onDelta: (delta) => {
         batchText += delta;
         onDelta?.(delta);
@@ -211,6 +213,7 @@ ${batchResults.join("")}`;
         { role: "user", content: mergePrompt },
       ],
       signal,
+      usageLog: { task: `藏经·${label}·合并`, workId },
       onDelta: (delta) => {
         mergeText += delta;
         onDelta?.(delta);

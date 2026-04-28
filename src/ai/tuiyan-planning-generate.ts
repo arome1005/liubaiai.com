@@ -1,10 +1,19 @@
-import type { PlanningNodeStructuredMeta } from "../db/types";
-import { generateWithProvider } from "./client";
+import type { PlanningNodeStructuredMeta, TuiyanImitationMode } from "../db/types";
+import { logTuiyanReferenceTouchpoint } from "../util/tuiyan-reference-dev-log";
+import { mergeTuiyanPlanningSystemWithReferenceHardRules } from "./tuiyan-reference-planning-system";
+import { generateWithProviderStream } from "./client";
 import { isLocalAiProvider } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 
 export type TuiyanPlanningListLevel = "master_outline" | "outline" | "volume" | "chapter_outline";
+
+const PLANNING_TASK_LABEL: Record<TuiyanPlanningListLevel, string> = {
+  master_outline: "观云·总纲",
+  outline: "观云·一级大纲",
+  volume: "观云·卷纲",
+  chapter_outline: "观云·章细纲",
+};
 
 export class TuiyanPlanningGenerateError extends Error {
   override readonly name = "TuiyanPlanningGenerateError";
@@ -203,8 +212,13 @@ export async function generateTuiyanPlanningList(args: {
   level: TuiyanPlanningListLevel;
   desiredCount: number;
   userInput: string;
+  /** 与参考 Tab 全局 `imitationMode` 一致，有参考策略时写入 system 分模式侧重 */
+  imitationMode?: TuiyanImitationMode;
   settings?: AiSettings;
   signal?: AbortSignal;
+  /** 每收到一批 delta 时回调，参数为已累积的字符数（用于真实进度条） */
+  onChunk?: (accumulatedChars: number) => void;
+  workId?: string | null;
 }): Promise<{
   items: Array<{ title: string; summary: string; structuredMeta: PlanningNodeStructuredMeta }>;
   rawText: string;
@@ -216,16 +230,29 @@ export async function generateTuiyanPlanningList(args: {
     throw new TuiyanPlanningGenerateError("请先在设置中填写当前模型的 API Key。");
   }
   const count = Math.max(1, Math.min(PARSE_MAX_ITEMS, Math.floor(args.desiredCount)));
+  const userInput = args.userInput.trim();
+  logTuiyanReferenceTouchpoint(`planning_list:${args.level}`, userInput);
   const messages: AiChatMessage[] = [
-    { role: "system", content: listSystemPrompt(args.level, count) },
-    { role: "user", content: args.userInput.trim() },
+    {
+      role: "system",
+      content: mergeTuiyanPlanningSystemWithReferenceHardRules(listSystemPrompt(args.level, count), userInput, {
+        imitationMode: args.imitationMode,
+      }),
+    },
+    { role: "user", content: userInput },
   ];
-  const r = await generateWithProvider({
+  let accumulated = 0;
+  const r = await generateWithProviderStream({
     provider: settings.provider,
     config: cfg,
     messages,
     temperature: Math.min(1.1, Math.max(0.2, settings.geminiTemperature)),
     signal: args.signal,
+    usageLog: { task: PLANNING_TASK_LABEL[args.level], workId: args.workId },
+    onDelta: (delta) => {
+      accumulated += delta.length;
+      args.onChunk?.(accumulated);
+    },
   });
   const rawText = (r.text ?? "").trim();
   if (!rawText) {
@@ -294,8 +321,12 @@ function parseDetailOutput(raw: string): {
 
 export async function generateTuiyanPlanningDetail(args: {
   userInput: string;
+  imitationMode?: TuiyanImitationMode;
   settings?: AiSettings;
   signal?: AbortSignal;
+  /** 每收到一批 delta 时回调，参数为已累积的字符数（用于真实进度条） */
+  onChunk?: (accumulatedChars: number) => void;
+  workId?: string | null;
 }): Promise<{
   text: string;
   structuredMeta: DetailStructuredMeta;
@@ -306,16 +337,29 @@ export async function generateTuiyanPlanningDetail(args: {
   if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
     throw new TuiyanPlanningGenerateError("请先在设置中填写当前模型的 API Key。");
   }
+  const userInput = args.userInput.trim();
+  logTuiyanReferenceTouchpoint("planning_detail:chapter_detail", userInput);
   const messages: AiChatMessage[] = [
-    { role: "system", content: DETAIL_SYSTEM_PROMPT },
-    { role: "user", content: args.userInput.trim() },
+    {
+      role: "system",
+      content: mergeTuiyanPlanningSystemWithReferenceHardRules(DETAIL_SYSTEM_PROMPT, userInput, {
+        imitationMode: args.imitationMode,
+      }),
+    },
+    { role: "user", content: userInput },
   ];
-  const r = await generateWithProvider({
+  let accumulated = 0;
+  const r = await generateWithProviderStream({
     provider: settings.provider,
     config: cfg,
     messages,
     temperature: Math.min(1.0, Math.max(0.2, settings.geminiTemperature)),
     signal: args.signal,
+    usageLog: { task: "观云·详细细纲", workId: args.workId },
+    onDelta: (delta) => {
+      accumulated += delta.length;
+      args.onChunk?.(accumulated);
+    },
   });
   const raw = (r.text ?? "").trim();
   if (!raw) {

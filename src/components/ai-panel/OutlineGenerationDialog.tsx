@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { AiInlineErrorNotice } from "../AiInlineErrorNotice";
+import { useImperativeDialog } from "../ImperativeDialog";
 import { cn } from "../../lib/utils";
 import { GEN_PHASE_UI, type GenPhase } from "./useGenPhase";
 import { OUTLINE_SOURCE_LABEL, type OutlineSource } from "./useOutlineSource";
@@ -53,6 +54,7 @@ interface Props {
 }
 
 export const OutlineGenerationDialog = memo(function OutlineGenerationDialog(props: Props) {
+  const { confirm } = useImperativeDialog();
   const {
     open,
     onOpenChange,
@@ -155,15 +157,15 @@ export const OutlineGenerationDialog = memo(function OutlineGenerationDialog(pro
 
   // 生成中点 × 关闭：先确认是否取消并关闭
   const handleOpenChange = useCallback(
-    (next: boolean) => {
+    async (next: boolean) => {
       if (!next && busy) {
-        const ok = window.confirm("正在生成中，是否取消并关闭？");
+        const ok = await confirm("正在生成中，是否取消并关闭？");
         if (!ok) return;
         onAbort();
       }
       onOpenChange(next);
     },
-    [busy, onAbort, onOpenChange],
+    [busy, confirm, onAbort, onOpenChange],
   );
 
   const phaseUi = GEN_PHASE_UI[phase];

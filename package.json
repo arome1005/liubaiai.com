@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "node scripts/e2e-smoke.mjs",
+    "clean-novel": "node scripts/clean-novel-txt.mjs",
     "preview": "vite preview",
     "db:test": "node --env-file=backend/.env backend/test-connection.js",
     "db:migrate": "node --env-file=backend/.env backend/migrate.js",
@@ -77,6 +78,7 @@
     "react-dom": "^19.2.4",
     "react-router-dom": "^7.13.2",
     "reactflow": "^11.11.4",
+    "recharts": "^2.15.4",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0"
   },

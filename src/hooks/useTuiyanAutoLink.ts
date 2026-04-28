@@ -42,6 +42,8 @@ export type UseTuiyanAutoLinkResult = {
   toggleAutoLink: () => void;
   /** 入库一批节点（fire-and-forget；自动 toast；自动 bump refreshKey） */
   runAutoLink: (items: AutoLinkItem[]) => void;
+  /** 外部写入书斋后手动触发 chip 区重新拉库（不经过 runAutoLink 时使用） */
+  bumpChipLibRefreshKey: () => void;
   /** chip 库刷新计数器（每次成功入库后 +1） */
   chipLibRefreshKey: number;
 };
@@ -57,6 +59,10 @@ export function useTuiyanAutoLink(workId: string | null | undefined): UseTuiyanA
       writeAutoLinkEnabled(next);
       return next;
     });
+  }, []);
+
+  const bumpChipLibRefreshKey = useCallback(() => {
+    setChipLibRefreshKey((k) => k + 1);
   }, []);
 
   const runAutoLink = useCallback(
@@ -85,5 +91,5 @@ export function useTuiyanAutoLink(workId: string | null | undefined): UseTuiyanA
     [autoLinkEnabled, workId, toast],
   );
 
-  return { autoLinkEnabled, toggleAutoLink, runAutoLink, chipLibRefreshKey };
+  return { autoLinkEnabled, toggleAutoLink, runAutoLink, bumpChipLibRefreshKey, chipLibRefreshKey };
 }

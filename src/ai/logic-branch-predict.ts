@@ -1,4 +1,7 @@
+import type { TuiyanImitationMode } from "../db/types";
+import { logTuiyanReferenceTouchpoint } from "../util/tuiyan-reference-dev-log";
 import { formatWorkStyleAndTagProfileBlock, type WritingWorkStyleSlice } from "./assemble-context";
+import { mergeTuiyanPlanningSystemWithReferenceHardRules } from "./tuiyan-reference-planning-system";
 import { generateWithProvider } from "./client";
 import { isLocalAiProvider } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
@@ -83,6 +86,8 @@ export async function generateLogicThreeBranches(args: {
   workStyle?: WritingWorkStyleSlice;
   /** 与写作侧栏同源：留白标签 → 侧写（可选） */
   tagProfileText?: string;
+  /** 与参考 Tab 全局 `imitationMode` 一致；`userHint` 含参考策略时追加分模式 system 段 */
+  imitationMode?: TuiyanImitationMode;
   settings?: AiSettings;
   signal?: AbortSignal;
 }): Promise<{ branches: { title: string; summary: string }[]; rawText: string }> {
@@ -98,6 +103,9 @@ export async function generateLogicThreeBranches(args: {
   }
   const excerpt = body.length <= MAX_BODY_CHARS ? body : body.slice(-MAX_BODY_CHARS);
   const hint = (args.userHint ?? "").trim();
+  logTuiyanReferenceTouchpoint("logic_three_branch:userHint", hint, {
+    chapterChars: body.length,
+  });
   const emptyStyle: WritingWorkStyleSlice = {
     pov: "",
     tone: "",
@@ -114,6 +122,9 @@ export async function generateLogicThreeBranches(args: {
       "\n\n【写作约束（与写作侧栏装配器同源；请与下列正文一并遵守）】\n" +
       constraintBlock.trim();
   }
+  systemContent = mergeTuiyanPlanningSystemWithReferenceHardRules(systemContent, hint, {
+    imitationMode: args.imitationMode,
+  });
   const anchor = ws.styleAnchor.trim();
   const user =
     `书名：${args.workTitle}\n章节：${args.chapterTitle}\n` +

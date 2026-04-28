@@ -119,6 +119,7 @@ export default function App() {
         <Route element={<RequireAuth authUser={authUser} />}>
           <Route path="/logic" element={<V0TuiyanPage />} />
           <Route path="/v0/tuiyan" element={<Navigate to="/logic" replace />} />
+          <Route path="/sheng-hui" element={<ShengHuiPage />} />
         </Route>
         <Route element={<EditorShell />}>
           <Route path="/work/:workId" element={<EditorPage />} />
@@ -144,7 +145,6 @@ export default function App() {
             <Route path="/v0/test" element={<V0TestPage />} />
             <Route path="/inspiration" element={<InspirationPage />} />
             <Route path="/chat" element={<ChatPage />} />
-            <Route path="/sheng-hui" element={<ShengHuiPage />} />
             <Route path="/luobi" element={<LuobiHubPage />} />
             <Route path="/luobi/generate/:mode" element={<LuobiGeneratorPage />} />
             <Route path="/prompts" element={<PromptsPage />} />

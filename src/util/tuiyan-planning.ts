@@ -95,6 +95,24 @@ export const PLANNING_MIN_CHARS = {
   volumeWithPunct: 1500,
 } as const
 
+/**
+ * 各推演层级的预估输出字符数（保守估计），用于把流式接收到的 accumulated 字符数
+ * 映射成进度百分比。超出预估时调用方应钳制在 95%，留出「完成跳 100%」的视觉空间。
+ */
+export const PLANNING_GEN_EXPECTED_CHARS: Record<
+  TuiyanPlanningLevel | "chapter_detail",
+  number
+> = {
+  master_outline: 1800,
+  outline: 3000,
+  volume: 2000,
+  chapter_outline: 4000,
+  chapter_detail: 1200,
+}
+
+/** 当 level 不在预估表里时的兜底字符数。 */
+export const PLANNING_GEN_EXPECTED_CHARS_FALLBACK = 2000
+
 /** 含标点字数：去掉所有空白符后计数 */
 export function countCharsWithPunct(text: string): number {
   return text.replace(/\s/g, "").length
@@ -130,4 +148,40 @@ export function listPlanningChildren(
   return tree
     .filter((n) => n.parentId === parentId && (!level || n.level === level))
     .sort((a, b) => a.order - b.order)
+}
+
+// ── 分大纲 / 分卷规模（回退到 PlanningScale） ──────────────────────────────
+
+/** 用户为某一级大纲单独设置的目标卷数。 */
+export function clampPlanningOutlineVolumeTarget(n: number): number {
+  const r = Math.round(Number(n))
+  if (!Number.isFinite(r)) return PLANNING_SCALE_VOLUME_MIN
+  return Math.max(PLANNING_SCALE_VOLUME_MIN, Math.min(PLANNING_SCALE_VOLUME_MAX, r))
+}
+
+/** 用户为某卷单独设置的章细纲条数。 */
+export function clampPlanningVolumeChapterTarget(n: number): number {
+  const r = Math.round(Number(n))
+  if (!Number.isFinite(r)) return PLANNING_SCALE_CHAPTERS_MIN
+  return Math.max(PLANNING_SCALE_CHAPTERS_MIN, Math.min(PLANNING_SCALE_CHAPTERS_MAX, r))
+}
+
+export function resolveOutlineTargetVolumeCount(
+  outlineId: string | null | undefined,
+  byNodeId: Record<string, number> | undefined,
+  fallbackVolumeCount: number,
+): number {
+  if (!outlineId) return clampPlanningOutlineVolumeTarget(fallbackVolumeCount)
+  const v = byNodeId?.[outlineId]
+  return v !== undefined ? clampPlanningOutlineVolumeTarget(v) : clampPlanningOutlineVolumeTarget(fallbackVolumeCount)
+}
+
+export function resolveVolumeTargetChapterCount(
+  volumeId: string | null | undefined,
+  byNodeId: Record<string, number> | undefined,
+  fallbackChapters: number,
+): number {
+  if (!volumeId) return clampPlanningVolumeChapterTarget(fallbackChapters)
+  const v = byNodeId?.[volumeId]
+  return v !== undefined ? clampPlanningVolumeChapterTarget(v) : clampPlanningVolumeChapterTarget(fallbackChapters)
 }

@@ -1,0 +1,181 @@
+// AI 用量洞察 — 模拟数据（与 v0 一致；真实数据需接入本地用量日志）
+
+import type { AiProviderId, ContextBreakdown, DailyUsage, UsageRecord, UsageStats } from "./usage-types";
+
+export const mockUsageRecords: UsageRecord[] = [
+  {
+    id: "1",
+    timestamp: new Date("2026-04-27T09:15:00"),
+    task: "侧栏·续写",
+    model: "gpt-4.1-mini",
+    provider: "openai",
+    inputTokens: 12450,
+    outputTokens: 2180,
+    totalTokens: 14630,
+    source: "api",
+    status: "success",
+  },
+  {
+    id: "2",
+    timestamp: new Date("2026-04-27T09:32:00"),
+    task: "观云·规划",
+    model: "claude-opus-4",
+    provider: "anthropic",
+    inputTokens: 18200,
+    outputTokens: 4520,
+    totalTokens: 22720,
+    source: "api",
+    status: "success",
+  },
+  {
+    id: "3",
+    timestamp: new Date("2026-04-27T10:05:00"),
+    task: "重塑·润色",
+    model: "gemini-3-flash",
+    provider: "gemini",
+    inputTokens: 8600,
+    outputTokens: 1890,
+    totalTokens: 10490,
+    source: "approx",
+    status: "success",
+    note: "无 usage 字段",
+  },
+  {
+    id: "4",
+    timestamp: new Date("2026-04-27T10:28:00"),
+    task: "侧栏·续写",
+    model: "llama-3.3-70b",
+    provider: "local",
+    inputTokens: 5200,
+    outputTokens: 980,
+    totalTokens: 6180,
+    source: "approx",
+    status: "success",
+  },
+  {
+    id: "5",
+    timestamp: new Date("2026-04-27T11:15:00"),
+    task: "文策·摘要",
+    model: "gpt-4.1-mini",
+    provider: "openai",
+    inputTokens: 32100,
+    outputTokens: 1250,
+    totalTokens: 33350,
+    source: "api",
+    status: "success",
+  },
+  {
+    id: "6",
+    timestamp: new Date("2026-04-27T11:45:00"),
+    task: "观云·生成",
+    model: "claude-opus-4",
+    provider: "anthropic",
+    inputTokens: 24800,
+    outputTokens: 8900,
+    totalTokens: 33700,
+    source: "api",
+    status: "success",
+  },
+  {
+    id: "7",
+    timestamp: new Date("2026-04-27T12:20:00"),
+    task: "侧栏·续写",
+    model: "gpt-4.1-mini",
+    provider: "openai",
+    inputTokens: 9800,
+    outputTokens: 1650,
+    totalTokens: 11450,
+    source: "api",
+    status: "success",
+  },
+  {
+    id: "8",
+    timestamp: new Date("2026-04-27T13:10:00"),
+    task: "重塑·扩写",
+    model: "gemini-3-flash",
+    provider: "gemini",
+    inputTokens: 6400,
+    outputTokens: 3200,
+    totalTokens: 9600,
+    source: "api",
+    status: "success",
+  },
+];
+
+export const mockHourlyData: DailyUsage[] = [
+  { date: "2026-04-27", hour: 6, total: 8200, apiTotal: 5740, approxTotal: 2460, calls: 2, byProvider: { openai: 3280, anthropic: 2870, gemini: 1230, local: 820, router: 0, all: 8200 } },
+  { date: "2026-04-27", hour: 7, total: 12500, apiTotal: 8750, approxTotal: 3750, calls: 3, byProvider: { openai: 5000, anthropic: 4375, gemini: 1875, local: 1250, router: 0, all: 12500 } },
+  { date: "2026-04-27", hour: 8, total: 18900, apiTotal: 13230, approxTotal: 5670, calls: 4, byProvider: { openai: 7560, anthropic: 6615, gemini: 2835, local: 1890, router: 0, all: 18900 } },
+  { date: "2026-04-27", hour: 9, total: 22720, apiTotal: 15904, approxTotal: 6816, calls: 5, byProvider: { openai: 9088, anthropic: 7952, gemini: 3408, local: 2272, router: 0, all: 22720 } },
+  { date: "2026-04-27", hour: 10, total: 16080, apiTotal: 11256, approxTotal: 4824, calls: 3, byProvider: { openai: 6432, anthropic: 5628, gemini: 2412, local: 1608, router: 0, all: 16080 } },
+  { date: "2026-04-27", hour: 11, total: 33350, apiTotal: 23345, approxTotal: 10005, calls: 4, byProvider: { openai: 13340, anthropic: 11672, gemini: 5002, local: 3336, router: 0, all: 33350 } },
+  { date: "2026-04-27", hour: 12, total: 11450, apiTotal: 8015, approxTotal: 3435, calls: 2, byProvider: { openai: 4580, anthropic: 4007, gemini: 1718, local: 1145, router: 0, all: 11450 } },
+  { date: "2026-04-27", hour: 13, total: 9600, apiTotal: 6720, approxTotal: 2880, calls: 2, byProvider: { openai: 3840, anthropic: 3360, gemini: 1440, local: 960, router: 0, all: 9600 } },
+  { date: "2026-04-27", hour: 14, total: 15200, apiTotal: 10640, approxTotal: 4560, calls: 3, byProvider: { openai: 6080, anthropic: 5320, gemini: 2280, local: 1520, router: 0, all: 15200 } },
+  { date: "2026-04-27", hour: 15, total: 19800, apiTotal: 13860, approxTotal: 5940, calls: 4, byProvider: { openai: 7920, anthropic: 6930, gemini: 2970, local: 1980, router: 0, all: 19800 } },
+  { date: "2026-04-27", hour: 16, total: 24500, apiTotal: 17150, approxTotal: 7350, calls: 5, byProvider: { openai: 9800, anthropic: 8575, gemini: 3675, local: 2450, router: 0, all: 24500 } },
+  { date: "2026-04-27", hour: 17, total: 21300, apiTotal: 14910, approxTotal: 6390, calls: 4, byProvider: { openai: 8520, anthropic: 7455, gemini: 3195, local: 2130, router: 0, all: 21300 } },
+  { date: "2026-04-27", hour: 18, total: 17600, apiTotal: 12320, approxTotal: 5280, calls: 3, byProvider: { openai: 7040, anthropic: 6160, gemini: 2640, local: 1760, router: 0, all: 17600 } },
+  { date: "2026-04-27", hour: 19, total: 8920, apiTotal: 6244, approxTotal: 2676, calls: 2, byProvider: { openai: 3568, anthropic: 3122, gemini: 1338, local: 892, router: 0, all: 8920 } },
+];
+
+export const mockDailyData: DailyUsage[] = [
+  { date: "2026-04-21", total: 85200, apiTotal: 59640, approxTotal: 25560, calls: 12, byProvider: { openai: 32376, anthropic: 27264, gemini: 15336, local: 10224, router: 0, all: 85200 } },
+  { date: "2026-04-22", total: 124800, apiTotal: 87360, approxTotal: 37440, calls: 18, byProvider: { openai: 47424, anthropic: 39936, gemini: 22464, local: 14976, router: 0, all: 124800 } },
+  { date: "2026-04-23", total: 156300, apiTotal: 109410, approxTotal: 46890, calls: 22, byProvider: { openai: 59394, anthropic: 50016, gemini: 28134, local: 18756, router: 0, all: 156300 } },
+  { date: "2026-04-24", total: 98600, apiTotal: 69020, approxTotal: 29580, calls: 15, byProvider: { openai: 37468, anthropic: 31552, gemini: 17748, local: 11832, router: 0, all: 98600 } },
+  { date: "2026-04-25", total: 178900, apiTotal: 125230, approxTotal: 53670, calls: 26, byProvider: { openai: 67982, anthropic: 57248, gemini: 32202, local: 21468, router: 0, all: 178900 } },
+  { date: "2026-04-26", total: 142500, apiTotal: 99750, approxTotal: 42750, calls: 20, byProvider: { openai: 54150, anthropic: 45600, gemini: 25650, local: 17100, router: 0, all: 142500 } },
+  { date: "2026-04-27", total: 240120, apiTotal: 168084, approxTotal: 72036, calls: 46, byProvider: { openai: 91245, anthropic: 76838, gemini: 43221, local: 28814, router: 0, all: 240120 } },
+];
+
+export const mockContextBreakdown: ContextBreakdown[] = [
+  { name: "章节正文", tokens: 45000, percentage: 38 },
+  { name: "锦囊/设定", tokens: 28000, percentage: 23 },
+  { name: "系统提示", tokens: 18000, percentage: 15 },
+  { name: "选区内容", tokens: 14000, percentage: 12 },
+  { name: "RAG 片段", tokens: 9000, percentage: 8 },
+  { name: "观云规划", tokens: 5000, percentage: 4 },
+];
+
+export const mockTaskBreakdown: ContextBreakdown[] = [
+  { name: "侧栏·续写", tokens: 42000, percentage: 35 },
+  { name: "观云·生成", tokens: 36000, percentage: 30 },
+  { name: "重塑·润色", tokens: 24000, percentage: 20 },
+  { name: "文策·摘要", tokens: 12000, percentage: 10 },
+  { name: "其他", tokens: 6000, percentage: 5 },
+];
+
+export const mockUsageStats: UsageStats = {
+  dailyBudget: {
+    used: 142120,
+    limit: 200000,
+    percentage: 71.06,
+    isOverBudget: false,
+    isNearThreshold: true,
+  },
+  sessionBudget: {
+    used: 89450,
+    limit: 0,
+    percentage: 0,
+    isOverBudget: false,
+    isNearThreshold: false,
+  },
+  lifetimeTotal: 4_235_680,
+  avgInputRatio: 0.78,
+  avgOutputRatio: 0.22,
+  avgPerCall: {
+    input: 14680,
+    output: 3070,
+    total: 17750,
+  },
+};
+
+export const providerLabels: Record<AiProviderId, string> = {
+  all: "全部",
+  openai: "OpenAI",
+  anthropic: "Anthropic",
+  gemini: "Gemini",
+  local: "本地 (Ollama·MLX)",
+  router: "国产路由",
+};

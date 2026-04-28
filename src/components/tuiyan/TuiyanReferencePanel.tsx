@@ -1,6 +1,6 @@
-import { useState, useEffect, useCallback, useMemo } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Link } from "react-router-dom"
-import { BookOpen, Link2, Search, Sparkles, X, ArrowRight, Loader2 } from "lucide-react"
+import { BookOpen, Link2, Search, Sparkles, X, Loader2 } from "lucide-react"
 import { Button } from "../ui/button"
 import { Input } from "../ui/input"
 import { ScrollArea } from "../ui/scroll-area"
@@ -10,9 +10,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../ui/dialog"
-import type { ReferenceLibraryEntry, ReferenceSearchHit } from "../../db/types"
-import { getWritingStore } from "../../storage/instance"
-import { cn } from "../../lib/utils"
+import type { ReferenceLibraryEntry, TuiyanReferenceBinding, TuiyanReferencePolicy, TuiyanReferenceAspect } from "../../db/types"
+import { useTuiyanReferenceRagSearch } from "../../hooks/useTuiyanReferenceRagSearch"
+import { TuiyanReferenceGlobalPolicySection } from "./TuiyanReferenceGlobalPolicySection"
+import { TuiyanRefBookConfigBlock } from "./TuiyanRefBookConfigBlock"
+import { TuiyanReferenceRagHitCard } from "./TuiyanReferenceRagHitCard"
+import { TuiyanReferenceRagSearchErrorBanner } from "./TuiyanReferenceRagSearchErrorBanner"
 
 export interface TuiyanReferencePanelProps {
   /** 当前作品已关联的书目 id 列表 */
@@ -26,6 +29,18 @@ export interface TuiyanReferencePanelProps {
   onApplyToOutline: (ref: ReferenceLibraryEntry) => void
   /** 将段落文本注入 AI 对话输入框并切换到对话 Tab */
   onInjectToChat: (text: string) => void
+  /**
+   * 以下可选：推演「参考仿写」策略配置；未传时与历史行为一致，不展示配置区。
+   */
+  referenceBindings?: TuiyanReferenceBinding[]
+  referencePolicy?: TuiyanReferencePolicy
+  onUpdateReferencePolicy?: (patch: Partial<TuiyanReferencePolicy>) => void
+  onSetPrimaryRef?: (refWorkId: string) => void
+  onUpdateReferenceBinding?: (
+    refWorkId: string,
+    patch: Partial<Pick<TuiyanReferenceBinding, "role" | "aspects" | "rangeMode" | "note" | "sectionIds">>,
+  ) => void
+  onToggleReferenceAspect?: (refWorkId: string, aspect: TuiyanReferenceAspect) => void
 }
 
 export function TuiyanReferencePanel({
@@ -36,17 +51,27 @@ export function TuiyanReferencePanel({
   onUnlinkRef,
   onApplyToOutline,
   onInjectToChat,
+  referenceBindings = [],
+  referencePolicy,
+  onUpdateReferencePolicy,
+  onSetPrimaryRef,
+  onUpdateReferenceBinding,
+  onToggleReferenceAspect,
 }: TuiyanReferencePanelProps) {
+  const hasRefConfigUi =
+    referencePolicy && onUpdateReferencePolicy && onSetPrimaryRef && onUpdateReferenceBinding && onToggleReferenceAspect
   const [linkRefOpen, setLinkRefOpen] = useState(false)
   const [linkRefQ, setLinkRefQ] = useState("")
   const [ragQuery, setRagQuery] = useState("")
-  const [ragResults, setRagResults] = useState<ReferenceSearchHit[]>([])
-  const [ragLoading, setRagLoading] = useState(false)
+  const { ragResults, ragLoading, ragError, runRagSearch, dismissRagError } = useTuiyanReferenceRagSearch({
+    linkedRefWorkIds,
+    referenceBindings,
+    resetKey: currentNodeKeywords,
+  })
 
   // 当节点切换时，用节点标题自动预填搜索词（但不自动触发搜索）
   useEffect(() => {
     setRagQuery(currentNodeKeywords)
-    setRagResults([])
   }, [currentNodeKeywords])
 
   const linkedRefs = useMemo(() => {
@@ -65,29 +90,9 @@ export function TuiyanReferencePanel({
     })
   }, [refLibrary, linkedRefWorkIds, linkRefQ])
 
-  const handleSearch = useCallback(async () => {
-    const q = ragQuery.trim()
-    if (!q || linkedRefWorkIds.length === 0) return
-    setRagLoading(true)
-    setRagResults([])
-    try {
-      const store = getWritingStore()
-      const allHits = await store.searchReferenceLibrary(q, { limit: 12, mode: "hybrid" })
-      const linkedSet = new Set(linkedRefWorkIds)
-      setRagResults(allHits.filter((h) => linkedSet.has(h.refWorkId)).slice(0, 8))
-    } catch {
-      // 搜索失败时静默，不影响主功能
-    } finally {
-      setRagLoading(false)
-    }
-  }, [ragQuery, linkedRefWorkIds])
-
-  const handleSearchKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLInputElement>) => {
-      if (e.key === "Enter") void handleSearch()
-    },
-    [handleSearch],
-  )
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") void runRagSearch(ragQuery)
+  }
 
   return (
     <ScrollArea className="flex-1">
@@ -172,13 +177,20 @@ export function TuiyanReferencePanel({
         )}
 
         {/* 节点感知搜索框（有已关联书目时才显示） */}
+        {linkedRefs.length > 0 && hasRefConfigUi && referencePolicy && onUpdateReferencePolicy && (
+          <TuiyanReferenceGlobalPolicySection policy={referencePolicy} onUpdatePolicy={onUpdateReferencePolicy} />
+        )}
+
         {linkedRefs.length > 0 && (
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">从关联书目中检索与当前节点相关的段落</p>
             <div className="flex gap-2">
               <Input
                 value={ragQuery}
-                onChange={(e) => setRagQuery(e.target.value)}
+                onChange={(e) => {
+                  setRagQuery(e.target.value)
+                  if (ragError) dismissRagError()
+                }}
                 onKeyDown={handleSearchKeyDown}
                 placeholder="输入关键词 / 节点标题…"
                 className="h-8 text-sm flex-1"
@@ -187,7 +199,7 @@ export function TuiyanReferencePanel({
                 variant="outline"
                 size="sm"
                 className="h-8 px-3 shrink-0"
-                onClick={() => void handleSearch()}
+                onClick={() => void runRagSearch(ragQuery)}
                 disabled={ragLoading || !ragQuery.trim()}
                 type="button"
               >
@@ -195,44 +207,26 @@ export function TuiyanReferencePanel({
               </Button>
             </div>
 
+            {ragError ? (
+              <TuiyanReferenceRagSearchErrorBanner message={ragError} onDismiss={dismissRagError} />
+            ) : null}
+
             {/* RAG 检索结果 */}
             {ragResults.length > 0 && (
               <div className="space-y-2">
                 {ragResults.map((hit) => (
-                  <div
+                  <TuiyanReferenceRagHitCard
                     key={hit.chunkId}
-                    className="rounded-lg border border-border/40 bg-card/30 p-3 space-y-2"
-                  >
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-foreground/70 truncate">
-                        《{hit.refTitle}》
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 px-2 text-xs shrink-0 gap-1 text-primary hover:text-primary"
-                        onClick={() => onInjectToChat(hit.preview || [hit.snippetBefore, hit.snippetMatch, hit.snippetAfter].join(""))}
-                        type="button"
-                        title="注入到 AI 对话输入框"
-                      >
-                        <ArrowRight className="h-3 w-3" />
-                        注入对话
-                      </Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground leading-relaxed line-clamp-4">
-                      {hit.snippetBefore}
-                      <span className={cn("font-medium", hit.snippetMatch ? "text-primary" : "")}>
-                        {hit.snippetMatch}
-                      </span>
-                      {hit.snippetAfter}
-                    </p>
-                  </div>
+                    hit={hit}
+                    onInjectToChat={onInjectToChat}
+                    referenceBindings={referenceBindings}
+                  />
                 ))}
               </div>
             )}
 
-            {/* 搜索完成但无结果 */}
-            {!ragLoading && ragResults.length === 0 && ragQuery.trim() && (
+            {/* 搜索完成但无结果（无错误时） */}
+            {!ragLoading && !ragError && ragResults.length === 0 && ragQuery.trim() && (
               <p className="text-xs text-muted-foreground text-center py-2">
                 未检索到相关段落。换个关键词试试，或先去<Link to="/reference" className="text-primary hover:underline mx-0.5">藏经</Link>导入原著。
               </p>
@@ -244,7 +238,9 @@ export function TuiyanReferencePanel({
         {linkedRefs.length > 0 && (
           <div className="space-y-3">
             <h4 className="text-xs font-medium text-muted-foreground">已关联 {linkedRefs.length} 部</h4>
-            {linkedRefs.map((r) => (
+            {linkedRefs.map((r) => {
+              const binding = referenceBindings.find((b) => b.refWorkId === r.id)
+              return (
               <div key={r.id} className="rounded-xl border border-border/40 bg-card/30 p-4 space-y-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -276,6 +272,22 @@ export function TuiyanReferencePanel({
                   </div>
                 </div>
 
+                {hasRefConfigUi && binding && onSetPrimaryRef && onUpdateReferenceBinding && onToggleReferenceAspect && (
+                  <TuiyanRefBookConfigBlock
+                    binding={binding}
+                    onSetPrimary={() => onSetPrimaryRef(r.id)}
+                    onToggleAspect={(a) => onToggleReferenceAspect(r.id, a)}
+                    onRangeChange={(rangeMode) =>
+                      onUpdateReferenceBinding(r.id, {
+                        rangeMode,
+                        ...(rangeMode !== "selected_sections" ? { sectionIds: [] } : {}),
+                      })
+                    }
+                    onNoteChange={(note) => onUpdateReferenceBinding(r.id, { note })}
+                    onSectionIdsChange={(sectionIds) => onUpdateReferenceBinding(r.id, { sectionIds })}
+                  />
+                )}
+
                 <Button
                   variant="ghost"
                   size="sm"
@@ -287,7 +299,8 @@ export function TuiyanReferencePanel({
                   应用到当前大纲（写入文策）
                 </Button>
               </div>
-            ))}
+            )
+          })}
           </div>
         )}
       </div>

@@ -20,21 +20,16 @@ import {
   deleteChapterSnapshot,
   deleteVolume,
   getChapterBible,
-  getWorkStyleCard,
   getWork,
   getTuiyanState,
   listAllReferenceExcerpts,
-  listBibleCharacters,
-  listBibleGlossaryTerms,
   addBibleCharacter,
   addBibleGlossaryTerm,
   deleteBibleCharacter,
   deleteBibleGlossaryTerm,
-  listWritingStyleSamples,
   listChapterSnapshots,
   listChapters,
   listVolumes,
-  upsertWorkStyleCard,
   upsertChapterBible,
   reorderChapters,
   searchWork,
@@ -47,7 +42,6 @@ import {
   updateBibleGlossaryTerm,
 } from "../db/repo";
 import type {
-  BibleCharacter,
   BibleGlossaryTerm,
   BookSearchHit,
   Chapter,
@@ -56,7 +50,6 @@ import type {
   TuiyanPushedOutlineEntry,
   Volume,
   Work,
-  WritingStyleSample,
 } from "../db/types";
 import {
   buildBookDocx,
@@ -72,16 +65,6 @@ import { LAST_CHAPTER_SESSION_KEY_PREFIX } from "../util/last-chapter-session";
 import { readLineEndingMode } from "../util/lineEnding";
 import { replaceAllLiteral } from "../util/text-replace";
 import { wordCount } from "../util/wordCount";
-import {
-  defaultWorkAiWritingVars,
-  loadWorkAiWritingVars,
-  persistWorkAiWritingVars,
-} from "../util/work-ai-vars-storage";
-import {
-  defaultWorkAiRagInjectDefaults,
-  loadWorkAiRagInjectDefaults,
-  persistWorkAiRagInjectDefaults,
-} from "../util/work-ai-rag-inject-defaults-storage";
 import { neighborSummaryPoolChaptersForWritingPanel } from "../util/neighbor-summary-pool";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
 import { isFirstAiGateCancelledError } from "../ai/client";
@@ -97,22 +80,17 @@ import { clearInspirationTransferHandoff, readInspirationTransferHandoff } from 
 import { clearEditorHitHandoff, readEditorHitHandoff } from "../util/editor-hit-handoff";
 import { clearEditorRefsImport, readEditorRefsImport, type EditorRefsImportItem } from "../util/editor-refs-import";
 import { CodeMirrorEditor, type CodeMirrorEditorHandle } from "../components/CodeMirrorEditor";
-import { AiPanel } from "../components/AiPanel";
 import { useEditorZen } from "../components/EditorZenContext";
 import { useImperativeDialog } from "../components/ImperativeDialog";
 import { useRightRail, type RightRailTabId } from "../components/RightRailContext";
-import { KnowledgeBaseRightPanel, RefRightPanel } from "../components/RightRailPanels";
-import { WritingSettingsRightPanel } from "../components/WritingSettingsRightPanel";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { StudyLibraryDialog, type StudyLibraryTab } from "../components/study/StudyLibraryDialog";
-import type {
-  AiPanelWorkRagInjectDefaultsPatch,
-  AiPanelWorkStylePatch,
-  AiPanelWorkWritingVarsPatch,
-} from "../components/ai-panel/types";
 import { useTopbar } from "../components/TopbarContext";
 import { EDITOR_TYPOGRAPHY_EVENT, loadEditorTypography, type EditorPaperTint } from "../util/editor-typography";
 import { useResolvedWorkFromRoute } from "../hooks/useResolvedWorkFromRoute";
+import { useEditorOpenAiFromQuery } from "../hooks/useEditorOpenAiFromQuery";
+import { useEditorRightRailMount } from "../hooks/useEditorRightRailMount";
+import { useWorkAiContext } from "../hooks/useWorkAiContext";
 import { workPathSegment } from "../util/work-url";
 import { HOTKEY_EVENT, matchHotkey, readZenToggleHotkey } from "../util/hotkey-config";
 import { loadChapterNote, saveChapterNote, hasChapterNote, warmChapterNoteCache } from "../util/chapter-notes-storage";
@@ -153,11 +131,9 @@ export function EditorPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const rightRail = useRightRail();
-  /** EditorShell 里这些方法为 useState/useCallback，引用稳定；勿把 whole rightRail 放进 deps，否则 tabs 每变会换对象身份 → setTabContent  effect 死循环 */
+  /** EditorShell 里这些方法为 useState/useCallback，引用稳定；勿把 whole rightRail 放进 deps，否则 tabs 每变会换对象身份。 */
   const {
     setOpen: setRightRailOpen,
-    setTabContent: setRightRailTabContent,
-    setTabEnabled: setRightRailTabEnabled,
     setActiveTab: setRightRailActiveTab,
   } = rightRail;
   const { zenWrite, setZenWrite } = useEditorZen();
@@ -214,12 +190,12 @@ export function EditorPage() {
   const [work, setWork] = useState<Work | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  useEditorOpenAiFromQuery(workId, activeId, setRightRailOpen, setRightRailActiveTab);
   const [content, setContent] = useState("");
   const [liuguangReturnVisible, setLiuguangReturnVisible] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loaderExited, setLoaderExited] = useState(false);
   // loading 变 true（新作品加载）时复位，让全屏 loader 重新出现
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { if (loading) setLoaderExited(false); }, [loading]);
   const handleLoaderExited = useCallback(() => setLoaderExited(true), []);
   const [findQ, setFindQ] = useState("");
@@ -296,19 +272,19 @@ export function EditorPage() {
   const [chapterConstraintsOpen, setChapterConstraintsOpen] = useState(false);
   const [studyLibraryOpen, setStudyLibraryOpen] = useState(false);
   const [studyLibraryTab, setStudyLibraryTab] = useState<StudyLibraryTab>("characters");
-  const [stylePov, setStylePov] = useState("");
-  const [styleTone, setStyleTone] = useState("");
-  const [styleBanned, setStyleBanned] = useState("");
-  const [styleAnchor, setStyleAnchor] = useState("");
-  const [styleExtra, setStyleExtra] = useState("");
-  const [styleSentenceRhythm, setStyleSentenceRhythm] = useState<string | undefined>(undefined);
-  const [stylePunctuationStyle, setStylePunctuationStyle] = useState<string | undefined>(undefined);
-  const [styleDialogueDensity, setStyleDialogueDensity] = useState<"low" | "medium" | "high" | undefined>(undefined);
-  const [styleEmotionStyle, setStyleEmotionStyle] = useState<"cold" | "neutral" | "warm" | undefined>(undefined);
-  const [styleNarrativeDistance, setStyleNarrativeDistance] = useState<"omniscient" | "limited" | "deep_pov" | undefined>(undefined);
-  const [glossaryTerms, setGlossaryTerms] = useState<BibleGlossaryTerm[]>([]);
-  const [bibleCharacters, setBibleCharacters] = useState<BibleCharacter[]>([]);
-  const [writingStyleSamples, setWritingStyleSamples] = useState<WritingStyleSample[]>([]);
+  const {
+    glossaryTerms,
+    bibleCharacters,
+    styleSampleSlices,
+    aiPanelWorkStyle,
+    updateWorkStyleFromPanel,
+    workAiWritingVars,
+    patchWorkAiWritingVars,
+    workAiRagInjectDefaults,
+    patchWorkAiRagInjectDefaults,
+    syncNeighborSummaryIncludeByIds,
+    refreshStudyLibrary,
+  } = useWorkAiContext(workId);
   /** 锦囊「提示词」页跳转：一次性写入 AI 侧栏「额外要求」 */
   const [aiUserHintPrefill, setAiUserHintPrefill] = useState<string | null>(null);
   /** 与 AiPanel 同源：本次生成材料简报（正文工具栏 ▼ 悬停展示） */
@@ -339,8 +315,10 @@ export function EditorPage() {
   const aiPanelContent = useDebouncedValue(content, 600);
 
   /** P1-A：稳定的 AiPanel / 右侧栏回调引用，防止 setTabContent 副作用因函数引用变化而重触发 */
+  const getSelectedText = useCallback(() => editorRef.current?.getSelectedText() ?? "", []);
   const insertAtCursor = useCallback((t: string) => editorRef.current?.insertTextAtCursor(t), []);
   const appendToEnd = useCallback((t: string) => editorRef.current?.appendTextToEnd(t), []);
+  const replaceSelection = useCallback((text: string) => editorRef.current?.replaceSelection(text), []);
   const ensureChapterViewBeforeInsert = useCallback(() => {
     setSidebarTab("chapter");
   }, []);
@@ -357,89 +335,6 @@ export function EditorPage() {
     editorRef.current?.insertTextAtCursor(ins);
     setRightRailOpen(false);
   }, [setRightRailOpen]);
-
-  const updateWorkStyleFromPanel = useCallback(
-    (patch: AiPanelWorkStylePatch) => {
-      if (!workId) return;
-      if (patch.pov !== undefined) setStylePov(patch.pov);
-      if (patch.tone !== undefined) setStyleTone(patch.tone);
-      if (patch.bannedPhrases !== undefined) setStyleBanned(patch.bannedPhrases);
-      if (patch.styleAnchor !== undefined) setStyleAnchor(patch.styleAnchor);
-      if (patch.extraRules !== undefined) setStyleExtra(patch.extraRules);
-      if (patch.sentenceRhythm !== undefined) setStyleSentenceRhythm(patch.sentenceRhythm);
-      if (patch.punctuationStyle !== undefined) setStylePunctuationStyle(patch.punctuationStyle);
-      if (patch.dialogueDensity !== undefined) setStyleDialogueDensity(patch.dialogueDensity);
-      if (patch.emotionStyle !== undefined) setStyleEmotionStyle(patch.emotionStyle);
-      if (patch.narrativeDistance !== undefined) setStyleNarrativeDistance(patch.narrativeDistance);
-      void upsertWorkStyleCard(workId, patch);
-    },
-    [workId],
-  );
-
-  const aiPanelWorkStyle = useMemo(
-    () => ({
-      pov: stylePov,
-      tone: styleTone,
-      bannedPhrases: styleBanned,
-      styleAnchor: styleAnchor,
-      extraRules: styleExtra,
-      sentenceRhythm: styleSentenceRhythm,
-      punctuationStyle: stylePunctuationStyle,
-      dialogueDensity: styleDialogueDensity,
-      emotionStyle: styleEmotionStyle,
-      narrativeDistance: styleNarrativeDistance,
-    }),
-    [
-      stylePov,
-      styleTone,
-      styleBanned,
-      styleAnchor,
-      styleExtra,
-      styleSentenceRhythm,
-      stylePunctuationStyle,
-      styleDialogueDensity,
-      styleEmotionStyle,
-      styleNarrativeDistance,
-    ],
-  );
-
-  const [workAiWritingVars, setWorkAiWritingVars] = useState(() =>
-    workId ? loadWorkAiWritingVars(workId) : defaultWorkAiWritingVars(),
-  );
-
-  useEffect(() => {
-    if (!workId) return;
-    setWorkAiWritingVars(loadWorkAiWritingVars(workId));
-  }, [workId]);
-
-  useEffect(() => {
-    if (!workId) return;
-    const t = window.setTimeout(() => persistWorkAiWritingVars(workId, workAiWritingVars), 400);
-    return () => clearTimeout(t);
-  }, [workId, workAiWritingVars]);
-
-  const patchWorkAiWritingVars = useCallback((patch: AiPanelWorkWritingVarsPatch) => {
-    setWorkAiWritingVars((prev) => ({ ...prev, ...patch }));
-  }, []);
-
-  const [workAiRagInjectDefaults, setWorkAiRagInjectDefaults] = useState(() =>
-    workId ? loadWorkAiRagInjectDefaults(workId) : defaultWorkAiRagInjectDefaults(),
-  );
-
-  useEffect(() => {
-    if (!workId) return;
-    setWorkAiRagInjectDefaults(loadWorkAiRagInjectDefaults(workId));
-  }, [workId]);
-
-  useEffect(() => {
-    if (!workId) return;
-    const t = window.setTimeout(() => persistWorkAiRagInjectDefaults(workId, workAiRagInjectDefaults), 400);
-    return () => clearTimeout(t);
-  }, [workId, workAiRagInjectDefaults]);
-
-  const patchWorkAiRagInjectDefaults = useCallback((patch: AiPanelWorkRagInjectDefaultsPatch) => {
-    setWorkAiRagInjectDefaults((prev) => ({ ...prev, ...patch }));
-  }, []);
 
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [batchSummaryOpen, setBatchSummaryOpen] = useState(false);
@@ -596,15 +491,8 @@ export function EditorPage() {
   );
 
   useEffect(() => {
-    const ids = new Set(neighborPoolForAiSettings.map((c) => c.id));
-    setWorkAiRagInjectDefaults((prev) => {
-      const next: Record<string, boolean> = {};
-      for (const id of ids) {
-        next[id] = prev.neighborSummaryIncludeById[id] !== false;
-      }
-      return { ...prev, neighborSummaryIncludeById: next };
-    });
-  }, [neighborPoolForAiSettings]);
+    syncNeighborSummaryIncludeByIds(neighborPoolForAiSettings.map((c) => c.id));
+  }, [neighborPoolForAiSettings, syncNeighborSummaryIncludeByIds]);
 
   const editorPaperFrameStyle = useMemo(
     () =>
@@ -847,11 +735,6 @@ export function EditorPage() {
     [inspirationList, activeId],
   );
 
-  const styleSampleSlices = useMemo(
-    () => writingStyleSamples.map((s) => ({ title: s.title, body: s.body })),
-    [writingStyleSamples],
-  );
-
   useEffect(() => {
     const st = location.state as { applyUserHint?: string } | null | undefined;
     const h = st?.applyUserHint;
@@ -875,99 +758,7 @@ export function EditorPage() {
     return hasBody || hasSummary;
   }, [activeChapter, content]);
 
-  // Mount AI 等面板到写作壳右侧栏（仅 EditorShell）
-  useEffect(() => {
-    if (!workId || !work) return;
-    setRightRailTabEnabled("ai", true);
-    setRightRailTabContent(
-      "ai",
-      <AiPanel
-        hideHeader
-        onClose={onAiPanelClose}
-        continueRunTick={aiContinueRunTick}
-        lastContinueConsumedTick={aiLastContinueConsumedTick}
-        onContinueRunConsumed={onAiContinueRunConsumed}
-        drawRunTick={aiDrawRunTick}
-        lastDrawConsumedTick={aiLastDrawConsumedTick}
-        onDrawRunConsumed={onAiDrawRunConsumed}
-        prefillUserHint={aiUserHintPrefill}
-        onPrefillUserHintConsumed={onAiPrefillUserHintConsumed}
-        onMaterialsSummaryLinesChange={onAiMaterialsSummaryLinesChange}
-        writingSkillMode={writingSkillMode}
-        onWritingSkillModeChange={setWritingSkillMode}
-        workId={workId}
-        work={work}
-        chapter={activeChapter}
-        chapters={chapters}
-        chapterContent={aiPanelContent}
-        chapterBible={chapterBibleFields}
-        glossaryTerms={glossaryTerms}
-        bibleCharacters={bibleCharacters}
-        styleSampleSlices={styleSampleSlices}
-        workStyle={aiPanelWorkStyle}
-        onUpdateWorkStyle={updateWorkStyleFromPanel}
-        workWritingVars={workAiWritingVars}
-        onWorkWritingVarsChange={patchWorkAiWritingVars}
-        workRagInjectDefaults={workAiRagInjectDefaults}
-        onWorkRagInjectDefaultsChange={patchWorkAiRagInjectDefaults}
-        linkedExcerptsForChapter={linkedExcerptsForChapter}
-        getSelectedText={getSelectedText}
-        insertAtCursor={insertAtCursor}
-        appendToEnd={appendToEnd}
-        replaceSelection={replaceSelection}
-        ensureChapterViewBeforeInsert={ensureChapterViewBeforeInsert}
-        onRequestPullOutline={openPullOutlineDialog}
-        outlineEntriesCount={pushedOutlines.length}
-      />,
-    );
-    setRightRailTabEnabled("summary", true);
-    setRightRailTabContent(
-      "summary",
-      <KnowledgeBaseRightPanel
-        workId={workId}
-        work={work}
-        chapter={activeChapter}
-        chapterEditorContent={aiPanelContent}
-        chapters={chapters}
-        autoSummaryStatus={autoSummaryStatus}
-        onJumpToChapter={onSummaryJumpToChapter}
-        onChapterPatch={onSummaryChapterPatch}
-      />,
-    );
-    setRightRailTabEnabled("bible", true);
-    setRightRailTabContent(
-      "bible",
-      <WritingSettingsRightPanel
-        workId={workId}
-        work={work}
-        chapters={chapters}
-        chapter={activeChapter}
-        workStyle={aiPanelWorkStyle}
-        onUpdateWorkStyle={updateWorkStyleFromPanel}
-        workWritingVars={workAiWritingVars}
-        onWorkWritingVarsChange={patchWorkAiWritingVars}
-        workRagInjectDefaults={workAiRagInjectDefaults}
-        onWorkRagInjectDefaultsChange={patchWorkAiRagInjectDefaults}
-        writingSkillMode={writingSkillMode}
-        onWritingSkillModeChange={setWritingSkillMode}
-      />,
-    );
-    setRightRailTabEnabled("ref", true);
-    setRightRailTabContent(
-      "ref",
-      <RefRightPanel
-        linked={linkedExcerptsForChapter}
-        onInsert={onRefInsert}
-      />,
-    );
-    return () => {
-      setRightRailTabContent("ai", null);
-      setRightRailTabContent("summary", null);
-      setRightRailTabContent("bible", null);
-      setRightRailTabContent("ref", null);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
+  useEditorRightRailMount({
     workId,
     work,
     activeChapter,
@@ -994,17 +785,20 @@ export function EditorPage() {
     onAiPrefillUserHintConsumed,
     onAiMaterialsSummaryLinesChange,
     writingSkillMode,
+    setWritingSkillMode,
     autoSummaryStatus,
     onAiPanelClose,
+    getSelectedText,
     insertAtCursor,
     appendToEnd,
+    replaceSelection,
     ensureChapterViewBeforeInsert,
     onSummaryJumpToChapter,
     onSummaryChapterPatch,
     onRefInsert,
     openPullOutlineDialog,
-    pushedOutlines.length,
-  ]);
+    pushedOutlinesCount: pushedOutlines.length,
+  });
 
   const glossaryHits = useMemo(() => {
     if (!content || glossaryTerms.length === 0) return [];
@@ -1030,44 +824,6 @@ export function EditorPage() {
       characterState: chapterBibleFields.characterStateText,
     };
   }, [chapterBibleFields]);
-
-  useEffect(() => {
-    if (!workId) return;
-    void listBibleGlossaryTerms(workId).then(setGlossaryTerms);
-  }, [workId]);
-
-  const refreshStudyLibrary = useCallback(async () => {
-    if (!workId) return;
-    const [chars, gloss] = await Promise.all([listBibleCharacters(workId), listBibleGlossaryTerms(workId)]);
-    setBibleCharacters(chars);
-    setGlossaryTerms(gloss);
-  }, [workId]);
-
-  useEffect(() => {
-    if (!workId) return;
-    void listBibleCharacters(workId).then(setBibleCharacters);
-  }, [workId]);
-
-  useEffect(() => {
-    if (!workId) return;
-    void listWritingStyleSamples(workId).then(setWritingStyleSamples);
-  }, [workId]);
-
-  useEffect(() => {
-    if (!workId) return;
-    void getWorkStyleCard(workId).then((row) => {
-      setStylePov(row?.pov ?? "");
-      setStyleTone(row?.tone ?? "");
-      setStyleBanned(row?.bannedPhrases ?? "");
-      setStyleAnchor(row?.styleAnchor ?? "");
-      setStyleExtra(row?.extraRules ?? "");
-      setStyleSentenceRhythm(row?.sentenceRhythm);
-      setStylePunctuationStyle(row?.punctuationStyle);
-      setStyleDialogueDensity(row?.dialogueDensity);
-      setStyleEmotionStyle(row?.emotionStyle);
-      setStyleNarrativeDistance(row?.narrativeDistance);
-    });
-  }, [workId]);
 
   useEffect(() => {
     if (!activeId || !workId) return;
@@ -1444,14 +1200,6 @@ export function EditorPage() {
     const ins = text.endsWith("\n") ? text : text + "\n\n";
     if (!activeChapter) return;
     editorRef.current?.insertTextAtCursor(ins);
-  }
-
-  function getSelectedText() {
-    return editorRef.current?.getSelectedText() ?? "";
-  }
-
-  function replaceSelection(text: string) {
-    editorRef.current?.replaceSelection(text);
   }
 
   async function copySelectionToClipboard() {

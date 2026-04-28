@@ -4,11 +4,16 @@ import { isLocalAiProvider } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 import { approxTotalTokensForMessages } from "../util/ai-injection-confirm";
+import {
+  WRITING_RAG_PER_HIT_MAX_CHARS,
+  clampReferenceRagSnippetForAssembleBody,
+} from "../util/tuiyan-reference-inject-text";
 
 const MAX_OUTLINE_CHARS = 48000;
 const MAX_BODY_TAIL_CHARS = 12000;
 const MAX_SETTING_INDEX_CHARS = 8000;
-const MAX_EXCERPTS_CHARS = 6000;
+/** 生辉「藏经风格参考」多选合并上限：与 `RAG_LIMIT=8` 同宽思路，并硬顶 48k 防单消息过大（第十三批） */
+const SHENG_HUI_STYLE_EXCERPTS_COMBINED_MAX_CHARS = Math.min(8 * WRITING_RAG_PER_HIT_MAX_CHARS, 48_000);
 const MAX_DRAFT_PROCESS_CHARS = 24000;
 
 /** 人物声音锁：单个人物的语气约束 */
@@ -239,9 +244,11 @@ export function buildShengHuiChatMessages(args: {
   const anchor = ws.styleAnchor.trim();
   const chTitle = (args.chapterTitle ?? "").trim();
 
-  const excerpts = (args.referenceStyleExcerpts ?? []).filter((e) => e.trim());
+  const excerpts = (args.referenceStyleExcerpts ?? [])
+    .map((e) => clampReferenceRagSnippetForAssembleBody(e))
+    .filter((e) => e.length > 0);
   const excerptBlock = excerpts.length > 0
-    ? clampContextText(excerpts.join("\n---\n"), MAX_EXCERPTS_CHARS)
+    ? clampContextText(excerpts.join("\n---\n"), SHENG_HUI_STYLE_EXCERPTS_COMBINED_MAX_CHARS)
     : "";
 
   const draftClamped = draft ? clampContextText(draft, MAX_DRAFT_PROCESS_CHARS) : "";
@@ -345,6 +352,7 @@ export async function generateShengHuiProseStream(args: {
   settings?: AiSettings;
   signal?: AbortSignal;
   onDelta: (d: string) => void;
+  workId?: string | null;
 }): Promise<{ text: string }> {
   const settings = args.settings ?? loadAiSettings();
   assertShengHuiPrivacy(settings, {
@@ -365,6 +373,7 @@ export async function generateShengHuiProseStream(args: {
     onDelta: args.onDelta,
     temperature: !isLocalAiProvider(settings.provider) ? settings.geminiTemperature : undefined,
     signal: args.signal,
+    usageLog: { task: "生辉·仿写", workId: args.workId },
   });
   return { text: (r.text ?? "").trim() };
 }

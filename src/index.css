@@ -24,6 +24,11 @@
   --color-border: var(--app-color-border);
   --color-input: var(--app-color-input);
   --color-ring: var(--app-color-ring);
+  --color-chart-1: var(--app-chart-1);
+  --color-chart-2: var(--app-chart-2);
+  --color-chart-3: var(--app-chart-3);
+  --color-chart-4: var(--app-chart-4);
+  --color-chart-5: var(--app-chart-5);
   --radius-sm: 0.5rem;
   --radius-md: 0.75rem;
   --radius-lg: 1rem;
@@ -49,6 +54,18 @@
   --app-color-border: #e0e0e0;
   --app-color-input: #e0e0e0;
   --app-color-ring: rgba(44, 90, 160, 0.35);
+
+  /* 用量图表（与 shadcn chart 对齐；供 SVG / var(--chart-*) 引用） */
+  --app-chart-1: oklch(0.646 0.222 41.116);
+  --app-chart-2: oklch(0.6 0.118 184.704);
+  --app-chart-3: oklch(0.398 0.07 227.392);
+  --app-chart-4: oklch(0.828 0.189 84.429);
+  --app-chart-5: oklch(0.769 0.188 70.08);
+  --chart-1: var(--app-chart-1);
+  --chart-2: var(--app-chart-2);
+  --chart-3: var(--app-chart-3);
+  --chart-4: var(--app-chart-4);
+  --chart-5: var(--app-chart-5);
 
   /* 全局：偏 Typora 浅色、低对比 */
   font-family: "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, system-ui,
@@ -119,6 +136,11 @@
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+/* AI 用量洞察：数字表格对齐（与 v0 一致） */
+.number-display {
+  font-variant-numeric: tabular-nums;
 }
 
 .import-hint {
@@ -2679,6 +2701,13 @@ select {
   word-break: break-word;
   font-size: var(--font-size-sm, 0.875rem);
   line-height: 1.65;
+}
+
+/* 生辉 /sheng-hui 主稿面：与写作页排版变量（`--editor-*`）一致 */
+.sheng-hui-paper {
+  font-family: var(--editor-font-stack, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif);
+  font-size: var(--editor-font-size, 16px);
+  line-height: var(--editor-line-height, 1.8);
 }
 
 /* 流光 /inspiration — 步 35 碎片 */
@@ -8404,6 +8433,17 @@ select {
   --app-color-border: rgba(255, 255, 255, 0.1);
   --app-color-input: rgba(255, 255, 255, 0.12);
   --app-color-ring: rgba(126, 184, 255, 0.45);
+
+  --app-chart-1: oklch(0.488 0.243 264.376);
+  --app-chart-2: oklch(0.696 0.17 162.48);
+  --app-chart-3: oklch(0.769 0.188 70.08);
+  --app-chart-4: oklch(0.627 0.265 303.9);
+  --app-chart-5: oklch(0.645 0.246 16.439);
+  --chart-1: var(--app-chart-1);
+  --chart-2: var(--app-chart-2);
+  --chart-3: var(--app-chart-3);
+  --chart-4: var(--app-chart-4);
+  --chart-5: var(--app-chart-5);
 }
 
 :root[data-theme="dark"] body {

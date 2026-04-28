@@ -244,10 +244,8 @@ export function OwnerModeSection({ currentEmail }: { currentEmail: string | null
 
       {/* ── 配置弹窗 ── */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent
-          className="max-w-lg"
-          style={{ maxHeight: "90vh", overflowY: "auto" }}
-        >
+        {/* 与创作中心弹窗同宽：覆盖 DialogContent 默认 sm:max-w-lg */}
+        <DialogContent className="max-h-[min(90vh,840px)] w-full max-w-[min(72rem,calc(100vw-2rem))] overflow-y-auto sm:max-w-[min(72rem,calc(100vw-2rem))]">
           <DialogTitle className="flex items-center gap-2 text-base font-semibold">
             <Zap className="h-4 w-4 text-amber-400" />
             高级接入

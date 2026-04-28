@@ -65,8 +65,8 @@ export function LinkedTermChip({
         <button
           type="button"
           className={cn(
-            "inline-flex cursor-pointer items-center gap-1 rounded-full border border-border/50",
-            "bg-background/40 px-2 py-0.5 text-xs transition-colors hover:bg-muted/40",
+            "inline-flex cursor-pointer items-center gap-1 rounded-full border border-border/45",
+            "bg-background/65 px-2.5 py-1 text-xs shadow-sm backdrop-blur transition hover:-translate-y-[1px] hover:border-border/70 hover:bg-background/85 hover:shadow",
             fieldColor,
           )}
         >
@@ -84,7 +84,7 @@ export function LinkedTermChip({
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-64 p-3 text-xs" align="start">
+      <PopoverContent className="w-64 rounded-xl border-border/40 bg-popover/95 p-3 text-xs shadow-xl backdrop-blur" align="start">
         <div className="mb-3 flex items-center gap-1.5">
           <FieldIcon className={cn("h-3.5 w-3.5 shrink-0", fieldColor)} />
           <span className="font-medium text-foreground">{term.term}</span>
@@ -95,7 +95,7 @@ export function LinkedTermChip({
         <div className="mb-2">
           <p className={POPOVER_LABEL}>类别</p>
           <select
-            className="w-full rounded border border-border/30 bg-background/40 px-2 py-1 text-xs outline-none focus:border-primary/40 disabled:opacity-50"
+            className="w-full rounded-md border border-border/35 bg-background/70 px-2.5 py-1.5 text-xs shadow-inner outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/15 disabled:opacity-50"
             value={category}
             onChange={(e) => setCategory(e.target.value as BibleGlossaryTerm["category"])}
             disabled={disabled}

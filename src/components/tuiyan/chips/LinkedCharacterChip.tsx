@@ -69,8 +69,8 @@ export function LinkedCharacterChip({
         <button
           type="button"
           className={cn(
-            "inline-flex cursor-pointer items-center gap-1 rounded-full border border-border/50",
-            "bg-background/40 px-2 py-0.5 text-xs transition-colors hover:bg-muted/40",
+            "inline-flex cursor-pointer items-center gap-1 rounded-full border border-border/45",
+            "bg-background/65 px-2.5 py-1 text-xs shadow-sm backdrop-blur transition hover:-translate-y-[1px] hover:border-border/70 hover:bg-background/85 hover:shadow",
             colorClass,
           )}
         >
@@ -88,7 +88,7 @@ export function LinkedCharacterChip({
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-72 p-3 text-xs" align="start">
+      <PopoverContent className="w-72 rounded-xl border-border/40 bg-popover/95 p-3 text-xs shadow-xl backdrop-blur" align="start">
         {/* 标题行 */}
         <div className="mb-3 flex items-center gap-1.5">
           <Icon className={cn("h-3.5 w-3.5 shrink-0", colorClass)} />
@@ -107,7 +107,7 @@ export function LinkedCharacterChip({
                 type="button"
                 disabled={disabled}
                 className={cn(
-                  "rounded px-2 py-0.5 text-[10px] border transition-colors",
+                  "rounded-md border px-2 py-0.5 text-[10px] transition-colors",
                   gender === g
                     ? "border-primary/50 bg-primary/15 text-primary"
                     : "border-border/30 bg-background/30 text-muted-foreground/70 hover:border-border/50",

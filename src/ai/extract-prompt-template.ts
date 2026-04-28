@@ -140,6 +140,7 @@ export async function extractPromptTemplateFromExcerpt(args: {
   overrideProvider?: import("./types").AiProviderId;
   onDelta?: (delta: string) => void;
   signal?: AbortSignal;
+  workId?: string | null;
 }): Promise<string> {
   const settings = loadAiSettings();
   const provider = args.overrideProvider ?? settings.provider;
@@ -173,6 +174,7 @@ ${outputRules}
       { role: "user", content: userPrompt },
     ],
     signal: args.signal,
+    usageLog: { task: `藏经·提示词·${label}`, workId: args.workId },
     onDelta: (delta) => {
       result += delta;
       args.onDelta?.(delta);
@@ -193,6 +195,7 @@ export async function extractPromptTemplateFromBook(args: {
   overrideProvider?: import("./types").AiProviderId;
   onDelta?: (delta: string) => void;
   signal?: AbortSignal;
+  workId?: string | null;
 }): Promise<string> {
   const settings = loadAiSettings();
   const provider = args.overrideProvider ?? settings.provider;
@@ -233,6 +236,7 @@ ${outputRules}
       { role: "user", content: userPrompt },
     ],
     signal: args.signal,
+    usageLog: { task: `藏经·提示词·整书·${label}`, workId: args.workId },
     onDelta: (delta) => {
       result += delta;
       args.onDelta?.(delta);

@@ -2,7 +2,10 @@
  * 推演规划顾问 AI：基于规划节点继承链上下文，提供多轮对话式建议。
  * 与 logic-branch-predict 的区别：不依赖章节正文，面向结构规划阶段。
  */
+import type { TuiyanImitationMode } from "../db/types";
+import { logTuiyanReferenceTouchpoint } from "../util/tuiyan-reference-dev-log";
 import { generateWithProvider } from "./client";
+import { mergeAdvisorSystemWithReferenceHardRules } from "./tuiyan-reference-planning-system";
 import { isLocalAiProvider } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
@@ -45,6 +48,8 @@ export async function generatePlanningAdvisorReply(args: {
   planningContext: string;
   userHint: string;
   history: { role: "user" | "assistant"; content: string }[];
+  /** 与参考 Tab 全局 `imitationMode` 一致；上下文中含参考策略时追加分模式 system 段 */
+  imitationMode?: TuiyanImitationMode;
   settings?: AiSettings;
   signal?: AbortSignal;
 }): Promise<string> {
@@ -61,10 +66,13 @@ export async function generatePlanningAdvisorReply(args: {
     throw new TuiyanPlanningChatError("请输入问题或想法后再发送。");
   }
 
-  // 系统消息：规划顾问提示词 + 当前节点上下文
-  const systemContent = ctx
-    ? `${SYSTEM_PROMPT}\n\n---\n【当前节点上下文】\n${ctx}`
-    : SYSTEM_PROMPT;
+  logTuiyanReferenceTouchpoint("planning_advisor_chat:context", ctx, { hintLen: hint.length });
+
+  // 系统消息：规划顾问提示词 + 当前节点上下文（含参考策略时追加 system 级硬约束）
+  const systemContent = mergeAdvisorSystemWithReferenceHardRules(
+    ctx ? `${SYSTEM_PROMPT}\n\n---\n【当前节点上下文】\n${ctx}` : SYSTEM_PROMPT,
+    { imitationMode: args.imitationMode },
+  );
 
   // 保留最近 12 轮历史（6 来回）防止超长上下文
   const recentHistory = args.history.slice(-12);

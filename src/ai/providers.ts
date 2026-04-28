@@ -1,17 +1,23 @@
 import { apiUrl } from "../api/base";
+import { clampStreamMaxOutputTokens } from "./writing-body-output-budget";
 import type { AiChatMessage, AiGenerateResult, AiProviderConfig, AiProviderId } from "./types";
-import { addSidecarDailyTokens } from "../util/owner-mode";
-import { approxRoughTokenCount } from "./approx-tokens";
+import { finalUsageForGenerate } from "./token-usage-helpers";
+import { generateClaudeCodeLocal, generateClaudeCodeLocalStream } from "./providers-sidecar";
 import {
   anthropicMessageTextFromJson,
+  anthropicUsageFromJsonMessagesResponse,
+  anthropicUsageFromStreamData,
   geminiGenerateTextFromJson,
+  geminiUsageFromJsonRoot,
   messageFromApiJsonBody,
   ollamaChatTextFromJson,
   ollamaStreamLinePayload,
+  ollamaTokenUsageFromJson,
   openAiChatTextFromJson,
   openAiStreamDataDeltaContent,
-  openAiStreamUsageTotalFromDataLine,
-  openAiUsageTotalTokensFromJson,
+  openAiStreamUsageFromDataLine,
+  openAiStyleUsageFromJsonRoot,
+  type OpenAiStyleUsage,
 } from "../util/parse-api-json";
 
 function requireKey(cfg: AiProviderConfig) {
@@ -148,6 +154,7 @@ function openAiChatBody(
   messages: AiChatMessage[],
   temperature: number,
   stream: boolean,
+  maxOutputTokens?: number,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: cfg.model,
@@ -155,7 +162,7 @@ function openAiChatBody(
     temperature: Math.min(2, Math.max(0, temperature)),
   };
   if (cfg.id === "xiaomi") {
-    body.max_completion_tokens = 8192;
+    body.max_completion_tokens = maxOutputTokens != null ? clampStreamMaxOutputTokens(maxOutputTokens) : 8192;
   }
   if (stream) {
     body.stream = true;
@@ -208,23 +215,39 @@ export async function generateWithProviderStream(args: {
   onDelta: (textDelta: string) => void;
   temperature?: number;
   signal?: AbortSignal;
+  /**
+   * 流式**补全**允许生成的最大 token 数；未设时各后端沿用历史默认（如部分 Anthropic 直连 2048）。
+   * 用于按「目标汉字量」为正文/续写留足出稿空间，避免 2000 字只出几百仍被**模型侧**早停时空间不足（仍非硬限字数）。
+   */
+  maxOutputTokens?: number;
 }): Promise<AiGenerateResult> {
   const { provider, config, messages, onDelta } = args;
-  if (provider === "claude-code-local") return generateClaudeCodeLocalStream(config, messages, onDelta, args.signal);
-  if (provider === "ollama") return generateOllamaStream(config, messages, onDelta, args.temperature, args.signal);
-  if (provider === "mlx") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
-  if (provider === "openai") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
-  if (provider === "doubao") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
-  if (provider === "zhipu") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
-  if (provider === "kimi") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
-  if (provider === "xiaomi") return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
+  const mOut = args.maxOutputTokens;
+  if (provider === "claude-code-local")
+    return generateClaudeCodeLocalStream(config, messages, onDelta, args.signal, mOut);
+  if (provider === "ollama")
+    return generateOllamaStream(config, messages, onDelta, args.temperature, args.signal, mOut);
+  if (provider === "mlx")
+    return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal, mOut);
+  if (provider === "openai")
+    return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal, mOut);
+  if (provider === "doubao")
+    return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal, mOut);
+  if (provider === "zhipu")
+    return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal, mOut);
+  if (provider === "kimi")
+    return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal, mOut);
+  if (provider === "xiaomi")
+    return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal, mOut);
   if (provider === "anthropic") {
-    if (shouldUseRouterProtocol(config)) return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
-    return generateAnthropicStream(config, messages, onDelta, args.temperature, args.signal);
+    if (shouldUseRouterProtocol(config))
+      return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal, mOut);
+    return generateAnthropicStream(config, messages, onDelta, args.temperature, args.signal, mOut);
   }
   if (provider === "gemini") {
-    if (shouldUseRouterProtocol(config)) return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal);
-    return generateGeminiStream(config, messages, onDelta, args.temperature, args.signal);
+    if (shouldUseRouterProtocol(config))
+      return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal, mOut);
+    return generateGeminiStream(config, messages, onDelta, args.temperature, args.signal, mOut);
   }
   const r = await generateWithProvider({ provider, config, messages, temperature: args.temperature, signal: args.signal });
   if (r.text) onDelta(r.text);
@@ -301,8 +324,8 @@ async function generateOpenAI(
   }
   const raw: unknown = await resp.json();
   const text = openAiChatTextFromJson(raw);
-  const usageTotalTokens = openAiUsageTotalTokensFromJson(raw) ?? undefined;
-  return { text, raw, usageTotalTokens };
+  const openAiU = openAiStyleUsageFromJsonRoot(raw) ?? null;
+  return { text, raw, ...finalUsageForGenerate(text, messages, openAiU) };
 }
 
 async function generateOpenAIStream(
@@ -311,18 +334,22 @@ async function generateOpenAIStream(
   onDelta: (textDelta: string) => void,
   temperature = 0.7,
   signal?: AbortSignal,
+  maxOutputTokens?: number,
 ): Promise<AiGenerateResult> {
   const token = bearerTokenForOpenAiCompatible(cfg);
   const url = joinUrl(resolveOpenAiCompatibleBaseUrl(cfg), "/chat/completions");
   const payload =
     cfg.id === "xiaomi"
-      ? openAiChatBody(cfg, messages, temperature, true)
+      ? openAiChatBody(cfg, messages, temperature, true, maxOutputTokens)
       : {
           model: cfg.model,
           messages,
           temperature: Math.min(2, Math.max(0, temperature)),
           stream: true,
           stream_options: { include_usage: true },
+          ...(maxOutputTokens != null
+            ? { max_tokens: clampStreamMaxOutputTokens(maxOutputTokens) }
+            : {}),
         };
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -341,7 +368,7 @@ async function generateOpenAIStream(
   const dec = new TextDecoder("utf-8");
   let buf = "";
   let full = "";
-  let lastUsageTotal: number | undefined;
+  let lastOpenAiU: OpenAiStyleUsage | null = null;
   // SSE: data: {...}\n\n
   while (true) {
     const { done, value } = await reader.read();
@@ -356,15 +383,15 @@ async function generateOpenAIStream(
         if (!t.startsWith("data:")) continue;
         const data = t.slice(5).trim();
         if (!data) continue;
-        const ut = openAiStreamUsageTotalFromDataLine(data);
-        if (ut != null) lastUsageTotal = ut;
+        const uS = openAiStreamUsageFromDataLine(data);
+        if (uS) lastOpenAiU = uS;
         if (data === "[DONE]") {
           try {
             await reader.cancel();
           } catch {
             /* ignore */
           }
-          return { text: full, usageTotalTokens: lastUsageTotal };
+          return { text: full, ...finalUsageForGenerate(full, messages, lastOpenAiU) };
         }
         const delta = openAiStreamDataDeltaContent(data);
         if (delta) {
@@ -374,7 +401,7 @@ async function generateOpenAIStream(
       }
     }
   }
-  return { text: full, usageTotalTokens: lastUsageTotal };
+  return { text: full, ...finalUsageForGenerate(full, messages, lastOpenAiU) };
 }
 
 /** 与历史非流式请求一致：system 合并；其余角色拼成单条 user（多轮为 USER:/ASSISTANT: 前缀） */
@@ -414,6 +441,7 @@ async function generateAnthropic(
   messages: AiChatMessage[],
   temperature = 0.7,
   signal?: AbortSignal,
+  maxOutputTokens?: number,
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
   const url = joinUrl(resolveAnthropicNativeMessagesBaseUrl(cfg), "/v1/messages");
@@ -427,7 +455,7 @@ async function generateAnthropic(
     },
     body: JSON.stringify({
       model: cfg.model,
-      max_tokens: 2048,
+      max_tokens: maxOutputTokens != null ? clampStreamMaxOutputTokens(maxOutputTokens) : 2048,
       temperature,
       system,
       messages: [{ role: "user", content: user }],
@@ -440,7 +468,8 @@ async function generateAnthropic(
   }
   const raw: unknown = await resp.json();
   const text = anthropicMessageTextFromJson(raw);
-  return { text, raw };
+  const aU = anthropicUsageFromJsonMessagesResponse(raw) ?? null;
+  return { text, raw, ...finalUsageForGenerate(text, messages, aU) };
 }
 
 async function generateAnthropicStream(
@@ -449,6 +478,7 @@ async function generateAnthropicStream(
   onDelta: (textDelta: string) => void,
   temperature = 0.7,
   signal?: AbortSignal,
+  maxOutputTokens?: number,
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
   const url = joinUrl(resolveAnthropicNativeMessagesBaseUrl(cfg), "/v1/messages");
@@ -462,7 +492,7 @@ async function generateAnthropicStream(
     },
     body: JSON.stringify({
       model: cfg.model,
-      max_tokens: 2048,
+      max_tokens: maxOutputTokens != null ? clampStreamMaxOutputTokens(maxOutputTokens) : 2048,
       temperature,
       stream: true,
       system,
@@ -479,6 +509,7 @@ async function generateAnthropicStream(
   const dec = new TextDecoder("utf-8");
   let buf = "";
   let full = "";
+  let lastStreamU: OpenAiStyleUsage | null = null;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -500,6 +531,8 @@ async function generateAnthropicStream(
       } catch {
         continue;
       }
+      const su = anthropicUsageFromStreamData(data);
+      if (su) lastStreamU = su;
       const errMsg = anthropicStreamErrorMessage(data);
       if (errMsg) {
         try {
@@ -516,18 +549,26 @@ async function generateAnthropicStream(
       }
     }
   }
-  return { text: full };
+  return { text: full, ...finalUsageForGenerate(full, messages, lastStreamU) };
 }
 
-function geminiGenerateJsonBody(messages: AiChatMessage[], temperature: number): Record<string, unknown> {
+function geminiGenerateJsonBody(
+  messages: AiChatMessage[],
+  temperature: number,
+  maxOutputTokens?: number,
+): Record<string, unknown> {
   const system = messages.filter((m) => m.role === "system").map((m) => m.content).join("\n\n");
   const user = messages
     .filter((m) => m.role !== "system")
     .map((m) => m.content)
     .join("\n\n");
+  const generationConfig: Record<string, unknown> = { temperature };
+  if (maxOutputTokens != null) {
+    generationConfig.maxOutputTokens = clampStreamMaxOutputTokens(maxOutputTokens);
+  }
   return {
     contents: [{ role: "user", parts: [{ text: system ? `${system}\n\n${user}` : user }] }],
-    generationConfig: { temperature },
+    generationConfig,
   };
 }
 
@@ -561,7 +602,8 @@ async function generateGemini(
   }
   const raw: unknown = await resp.json();
   const text = geminiGenerateTextFromJson(raw);
-  return { text, raw };
+  const gU = geminiUsageFromJsonRoot(raw) ?? null;
+  return { text, raw, ...finalUsageForGenerate(text, messages, gU) };
 }
 
 async function generateGeminiStream(
@@ -570,6 +612,7 @@ async function generateGeminiStream(
   onDelta: (textDelta: string) => void,
   temperature = 0.7,
   signal?: AbortSignal,
+  maxOutputTokens?: number,
 ): Promise<AiGenerateResult> {
   const key = requireKey(cfg);
   const base = resolveGeminiNativeApiBaseUrl(cfg);
@@ -580,7 +623,7 @@ async function generateGeminiStream(
   const resp = await fetchOrThrowCorsHint(cfg.label, url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(geminiGenerateJsonBody(messages, temperature)),
+    body: JSON.stringify(geminiGenerateJsonBody(messages, temperature, maxOutputTokens)),
     signal,
   });
   if (!resp.ok) {
@@ -592,6 +635,7 @@ async function generateGeminiStream(
   const dec = new TextDecoder("utf-8");
   let buf = "";
   let full = "";
+  let lastGU: OpenAiStyleUsage | null = null;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -622,13 +666,15 @@ async function generateGeminiStream(
         }
         throw new Error(`Gemini 流式失败：${msg || "未知错误"}`);
       }
+      const gP = geminiUsageFromJsonRoot(data);
+      if (gP) lastGU = gP;
       geminiEmitStreamDeltas(data, (d) => {
         full += d;
         onDelta(d);
       });
     }
   }
-  return { text: full };
+  return { text: full, ...finalUsageForGenerate(full, messages, lastGU) };
 }
 
 async function generateOllama(
@@ -656,7 +702,8 @@ async function generateOllama(
   }
   const raw: unknown = await resp.json();
   const text = ollamaChatTextFromJson(raw);
-  return { text, raw };
+  const oU = ollamaTokenUsageFromJson(raw) ?? null;
+  return { text, raw, ...finalUsageForGenerate(text, messages, oU) };
 }
 
 async function generateOllamaStream(
@@ -665,9 +712,14 @@ async function generateOllamaStream(
   onDelta: (textDelta: string) => void,
   temperature = 0.7,
   signal?: AbortSignal,
+  maxOutputTokens?: number,
 ): Promise<AiGenerateResult> {
   const base = cfg.baseUrl ?? "http://localhost:11434";
   const url = joinUrl(base, "/api/chat");
+  const options: Record<string, unknown> = { temperature };
+  if (maxOutputTokens != null) {
+    options.num_predict = clampStreamMaxOutputTokens(maxOutputTokens);
+  }
   const resp = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -675,7 +727,7 @@ async function generateOllamaStream(
       model: cfg.model,
       stream: true,
       messages,
-      options: { temperature },
+      options,
     }),
     signal,
   });
@@ -688,6 +740,7 @@ async function generateOllamaStream(
   const dec = new TextDecoder("utf-8");
   let buf = "";
   let full = "";
+  let lastOllamaU: OpenAiStyleUsage | null = null;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -703,152 +756,25 @@ async function generateOllamaStream(
       } catch {
         continue;
       }
-      const { delta, done } = ollamaStreamLinePayload(obj);
+      const { delta, done: lineDone } = ollamaStreamLinePayload(obj);
       if (delta) {
         full += delta;
         onDelta(delta);
       }
-      if (done) {
+      if (lineDone) {
+        const oP = ollamaTokenUsageFromJson(obj) ?? null;
+        if (oP) lastOllamaU = oP;
         try {
           await reader.cancel();
         } catch {
           /* ignore */
         }
-        return { text: full, raw: obj };
+        return { text: full, raw: obj, ...finalUsageForGenerate(full, messages, lastOllamaU) };
       }
     }
   }
-  return { text: full };
+  return { text: full, ...finalUsageForGenerate(full, messages, lastOllamaU) };
 }
 
 
 
-/* =============================================================================
- * Claude Code 本地 sidecar（owner-only）
- * 通过 http://127.0.0.1:7788 SSE，把作者本人的 Pro/Max 订阅当 AI 后端用。
- * 仅当 owner 邮箱 + Owner 模式开关 + sidecar 健康时，会被 src/ai/client.ts 路由到。
- * =========================================================================== */
-
-function resolveSidecarBaseUrl(cfg: AiProviderConfig): string {
-  const t = (cfg.baseUrl ?? "").trim();
-  return (t || "http://127.0.0.1:7788").replace(/\/+$/, "");
-}
-
-function buildClaudeCodeLocalBody(messages: AiChatMessage[], model: string) {
-  const systemMsg = messages.find((m) => m.role === "system");
-  const turns = messages.filter((m) => m.role !== "system");
-  return {
-    system: systemMsg?.content,
-    messages: turns.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),
-    model,
-  };
-}
-
-async function generateClaudeCodeLocal(
-  cfg: AiProviderConfig,
-  messages: AiChatMessage[],
-  signal?: AbortSignal,
-): Promise<AiGenerateResult> {
-  let acc = "";
-  const result = await generateClaudeCodeLocalStream(cfg, messages, (d) => {
-    acc += d;
-  }, signal);
-  return result;
-}
-
-async function generateClaudeCodeLocalStream(
-  cfg: AiProviderConfig,
-  messages: AiChatMessage[],
-  onDelta: (textDelta: string) => void,
-  signal?: AbortSignal,
-): Promise<AiGenerateResult> {
-  const token = (cfg.apiKey ?? "").trim();
-  if (!token) {
-    throw new Error("Claude Code 本地直连：请先在「设置 → Owner 模式」填入 sidecar Token");
-  }
-  // 估算输入 tokens（在发送前计算）
-  const inputApprox = messages.reduce((sum, m) => sum + approxRoughTokenCount(m.content), 0);
-  const url = `${resolveSidecarBaseUrl(cfg)}/v1/stream`;
-  const body = buildClaudeCodeLocalBody(messages, cfg.model || "sonnet");
-
-  let resp: Response;
-  try {
-    resp = await fetch(url, {
-      method: "POST",
-      signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
-  } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") throw e;
-    throw new Error(
-      `Claude Code 本地 sidecar 不可达：${e instanceof Error ? e.message : String(e)}。请确认 npm run sidecar 已启动。`,
-    );
-  }
-  if (!resp.ok || !resp.body) {
-    const t = await resp.text().catch(() => "");
-    if (resp.status === 401) {
-      throw new Error("Claude Code 本地 sidecar：Token 无效，请重新粘贴。");
-    }
-    throw new Error(`Claude Code 本地 sidecar 返回 ${resp.status}: ${t || resp.statusText}`);
-  }
-
-  const reader = resp.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = "";
-  let acc = "";
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-
-      let idx: number;
-      while ((idx = buf.indexOf("\n\n")) !== -1) {
-        const chunk = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const dataLine = chunk
-          .split("\n")
-          .find((l) => l.startsWith("data:"));
-        if (!dataLine) continue;
-        const data = dataLine.slice(5).trim();
-        if (!data) continue;
-        if (data === "[DONE]") {
-          const outputApprox = approxRoughTokenCount(acc);
-          addSidecarDailyTokens(inputApprox, outputApprox);
-          return { text: acc, usageTotalTokens: inputApprox + outputApprox };
-        }
-        let ev: { type?: string; text?: string; message?: string };
-        try {
-          ev = JSON.parse(data) as typeof ev;
-        } catch {
-          continue;
-        }
-        if (ev.type === "delta" && typeof ev.text === "string") {
-          acc += ev.text;
-          onDelta(ev.text);
-        } else if (ev.type === "error") {
-          throw new Error(`Claude Code 本地 sidecar 错误：${ev.message ?? "unknown"}`);
-        } else if (ev.type === "done") {
-          const outputApprox = approxRoughTokenCount(acc);
-          addSidecarDailyTokens(inputApprox, outputApprox);
-          return { text: acc, usageTotalTokens: inputApprox + outputApprox };
-        }
-      }
-    }
-  } finally {
-    try {
-      await reader.cancel();
-    } catch {
-      /* ignore */
-    }
-  }
-  // stream 正常结束但未收到 done 事件（兜底）
-  const outputApprox = approxRoughTokenCount(acc);
-  if (acc) addSidecarDailyTokens(inputApprox, outputApprox);
-  return { text: acc, usageTotalTokens: inputApprox + outputApprox };
-}

@@ -1,6 +1,6 @@
 /**
- * 对输入文本做 **粗估 token 数**，仅用于 UI 提示（规模/成本预期）。
- * **不是**计费凭证；无 API `usage` 时界面应标明「非精确计费」——见总体规划 §5.3.1。
+ * 对输入文本做 **粗估 token 数**（CJK/ASCII 启发式），仅用于无 API `usage` 回退、规模提示与预检。
+ * 各提供方在响应中返回 `usage` 时，应优先用 `tokenUsage`（`AiTokenUsage`）的厂商计数字段，无返回时才用本粗估作回退。
  */
 export function approxRoughTokenCount(text: string): number {
   const chars = Array.from(text);

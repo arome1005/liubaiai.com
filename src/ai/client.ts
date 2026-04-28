@@ -19,6 +19,7 @@ import {
   getOwnerModel,
 } from "../util/owner-mode";
 import type { AiChatMessage, AiGenerateResult, AiProviderConfig, AiProviderId } from "./types";
+import { recordAiUsageFromGenerateResult, type UsageLogForRecord } from "./record-ai-usage";
 
 export { resolveOpenAiCompatibleBaseUrl } from "./providers";
 export { FirstAiGateCancelledError, isFirstAiGateCancelledError } from "./first-ai-gate";
@@ -59,11 +60,28 @@ export async function generateWithProvider(args: {
   messages: AiChatMessage[];
   temperature?: number;
   signal?: AbortSignal;
+  /** 传入后写入本机「用量洞察」事件表（与侧栏累加器并行） */
+  usageLog?: UsageLogForRecord;
 }): Promise<AiGenerateResult> {
   const ok = await requestFirstAiUseGate();
   if (!ok) throw new FirstAiGateCancelledError();
   const { provider, config } = await maybeOverrideToOwnerSidecar(args.provider, args.config);
-  return generateWithProviderImpl({ ...args, provider, config });
+  const { usageLog, ...rest } = args;
+  const r = await generateWithProviderImpl({ ...rest, provider, config });
+  if (typeof window !== "undefined") {
+    const task = usageLog?.task ?? "AI 调用";
+    recordAiUsageFromGenerateResult({
+      task,
+      workId: usageLog?.workId,
+      provider,
+      model: config.model ?? "",
+      result: r,
+      messages: args.messages,
+      status: "success",
+      contextInputBuckets: usageLog?.contextInputBuckets,
+    });
+  }
+  return r;
 }
 
 export async function generateWithProviderStream(args: {
@@ -73,11 +91,29 @@ export async function generateWithProviderStream(args: {
   onDelta: (textDelta: string) => void;
   temperature?: number;
   signal?: AbortSignal;
+  maxOutputTokens?: number;
+  /** 传入后写入本机「用量洞察」事件表（与侧栏累加器并行） */
+  usageLog?: UsageLogForRecord;
 }): Promise<AiGenerateResult> {
   const ok = await requestFirstAiUseGate();
   if (!ok) throw new FirstAiGateCancelledError();
   const { provider, config } = await maybeOverrideToOwnerSidecar(args.provider, args.config);
-  return generateWithProviderStreamImpl({ ...args, provider, config });
+  const { usageLog, ...rest } = args;
+  const r = await generateWithProviderStreamImpl({ ...rest, provider, config });
+  if (typeof window !== "undefined") {
+    const task = usageLog?.task ?? "AI 调用";
+    recordAiUsageFromGenerateResult({
+      task,
+      workId: usageLog?.workId,
+      provider,
+      model: config.model ?? "",
+      result: r,
+      messages: args.messages,
+      status: "success",
+      contextInputBuckets: usageLog?.contextInputBuckets,
+    });
+  }
+  return r;
 }
 
 export async function embedWithProvider(args: {

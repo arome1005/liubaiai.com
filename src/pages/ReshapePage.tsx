@@ -291,6 +291,7 @@ export function ReshapePage() {
         config,
         messages,
         signal,
+        usageLog: { task: "重塑·问策", workId },
         onDelta: (delta) => {
           answer += delta;
           setWenceMessages((prev) => prev.map((m) => (m.id === assistantMessageId ? { ...m, content: answer } : m)));
@@ -360,9 +361,8 @@ export function ReshapePage() {
       userP: string,
       assistantText: string,
     ) => {
-      const ut = r.usageTotalTokens;
-      if (ut != null && ut > 0) {
-        sumTokens += ut;
+      if (r.tokenUsage?.source === "api") {
+        sumTokens += r.tokenUsage.totalTokens;
       } else {
         allFromApi = false;
         sumTokens += approxRoughTokenCount(`${systemP}
@@ -397,6 +397,7 @@ ${joined}`;
             { role: "user", content: userPrompt },
           ],
           signal,
+          usageLog: { task: "重塑·全书分析", workId },
           onDelta: (delta) => {
             finalOutput += delta;
             setOutputText(finalOutput);
@@ -424,6 +425,7 @@ ${(ch.content ?? "").slice(0, 3200)}`;
               { role: "user", content: userPrompt },
             ],
             signal,
+            usageLog: { task: "重塑·按章", workId },
             onDelta: (delta) => {
               chunk += delta;
               setOutputText(finalOutput + sectionHeader + chunk);

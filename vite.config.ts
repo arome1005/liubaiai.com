@@ -35,6 +35,10 @@ const doubaoArkProxy = {
 export default defineConfig({
   envDir: 'backend',
   plugins: [react(), tailwindcss()],
+  /** 创作中心「用量洞察」时间序列依赖 recharts；预构建可避免部分环境下 dev 解析 500 */
+  optimizeDeps: {
+    include: ['recharts'],
+  },
   build: {
     // 目前应用以单入口为主，chunk 体积告警对发版意义不大；先提高阈值避免“每次构建必有警告”干扰验收。
     chunkSizeWarningLimit: 2700,

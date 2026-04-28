@@ -1323,10 +1323,17 @@ export class WritingStoreIndexedDB implements WritingStore {
       workId,
       updatedAt: t,
       chatHistory: patch.chatHistory ?? prev?.chatHistory ?? [],
+      chatThreads: patch.chatThreads ?? prev?.chatThreads,
+      activeChatThreadId:
+        patch.activeChatThreadId !== undefined
+          ? patch.activeChatThreadId
+          : (prev?.activeChatThreadId ?? null),
       wenCe: patch.wenCe ?? prev?.wenCe ?? [],
       finalizedNodeIds: patch.finalizedNodeIds ?? prev?.finalizedNodeIds ?? [],
       statusByNodeId: patch.statusByNodeId ?? prev?.statusByNodeId ?? {},
       linkedRefWorkIds: patch.linkedRefWorkIds ?? prev?.linkedRefWorkIds ?? [],
+      referenceBindings: patch.referenceBindings ?? prev?.referenceBindings ?? [],
+      referencePolicy: patch.referencePolicy ?? prev?.referencePolicy ?? undefined,
       mindmap: patch.mindmap ?? prev?.mindmap ?? { nodes: [], edges: [] },
       scenes: patch.scenes ?? prev?.scenes ?? [],
       selectedPromptTemplateId: patch.selectedPromptTemplateId ?? prev?.selectedPromptTemplateId ?? null,
@@ -1335,6 +1342,10 @@ export class WritingStoreIndexedDB implements WritingStore {
       planningDraftsByNodeId: patch.planningDraftsByNodeId ?? prev?.planningDraftsByNodeId ?? {},
       planningMetaByNodeId: patch.planningMetaByNodeId ?? prev?.planningMetaByNodeId ?? {},
       planningStructuredMetaByNodeId: patch.planningStructuredMetaByNodeId ?? prev?.planningStructuredMetaByNodeId ?? {},
+      planningOutlineTargetVolumesByNodeId:
+        patch.planningOutlineTargetVolumesByNodeId ?? prev?.planningOutlineTargetVolumesByNodeId ?? {},
+      planningVolumeTargetChaptersByNodeId:
+        patch.planningVolumeTargetChaptersByNodeId ?? prev?.planningVolumeTargetChaptersByNodeId ?? {},
       planningSelectedNodeId: patch.planningSelectedNodeId ?? prev?.planningSelectedNodeId ?? null,
       planningPushedOutlines: patch.planningPushedOutlines ?? prev?.planningPushedOutlines ?? [],
     };

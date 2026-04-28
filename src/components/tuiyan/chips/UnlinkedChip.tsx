@@ -89,7 +89,7 @@ export function UnlinkedChip({
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <span
-          className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-border/40 bg-background/20 px-2 py-0.5 text-xs text-muted-foreground/70 hover:border-border/60 hover:text-muted-foreground/90"
+          className="inline-flex cursor-pointer items-center gap-1 rounded-full border border-dashed border-border/45 bg-background/55 px-2.5 py-1 text-xs text-muted-foreground/75 shadow-sm backdrop-blur transition hover:-translate-y-[1px] hover:border-border/70 hover:text-muted-foreground/95 hover:shadow"
           role="button"
         >
           <FieldIcon className={cn("h-3 w-3 shrink-0", fieldColor)} />
@@ -110,7 +110,7 @@ export function UnlinkedChip({
         </span>
       </PopoverTrigger>
       <PopoverContent
-        className={cn("p-3 text-xs", chipType === "character" ? "w-72" : "w-64")}
+        className={cn("rounded-xl border-border/40 bg-popover/95 p-3 text-xs shadow-xl backdrop-blur", chipType === "character" ? "w-72" : "w-64")}
         align="start"
       >
         <div className="mb-3 flex items-center gap-1.5">
@@ -131,7 +131,7 @@ export function UnlinkedChip({
                     key={g}
                     type="button"
                     className={cn(
-                      "rounded px-2 py-0.5 text-[10px] border transition-colors",
+                      "rounded-md border px-2 py-0.5 text-[10px] transition-colors",
                       gender === g
                         ? "border-primary/50 bg-primary/15 text-primary"
                         : "border-border/30 bg-background/30 text-muted-foreground/70 hover:border-border/50",
@@ -171,7 +171,7 @@ export function UnlinkedChip({
             <div className="mb-2">
               <p className={POPOVER_LABEL}>类别</p>
               <select
-                className="w-full rounded border border-border/30 bg-background/40 px-2 py-1 text-xs outline-none focus:border-primary/40"
+                className="w-full rounded-md border border-border/35 bg-background/70 px-2.5 py-1.5 text-xs shadow-inner outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/15"
                 value={category}
                 onChange={(e) => setCategory(e.target.value as BibleGlossaryTerm["category"])}
               >
@@ -195,7 +195,7 @@ export function UnlinkedChip({
 
         <button
           type="button"
-          className="w-full rounded bg-primary/15 py-1 text-[11px] font-medium text-primary hover:bg-primary/25 disabled:opacity-50"
+          className="w-full rounded-md border border-primary/30 bg-primary/15 py-1.5 text-[11px] font-medium text-primary shadow-sm transition hover:bg-primary/25 hover:shadow disabled:opacity-50"
           onClick={handleCreate}
           disabled={creating}
         >

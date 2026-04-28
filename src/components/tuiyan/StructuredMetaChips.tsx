@@ -153,8 +153,8 @@ function ChipField({
     : (config.colorClass ?? sectionColor)
 
   return (
-    <div className="rounded-lg border border-border/30 bg-card/10 p-3">
-      <div className={cn("mb-2 flex items-center gap-1.5 text-xs font-medium", sectionColor)}>
+    <div className="rounded-xl border border-border/35 bg-gradient-to-b from-card/45 to-card/20 p-3.5 shadow-sm backdrop-blur-sm">
+      <div className={cn("mb-2.5 flex items-center gap-1.5 text-xs font-semibold", sectionColor)}>
         <SectionIcon className="h-3.5 w-3.5" />
         <span>{label}</span>
       </div>
@@ -214,7 +214,7 @@ function ChipField({
         {!disabled && !adding && (
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded-full border border-dashed border-border/40 px-2 py-0.5 text-xs text-muted-foreground/60 hover:border-border/60 hover:text-muted-foreground"
+            className="inline-flex items-center gap-1 rounded-full border border-dashed border-border/45 bg-background/50 px-2.5 py-1 text-xs text-muted-foreground/70 shadow-sm transition hover:-translate-y-[1px] hover:border-border/70 hover:text-muted-foreground"
             onClick={() => setAdding(true)}
           >
             <Plus className="h-3 w-3" />
@@ -258,8 +258,8 @@ function TagChipField({
   }
 
   return (
-    <div>
-      <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-muted-foreground">
+    <div className="rounded-xl border border-border/35 bg-gradient-to-b from-card/45 to-card/20 p-3.5 shadow-sm backdrop-blur-sm">
+      <div className="mb-2.5 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
         <Hash className="h-3.5 w-3.5" />
         <span>标签</span>
       </div>
@@ -267,7 +267,7 @@ function TagChipField({
         {chips.map((tag, idx) => (
           <span
             key={idx}
-            className="inline-flex items-center gap-1 rounded-full border border-border/50 bg-muted/30 px-2 py-0.5 text-xs text-foreground/80"
+            className="inline-flex items-center gap-1 rounded-full border border-border/45 bg-background/65 px-2.5 py-1 text-xs text-foreground/85 shadow-sm"
           >
             <span className="text-muted-foreground/60">#</span>
             {tag}
@@ -281,7 +281,7 @@ function TagChipField({
         {!disabled && !adding && (
           <button
             type="button"
-            className="inline-flex items-center gap-1 rounded-full border border-dashed border-border/40 px-2 py-0.5 text-xs text-muted-foreground/60 hover:border-border/60"
+            className="inline-flex items-center gap-1 rounded-full border border-dashed border-border/45 bg-background/50 px-2.5 py-1 text-xs text-muted-foreground/70 shadow-sm transition hover:-translate-y-[1px] hover:border-border/70"
             onClick={() => setAdding(true)}
           >
             <Plus className="h-3 w-3" />
@@ -315,8 +315,8 @@ function ConflictField({
   }
 
   return (
-    <div className="rounded-lg border border-border/30 bg-card/10 p-3">
-      <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-rose-400">
+    <div className="rounded-xl border border-border/35 bg-gradient-to-b from-card/45 to-card/20 p-3.5 shadow-sm backdrop-blur-sm">
+      <div className="mb-2.5 flex items-center gap-1.5 text-xs font-semibold text-rose-400">
         <Flame className="h-3.5 w-3.5" />
         <span>冲突点</span>
       </div>
@@ -369,15 +369,15 @@ function CompactTextarea({
   rows?: number
 }) {
   return (
-    <div className="space-y-1">
-      <label className="text-[11px] text-muted-foreground/70">{label}</label>
+    <div className="space-y-1.5 rounded-xl border border-border/35 bg-gradient-to-b from-card/45 to-card/20 p-3.5 shadow-sm backdrop-blur-sm">
+      <label className="text-[11px] font-medium text-muted-foreground/75">{label}</label>
       <Textarea
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={rows}
         disabled={disabled}
-        className="resize-none border-border/30 bg-background/20 text-xs leading-relaxed"
+        className="resize-none border-border/35 bg-background/70 text-xs leading-relaxed shadow-inner focus-visible:ring-primary/20"
       />
     </div>
   )
@@ -512,8 +512,10 @@ export function StructuredMetaChips({
   }
 
   return (
-    <div className="mt-4 space-y-3 rounded-xl border border-border/30 bg-card/10 p-3 md:p-4">
-      <div className="text-xs font-medium text-muted-foreground">结构化元数据</div>
+    <div className="mt-4 space-y-3 rounded-2xl border border-border/35 bg-gradient-to-b from-card/55 via-card/35 to-card/15 p-3.5 shadow-[0_10px_30px_-20px_rgba(0,0,0,0.55)] backdrop-blur-sm md:p-4">
+      <div className="inline-flex items-center rounded-full border border-primary/25 bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary/85">
+        结构化元数据
+      </div>
       {rendered}
     </div>
   )
