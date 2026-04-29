@@ -32,6 +32,7 @@ import {
 import { UnifiedAIModelSelector as AIModelSelector } from "../ai-model-selector-unified"
 import type { Work } from "../../db/types"
 import { cn } from "../../lib/utils"
+import { TuiyanNewbieGuideDialog } from "./TuiyanNewbieGuideDialog"
 
 export type TuiyanTopBarTab = "outline" | "mindmap" | "wence"
 
@@ -99,8 +100,8 @@ export function TuiyanTopBar(props: TuiyanTopBarProps) {
   } = props
 
   return (
-    <div className="flex h-12 items-center justify-between border-b border-border/40 bg-card/45 px-4 backdrop-blur">
-      <div className="flex items-center gap-3">
+    <div className="flex h-12 min-w-0 items-center gap-2 border-b border-border/40 bg-card/45 px-4 backdrop-blur">
+      <div className="flex min-w-0 shrink-0 items-center gap-3">
         {/* 返回主页（图标） */}
         <TooltipProvider>
           <Tooltip>
@@ -191,7 +192,11 @@ export function TuiyanTopBar(props: TuiyanTopBarProps) {
         </div>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-1 items-center justify-end px-1 sm:px-2">
+        <TuiyanNewbieGuideDialog />
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2">
         {workLinkSeg && (
           <TooltipProvider>
             <Tooltip>
