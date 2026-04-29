@@ -8,7 +8,7 @@
  *  - 进阶防误触（数字确认 / 操作冷却）
  *  - 高级接入（OwnerModeSection）
  */
-import { AlertTriangle, Brain, Keyboard, Zap } from "lucide-react";
+import { AlertTriangle, Brain, Keyboard, Lock, Zap } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { Button } from "../../components/ui/button";
 import { OwnerModeSection } from "../../components/OwnerModeSection";
@@ -22,7 +22,8 @@ export type SettingsAiPrivacySectionProps = {
   aiSettings: AiSettings;
   setAiSettings: (s: AiSettings) => void;
   setMsg: (s: string | null) => void;
-  setBackendOpen: (v: boolean) => void;
+  /** 打开高级后端配置前由父级做密码校验 */
+  requestOpenBackend: () => void;
   /** 用于强制重读 readSessionApproxTokens 等 — section 内 reset 后递增 */
   setSidepanelUsageTick: (fn: (n: number) => number) => void;
   sessionApproxDisplay: number;
@@ -39,7 +40,7 @@ export function SettingsAiPrivacySection({
   aiSettings,
   setAiSettings,
   setMsg,
-  setBackendOpen,
+  requestOpenBackend,
   setSidepanelUsageTick,
   sessionApproxDisplay,
   todayApproxDisplay,
@@ -76,7 +77,15 @@ export function SettingsAiPrivacySection({
           title="当前模型"
           desc={`${pLabel}${pModel ? ` · ${pModel}` : " · 未配置"}`}
         >
-          <Button type="button" variant="outline" size="sm" className="text-xs" onClick={() => setBackendOpen(true)}>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="gap-1.5 text-xs"
+            onClick={requestOpenBackend}
+            title="需密码解锁"
+          >
+            <Lock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
             配置
           </Button>
         </SRow>
