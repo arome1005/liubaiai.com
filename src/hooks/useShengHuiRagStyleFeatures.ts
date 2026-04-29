@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { AiSettings } from "../ai/types";
 import { runShengHuiStyleFeatureExtract } from "../ai/sheng-hui-style-extract";
+import { isAbortError } from "../util/is-abort-error";
 
 const SS_PREFIX = "liubai:shengHuiRagStyleFeatures:v1:";
 
@@ -40,6 +41,7 @@ export function useShengHuiRagStyleFeatures(workId: string | null) {
   const [styleFeatures, setStyleFeatures] = useState<Map<string, string>>(() => (workId ? loadMapFromSession(workId) : new Map()));
   const [extractingFeatureIds, setExtractingFeatureIds] = useState<Set<string>>(() => new Set());
   const extractingRef = useRef<Set<string>>(new Set());
+  const abortByChunkIdRef = useRef<Map<string, AbortController>>(new Map());
 
   useEffect(() => {
     if (!workId) {
@@ -65,21 +67,34 @@ export function useShengHuiRagStyleFeatures(workId: string | null) {
     }
   }, [workId]);
 
+  const stopStyleFeatureExtract = useCallback((chunkId: string) => {
+    abortByChunkIdRef.current.get(chunkId)?.abort();
+  }, []);
+
   const runExtract = useCallback(
     async (settings: AiSettings, chunkId: string, sourceText: string, onAfterSuccess?: () => void) => {
       if (!sourceText.trim()) return;
       if (extractingRef.current.has(chunkId)) return;
+      abortByChunkIdRef.current.get(chunkId)?.abort();
+      const ac = new AbortController();
+      abortByChunkIdRef.current.set(chunkId, ac);
       extractingRef.current.add(chunkId);
       setExtractingFeatureIds((prev) => new Set(prev).add(chunkId));
       try {
-        const feature = await runShengHuiStyleFeatureExtract({ settings, workId, sourceText });
+        const feature = await runShengHuiStyleFeatureExtract({
+          settings,
+          workId,
+          sourceText,
+          signal: ac.signal,
+        });
         if (feature) {
           setStyleFeatures((prev) => new Map(prev).set(chunkId, feature));
           onAfterSuccess?.();
         }
-      } catch {
-        toast.error("笔法提炼失败，请重试。");
+      } catch (e) {
+        if (!isAbortError(e)) toast.error("笔法提炼失败，请重试。");
       } finally {
+        abortByChunkIdRef.current.delete(chunkId);
         extractingRef.current.delete(chunkId);
         setExtractingFeatureIds((prev) => {
           const next = new Set(prev);
@@ -95,6 +110,7 @@ export function useShengHuiRagStyleFeatures(workId: string | null) {
     styleFeatures,
     extractingFeatureIds,
     runExtract,
+    stopStyleFeatureExtract,
     clearForNewRagSearch,
   };
 }

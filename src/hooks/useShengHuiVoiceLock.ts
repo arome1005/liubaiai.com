@@ -4,7 +4,7 @@ import { findOutlineMentionedCharacterNames } from "../util/sheng-hui-outline-ch
 import type { ShengHuiBibleCharRow } from "../util/sheng-hui-voice-lock";
 
 /**
- * 生辉「人物声音锁」：随作品加载锦囊人物，根据大纲**非重叠长名**检测提及；可勾选将口吻/禁忌注入 `characterVoiceLocks`。
+ * 生辉「人物声音锁」：随作品加载锦囊人物，根据大纲**非重叠长名**检测提及；可勾选将口吻/禁忌/经典台词样例注入 `characterVoiceLocks`。
  */
 export function useShengHuiVoiceLock(workId: string | null, outline: string) {
   const [bibleCharacters, setBibleCharacters] = useState<ShengHuiBibleCharRow[]>([]);
@@ -16,7 +16,14 @@ export function useShengHuiVoiceLock(workId: string | null, outline: string) {
       return;
     }
     void listBibleCharacters(workId).then((list) =>
-      setBibleCharacters(list.map((c) => ({ name: c.name, voiceNotes: c.voiceNotes, taboos: c.taboos }))),
+      setBibleCharacters(
+        list.map((c) => ({
+          name: c.name,
+          voiceNotes: c.voiceNotes,
+          taboos: c.taboos,
+          quoteSamples: c.quoteSamples ?? "",
+        })),
+      ),
     );
   }, [workId]);
 
@@ -30,7 +37,7 @@ export function useShengHuiVoiceLock(workId: string | null, outline: string) {
       const next = new Set<string>();
       for (const name of detectedCharNames) {
         const char = bibleCharacters.find((c) => c.name === name);
-        if (char && (char.voiceNotes.trim() || char.taboos.trim())) next.add(name);
+        if (char && (char.voiceNotes.trim() || char.taboos.trim() || char.quoteSamples.trim())) next.add(name);
         else if (prev.has(name)) next.add(name);
       }
       return next;

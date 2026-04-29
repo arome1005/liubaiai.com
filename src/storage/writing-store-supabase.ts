@@ -851,6 +851,7 @@ export class WritingStoreSupabase implements WritingStore {
       relationships: input.relationships ?? "",
       voiceNotes: input.voiceNotes ?? "",
       taboos: input.taboos ?? "",
+      quoteSamples: input.quoteSamples ?? "",
       sortOrder: maxOrder + 1,
       createdAt: t,
       updatedAt: t,
@@ -864,6 +865,7 @@ export class WritingStoreSupabase implements WritingStore {
       relationships: row.relationships,
       voice_notes: row.voiceNotes,
       taboos: row.taboos,
+      quote_samples: row.quoteSamples,
       sort_order: row.sortOrder,
       created_at: row.createdAt,
       updated_at: row.updatedAt,
@@ -879,6 +881,7 @@ export class WritingStoreSupabase implements WritingStore {
     if (patch.relationships !== undefined) row.relationships = patch.relationships;
     if (patch.voiceNotes !== undefined) row.voice_notes = patch.voiceNotes;
     if (patch.taboos !== undefined) row.taboos = patch.taboos;
+    if (patch.quoteSamples !== undefined) row.quote_samples = patch.quoteSamples;
     if (patch.sortOrder !== undefined) row.sort_order = patch.sortOrder;
     const { error } = await getSupabase().from("bible_character").update(row as never).eq("id", id);
     if (error) throw new Error(error.message);
@@ -1863,6 +1866,17 @@ export class WritingStoreSupabase implements WritingStore {
     return (data as Json[]).map(parseGlobalPromptTemplateRow);
   }
 
+  async getGlobalPromptTemplate(id: string): Promise<GlobalPromptTemplate | undefined> {
+    const { data, error } = await getSupabase()
+      .from("prompt_template")
+      .select("*")
+      .eq("id", id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return undefined;
+    return parseGlobalPromptTemplateRow(data);
+  }
+
   async addGlobalPromptTemplate(
     input: Omit<GlobalPromptTemplate, "id" | "sortOrder" | "createdAt" | "updatedAt">,
   ): Promise<GlobalPromptTemplate> {
@@ -1877,11 +1891,15 @@ export class WritingStoreSupabase implements WritingStore {
       .limit(1)
       .maybeSingle();
     const sortOrder = last?.sort_order != null ? Number(last.sort_order) + 1 : 0;
+    const intro = (input.intro ?? "").trim();
+    const usageMethod = input.usageMethod?.trim() ?? "";
     const row: GlobalPromptTemplate = {
       id: crypto.randomUUID(),
       title: (input.title ?? "").trim() || "未命名模板",
       type: input.type,
       tags: input.tags ?? [],
+      intro,
+      usageMethod: usageMethod || undefined,
       body: input.body ?? "",
       status: input.status ?? "approved",
       sortOrder,
@@ -1894,6 +1912,8 @@ export class WritingStoreSupabase implements WritingStore {
       title: row.title,
       type: row.type,
       tags: row.tags,
+      intro: row.intro,
+      usage_method: usageMethod,
       body: row.body,
       status: row.status,
       sort_order: row.sortOrder,
@@ -1919,6 +1939,8 @@ export class WritingStoreSupabase implements WritingStore {
     if (patch.type !== undefined) row.type = patch.type;
     if (patch.tags !== undefined) row.tags = patch.tags;
     if (patch.body !== undefined) row.body = patch.body;
+    if (patch.intro !== undefined) row.intro = (patch.intro ?? "").trim();
+    if (patch.usageMethod !== undefined) row.usage_method = (patch.usageMethod ?? "").trim();
     if (patch.status !== undefined) row.status = patch.status;
     if (patch.reviewNote !== undefined) row.review_note = patch.reviewNote ?? null;
     if (patch.sortOrder !== undefined) row.sort_order = patch.sortOrder;

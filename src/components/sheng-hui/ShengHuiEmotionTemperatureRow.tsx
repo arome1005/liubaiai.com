@@ -31,25 +31,47 @@ export function ShengHuiEmotionTemperatureRow(props: {
       </Tooltip>
       <span className="text-[10px] text-muted-foreground/70">克制</span>
       <Snowflake className="size-3.5 shrink-0 text-sky-400/90" aria-hidden />
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <input
-            type="range"
-            min={1}
-            max={5}
-            step={1}
-            value={value}
-            disabled={busy}
-            onChange={(e) => onChange(clampShengHuiEmotionTemperature(Number(e.target.value)))}
-            className="h-1.5 w-24 min-w-0 flex-1 cursor-help accent-primary sm:w-32"
-            aria-label="情绪温度"
-            aria-valuetext={tierHint}
-          />
-        </TooltipTrigger>
-        <TooltipContent side="top" className="max-w-[20rem] text-left text-xs leading-relaxed">
-          当前档位 {value}/5：{tierHint}
-        </TooltipContent>
-      </Tooltip>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:max-w-[8.5rem]">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <input
+              type="range"
+              min={1}
+              max={5}
+              step={1}
+              value={value}
+              disabled={busy}
+              onChange={(e) => onChange(clampShengHuiEmotionTemperature(Number(e.target.value)))}
+              className="h-1.5 w-full min-w-0 cursor-help accent-primary"
+              aria-label="情绪温度"
+              aria-valuetext={tierHint}
+            />
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-[20rem] text-left text-xs leading-relaxed">
+            当前档位 {value}/5：{tierHint}
+          </TooltipContent>
+        </Tooltip>
+        <div
+          className="flex w-full max-w-full justify-between text-[8px] leading-none text-muted-foreground/75"
+          aria-hidden
+        >
+          {([1, 2, 3, 4, 5] as const).map((n) => (
+            <span
+              key={n}
+              className={cn(
+                "inline-flex w-3 flex-col items-center gap-0.5",
+                n === value ? "font-semibold text-primary" : "opacity-70",
+              )}
+            >
+              {n === 1 ? <Snowflake className="size-2.5 text-sky-400" /> : null}
+              {n === 3 ? <Circle className="size-2.5" /> : null}
+              {n === 5 ? <Flame className="size-2.5 text-orange-400" /> : null}
+              {![1, 3, 5].includes(n) ? <span className="h-2.5 w-1" /> : null}
+              <span className="tabular-nums">{n}</span>
+            </span>
+          ))}
+        </div>
+      </div>
       <Flame className="size-3.5 shrink-0 text-orange-400/90" aria-hidden />
       <span className="text-[10px] text-muted-foreground/70">热烈</span>
       <Tooltip>

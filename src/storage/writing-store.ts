@@ -244,6 +244,8 @@ export interface WritingStore {
 
   /** Sprint 1：全局（跨作品）提示词库（仅返回当前用户自己的所有模板） */
   listGlobalPromptTemplates(): Promise<GlobalPromptTemplate[]>;
+  /** 按 id 单条获取（自己或已发布，由存储层/RLS 控制可见性） */
+  getGlobalPromptTemplate(id: string): Promise<GlobalPromptTemplate | undefined>;
   /**
    * Sprint 2：返回所有 status=approved 的模板（含他人已发布）。
    * Supabase RLS 自动过滤可见性；IndexedDB 退化为本地 approved。

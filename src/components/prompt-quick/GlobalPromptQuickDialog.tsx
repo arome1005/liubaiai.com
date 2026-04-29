@@ -136,6 +136,7 @@ export function GlobalPromptQuickDialog(props: GlobalPromptQuickDialogProps) {
     return sourceRows.filter(
       (t) =>
         t.title.toLowerCase().includes(q) ||
+        (t.intro ?? "").toLowerCase().includes(q) ||
         t.body.toLowerCase().includes(q) ||
         t.tags.some((tag) => tag.toLowerCase().includes(q)),
     );

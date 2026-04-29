@@ -157,6 +157,7 @@ create table if not exists public.bible_character (
   relationships text    not null default '',
   voice_notes   text    not null default '',
   taboos        text    not null default '',
+  quote_samples text    not null default '',
   sort_order    integer not null default 0,
   created_at    bigint  not null,
   updated_at    bigint  not null

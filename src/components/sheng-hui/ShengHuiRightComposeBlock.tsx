@@ -1,33 +1,18 @@
 import { Link } from "react-router-dom";
-import { ChevronDown } from "lucide-react";
-import { AiInlineErrorNotice } from "../AiInlineErrorNotice";
 import { Button } from "../ui/button";
 import { Badge } from "../ui/badge";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { getProviderTemperature } from "../../ai/storage";
 import type { AiSettings } from "../../ai/types";
 import { cn } from "../../lib/utils";
 import {
-  MODE_DESCS,
-  MODE_LABELS,
-  SHENG_HUI_ADVANCED_MODE_SHORT_LABEL,
-  SHENG_HUI_ADVANCED_MODES,
-  SHENG_HUI_MAIN_MODES,
   shengHuiComposePrimaryButtonLabel,
-  shengHuiIsAdvancedGenerateMode,
   shengHuiIsTwoStepGenerateMode,
   type ShengHuiEmotionTemperature,
   type ShengHuiGenerateMode,
 } from "../../ai/sheng-hui-generate";
+import { ShengHuiComposeModePicker } from "./ShengHuiComposeModePicker";
 import { ShengHuiEmotionTemperatureRow } from "./ShengHuiEmotionTemperatureRow";
+import { ShengHuiSkeletonBeatsPanel } from "./ShengHuiSkeletonBeatsPanel";
 
 const PRESET_WORDS = [500, 1500, 3000, 5000] as const;
 
@@ -50,9 +35,16 @@ export function ShengHuiRightComposeBlock(props: {
   onImportFromTuiyan: () => void;
   onRunGenerate: () => void;
   onStop: () => void;
+  /** N3：A/B 双生成（同 prompt、异温度） */
+  onRunAbCompare: () => void;
+  abCompareDisabled: boolean;
+  abCompareButtonTitle?: string;
   lastRoughEstimate: { inputApprox: number; outputEstimateApprox: number; totalApprox: number } | null;
   selectedExcerptCount: number;
-  error: string | null;
+  /** 主稿流式/成稿，用于骨架模式下与中间稿一起作为节拍源 */
+  manuscriptOutput: string;
+  skeletonRegenBeatIndex: number | null;
+  onRegenerateSkeletonBeat: (index1Based: number) => void;
 }) {
   const {
     generateMode,
@@ -73,13 +65,23 @@ export function ShengHuiRightComposeBlock(props: {
     onImportFromTuiyan,
     onRunGenerate,
     onStop,
+    onRunAbCompare,
+    abCompareDisabled,
+    abCompareButtonTitle,
     lastRoughEstimate,
     selectedExcerptCount,
-    error,
+    manuscriptOutput,
+    skeletonRegenBeatIndex,
+    onRegenerateSkeletonBeat,
   } = props;
 
-  const isAdvanced = shengHuiIsAdvancedGenerateMode(generateMode);
   const highCost = (lastRoughEstimate?.totalApprox ?? 0) > 8_000;
+  const skeletonBeatListText =
+    generateMode === "skeleton" ? (twoStepIntermediate?.trim() || manuscriptOutput.trim()) : "";
+  const skeletonRegenLocked = skeletonRegenBeatIndex != null;
+  /** C.1：与 `buildShengHuiChatMessages` 续写校验一致，避免点生成后再报错。 */
+  const continueNeedsContext =
+    generateMode === "continue" && !outline.trim() && !manuscriptOutput.trim();
 
   return (
     <div className="flex flex-col gap-3">
@@ -91,76 +93,11 @@ export function ShengHuiRightComposeBlock(props: {
       >
         <div className="h-0.5 rounded-full bg-gradient-to-r from-primary/50 to-transparent" aria-hidden />
         <p className="px-0.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">模式</p>
-        <div
-          className="inline-flex w-full gap-0.5 rounded-lg border border-border/30 bg-muted/50 p-0.5"
-          role="tablist"
-          aria-label="主模式"
-        >
-          {SHENG_HUI_MAIN_MODES.map((m) => (
-            <Tooltip key={m}>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={!isAdvanced && generateMode === m}
-                  onClick={() => {
-                    onGenerateModeChange(m);
-                    onResetTwoStep();
-                  }}
-                  className={cn(
-                    "min-w-0 flex-1 rounded-md px-1.5 py-1.5 text-[10px] font-medium transition-colors sm:text-[11px]",
-                    !isAdvanced && generateMode === m
-                      ? "bg-primary text-primary-foreground shadow-sm"
-                      : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
-                  )}
-                >
-                  {MODE_LABELS[m]}
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-[16rem] text-xs">
-                {MODE_DESCS[m]}
-              </TooltipContent>
-            </Tooltip>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-8 w-full justify-between text-[11px] font-normal"
-              >
-                <span>
-                  {isAdvanced
-                    ? `高级：${SHENG_HUI_ADVANCED_MODE_SHORT_LABEL[generateMode] ?? generateMode}`
-                    : "高级模式（骨架 / 接龙…）"}
-                </span>
-                <ChevronDown className="size-3.5 opacity-50" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-[min(20rem,90vw)]">
-              <DropdownMenuLabel>高级模式</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              {SHENG_HUI_ADVANCED_MODES.map((m) => (
-                <DropdownMenuItem
-                  key={m}
-                  onClick={() => {
-                    onGenerateModeChange(m);
-                    onResetTwoStep();
-                  }}
-                >
-                  <div className="flex flex-col gap-0.5">
-                    <span className="font-medium">{SHENG_HUI_ADVANCED_MODE_SHORT_LABEL[m]}</span>
-                    <span className="text-[11px] text-muted-foreground">{MODE_DESCS[m]}</span>
-                  </div>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
+        <ShengHuiComposeModePicker
+          generateMode={generateMode}
+          onGenerateModeChange={onGenerateModeChange}
+          onResetTwoStep={onResetTwoStep}
+        />
       </div>
 
       <div className="sheng-hui-glass-section space-y-2 rounded-2xl border border-white/[0.05] bg-card/50 p-2.5 shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset]">
@@ -277,6 +214,15 @@ export function ShengHuiRightComposeBlock(props: {
         </div>
       )}
 
+      {generateMode === "skeleton" ? (
+        <ShengHuiSkeletonBeatsPanel
+          listText={skeletonBeatListText}
+          busy={busy}
+          regenBeatIndex={skeletonRegenBeatIndex}
+          onRegenerateBeat={onRegenerateSkeletonBeat}
+        />
+      ) : null}
+
       <div
         className={cn(
           "flex flex-wrap items-center gap-2 rounded-2xl border p-2.5",
@@ -288,39 +234,54 @@ export function ShengHuiRightComposeBlock(props: {
             停止
           </Button>
         ) : (
-          <Button
-            type="button"
-            size="sm"
-            className={cn(highCost && "ring-1 ring-amber-500/50")}
-            onClick={() => void onRunGenerate()}
-            disabled={busy || !workId || (generateMode === "write" && !outline.trim())}
-            title={highCost ? "粗估用量较高，请注意成本" : undefined}
-          >
-            {shengHuiComposePrimaryButtonLabel(generateMode, twoStepIntermediate)}
-            {highCost ? " ⚠" : ""}
-          </Button>
+          <>
+            <Button
+              type="button"
+              size="sm"
+              className={cn(highCost && "ring-1 ring-amber-500/50")}
+              onClick={() => void onRunGenerate()}
+              disabled={
+                busy ||
+                skeletonRegenLocked ||
+                !workId ||
+                (generateMode === "write" && !outline.trim()) ||
+                continueNeedsContext
+              }
+              title={
+                highCost
+                  ? "粗估用量较高，请注意成本"
+                  : continueNeedsContext
+                    ? "续写需「大纲与文策」或主稿正文至少填一项"
+                    : undefined
+              }
+            >
+              {shengHuiComposePrimaryButtonLabel(generateMode, twoStepIntermediate)}
+              {highCost ? " ⚠" : ""}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void onRunAbCompare()}
+              disabled={abCompareDisabled}
+              title={abCompareButtonTitle}
+            >
+              A/B 双生成
+            </Button>
+          </>
         )}
-        {lastRoughEstimate ? (
-          <span className="text-[11px] text-muted-foreground">
-            粗估：~{lastRoughEstimate.inputApprox.toLocaleString()} + ~{lastRoughEstimate.outputEstimateApprox.toLocaleString()}{" "}
-            tok
-            {lastRoughEstimate.totalApprox > 8_000 ? (
-              <span className="ml-1 text-amber-600 dark:text-amber-400">（高）</span>
-            ) : null}
-          </span>
-        ) : null}
         {selectedExcerptCount > 0 ? (
           <Badge variant="outline" className="text-[10px]">
             风格 {selectedExcerptCount} 条
           </Badge>
         ) : null}
+        {continueNeedsContext ? (
+          <p className="w-full text-[10px] leading-snug text-muted-foreground">
+            续写需已有大纲/文策或主稿内容，请填写后再点生成。
+          </p>
+        ) : null}
       </div>
 
-      {error ? (
-        <div className="rounded-2xl border border-destructive/20 bg-destructive/5 px-3 py-2">
-          <AiInlineErrorNotice message={error} />
-        </div>
-      ) : null}
     </div>
   );
 }

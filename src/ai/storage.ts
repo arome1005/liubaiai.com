@@ -67,7 +67,7 @@ export function defaultAiSettings(): AiSettings {
     // Kimi（月之暗面）：OpenAI 兼容。
     kimi: { id: "kimi", label: "Kimi", model: "moonshot-v1-8k", baseUrl: "https://api.moonshot.cn/v1" },
     // 小米 MiMo：OpenAI 兼容，官方 Base 为 https://api.mimo-v2.com/v1（文档见 mimo-v2.com）
-    xiaomi: { id: "xiaomi", label: "小米", model: "mimo-v2-flash", baseUrl: "https://api.mimo-v2.com/v1" },
+    xiaomi: { id: "xiaomi", label: "小米", model: "mimo-v2.5", baseUrl: "https://api.mimo-v2.com/v1" },
     // Owner 模式：本机 sidecar（127.0.0.1:7788）走 Claude Pro 订阅。apiKey 字段在 owner 模式下临时塞 sidecar token。
     claudeCodeLocal: { id: "claude-code-local", label: "Claude Code（订阅）", model: "sonnet", baseUrl: "http://127.0.0.1:7788" },
     privacy: {

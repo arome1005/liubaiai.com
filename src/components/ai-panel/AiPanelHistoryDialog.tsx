@@ -2,6 +2,8 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
 import { cn } from "../../lib/utils";
 import {
+  AI_DRAFT_HISTORY_MAX_ENTRIES,
+  AI_DRAFT_HISTORY_RETENTION_DAYS,
   deleteDraftHistoryEntry,
   readDraftHistory,
   type AiDraftHistoryEntry,
@@ -92,7 +94,8 @@ export const AiPanelHistoryDialog = memo(function AiPanelHistoryDialog(props: Pr
       >
         <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 py-3 sm:px-5">
           <DialogTitle className="text-left text-lg font-semibold">
-            生成历史（仅本章 · 关浏览器后清空）
+            生成历史（仅本章 · 本机约 {AI_DRAFT_HISTORY_RETENTION_DAYS} 天 · 每章最多{" "}
+            {AI_DRAFT_HISTORY_MAX_ENTRIES} 条）
           </DialogTitle>
           <button type="button" className="icon-btn" title="关闭" onClick={() => onOpenChange(false)}>
             ×

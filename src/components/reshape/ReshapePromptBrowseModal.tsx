@@ -9,6 +9,10 @@ import {
   sortByPopularity,
 } from "../../util/article-summary-prompt-templates";
 import { cn } from "../../lib/utils";
+import {
+  matchesPromptListSearchWithBody,
+  promptLibraryListPreview,
+} from "../../util/prompt-template-display";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Input } from "../ui/input";
 
@@ -67,12 +71,7 @@ export function ReshapePromptBrowseModal(props: ReshapePromptBrowseModalProps) {
   const displayed = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return baseList;
-    return baseList.filter(
-      (t) =>
-        t.title.toLowerCase().includes(q) ||
-        t.body.toLowerCase().includes(q) ||
-        t.tags.some((tag) => tag.toLowerCase().includes(q)),
-    );
+    return baseList.filter((t) => matchesPromptListSearchWithBody(t, q));
   }, [baseList, query]);
 
   return (
@@ -136,6 +135,7 @@ export function ReshapePromptBrowseModal(props: ReshapePromptBrowseModalProps) {
             <ul className="flex flex-col gap-1">
               {displayed.map((t) => {
                 const sel = t.id === selectedId;
+                const listPv = promptLibraryListPreview(t);
                 return (
                   <li key={t.id}>
                     <button
@@ -153,7 +153,16 @@ export function ReshapePromptBrowseModal(props: ReshapePromptBrowseModalProps) {
                         <span className="line-clamp-2 text-sm font-medium">{t.title}</span>
                         {sel ? <span className="bg-primary/15 text-primary shrink-0 rounded px-1.5 py-0.5 text-[10px]">当前</span> : null}
                       </div>
-                      <p className="text-muted-foreground mt-1 line-clamp-2 text-[11px] leading-relaxed">{t.body}</p>
+                      <p
+                        className={cn(
+                          "mt-1 line-clamp-2 text-[11px] leading-relaxed",
+                          listPv.isPlaceholder
+                            ? "text-muted-foreground/80 italic"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {listPv.text}
+                      </p>
                       <p className="text-muted-foreground mt-1 text-[10px]">
                         更新 {new Date(t.updatedAt).toLocaleDateString("zh-CN")}
                       </p>

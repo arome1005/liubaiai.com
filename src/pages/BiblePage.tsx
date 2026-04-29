@@ -159,7 +159,7 @@ export function BiblePage() {
   const filteredCharacters = useMemo(() => {
     if (!q) return characters;
     return characters.filter((c) =>
-      [c.name, c.motivation, c.relationships, c.voiceNotes, c.taboos].some((x) =>
+      [c.name, c.motivation, c.relationships, c.voiceNotes, c.taboos, c.quoteSamples].some((x) =>
         (x ?? "").toLowerCase().includes(q),
       ),
     );
@@ -519,6 +519,18 @@ export function BiblePage() {
                     key={`tab-${c.id}-${c.updatedAt}`}
                     onBlur={(e) =>
                       void updateBibleCharacter(c.id, { taboos: e.target.value }).then(refresh)
+                    }
+                    rows={2}
+                  />
+                </label>
+                <label className="bible-field">
+                  <span>经典台词示例</span>
+                  <textarea
+                    defaultValue={c.quoteSamples ?? ""}
+                    key={`qs-${c.id}-${c.updatedAt}`}
+                    placeholder="1–3 条代表台词，生辉声音锁可注入（与口吻配合）"
+                    onBlur={(e) =>
+                      void updateBibleCharacter(c.id, { quoteSamples: e.target.value }).then(refresh)
                     }
                     rows={2}
                   />

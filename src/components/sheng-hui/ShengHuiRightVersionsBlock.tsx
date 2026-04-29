@@ -1,9 +1,10 @@
-import { lineDiffRows } from "../../util/text-line-diff";
 import type { Chapter } from "../../db/types";
 import type { ShengHuiSnapshotBucket } from "../../util/sheng-hui-snapshots";
+import type { ShengHuiTextHunk } from "../../util/sheng-hui-token-diff";
 import { Button } from "../ui/button";
-import { Badge } from "../ui/badge";
-import { cn } from "../../lib/utils";
+import { ShengHuiSnapshotListItem } from "./ShengHuiSnapshotListItem";
+import { ShengHuiSnapshotDiffPanel } from "./ShengHuiSnapshotDiffPanel";
+import { ShengHuiSelfReviewSection } from "./ShengHuiSelfReviewSection";
 
 type SnapshotRow = ShengHuiSnapshotBucket["snapshots"][number];
 
@@ -21,6 +22,16 @@ export function ShengHuiRightVersionsBlock(props: {
   busy: boolean;
   onMarkAdopted: () => void;
   onRemoveSelected: () => void;
+  onUpdateSnapshotMeta: (snapshotId: string, patch: { shortLabel?: string | null; starred?: boolean }) => void;
+  compareIsChapterVsSelected: boolean;
+  onApplySnapshotHunkToChapter: (h: ShengHuiTextHunk) => void | Promise<void>;
+  selfReviewBusy: boolean;
+  selfReviewCanRun: boolean;
+  onSelfReviewRun: () => void;
+  onSelfReviewStop: () => void;
+  selfReviewText: string | null;
+  selfReviewError: string | null;
+  onSelfReviewDismissError: () => void;
 }) {
   const {
     snapshotsNewestFirst,
@@ -36,6 +47,16 @@ export function ShengHuiRightVersionsBlock(props: {
     busy,
     onMarkAdopted,
     onRemoveSelected,
+    onUpdateSnapshotMeta,
+    compareIsChapterVsSelected,
+    onApplySnapshotHunkToChapter,
+    selfReviewBusy,
+    selfReviewCanRun,
+    onSelfReviewRun,
+    onSelfReviewStop,
+    selfReviewText,
+    selfReviewError,
+    onSelfReviewDismissError,
   } = props;
 
   const bSel = selectedSnapshotId
@@ -44,34 +65,26 @@ export function ShengHuiRightVersionsBlock(props: {
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">版本历史</p>
-      <p className="text-[11px] leading-relaxed text-muted-foreground/70">每次生成自动保存快照（本机·按章节）</p>
+      <p className="sheng-hui-eyebrow">版本历史</p>
+      <p className="text-[11px] leading-relaxed text-muted-foreground/70">
+        每次生成自动保存快照（本机·按章节）。可起 8 字短名、点星标收藏，收藏项会排在列表前。
+      </p>
 
       {snapshotsNewestFirst.length === 0 ? (
         <p className="text-[12px] text-muted-foreground/60">尚无快照</p>
       ) : (
         <div className="flex flex-col gap-1.5">
           {snapshotsNewestFirst.map((s) => (
-            <button
+            <ShengHuiSnapshotListItem
               key={s.id}
-              type="button"
-              onClick={() => onSelectSnapshot(s)}
-              className={cn(
-                "rounded-lg border px-2.5 py-2 text-left text-[11px] transition-colors",
-                selectedSnapshotId === s.id ? "border-primary/40 bg-primary/5" : "border-border/40 hover:bg-accent",
-              )}
-            >
-              <div className="flex items-center gap-1.5">
-                <span className="text-muted-foreground">{formatRelativeUpdateMs(s.createdAt)}</span>
-                {snapshotBucket.adoptedId === s.id ? (
-                  <Badge variant="outline" className="h-4 px-1 text-[9px]">
-                    采纳
-                  </Badge>
-                ) : null}
-              </div>
-              <p className="mt-0.5 line-clamp-2 text-foreground/70">{s.outlinePreview}</p>
-              <p className="mt-0.5 text-muted-foreground/55">{s.prose.replace(/\s/g, "").length} 字</p>
-            </button>
+              s={s}
+              selected={selectedSnapshotId === s.id}
+              adopted={snapshotBucket.adoptedId === s.id}
+              formatRelativeUpdateMs={formatRelativeUpdateMs}
+              onSelect={() => onSelectSnapshot(s)}
+              onUpdateMeta={(patch) => onUpdateSnapshotMeta(s.id, patch)}
+              busy={busy}
+            />
           ))}
         </div>
       )}
@@ -91,48 +104,54 @@ export function ShengHuiRightVersionsBlock(props: {
             {selectedChapter?.content ? <option value="__chapter__">当前正文（章节内容）</option> : null}
             {snapshotsNewestFirst
               .filter((s) => s.id !== selectedSnapshotId)
-              .map((s) => (
-                <option key={s.id} value={s.id}>
-                  {formatRelativeUpdateMs(s.createdAt)} · {s.prose.replace(/\s/g, "").length}字
-                </option>
-              ))}
+              .map((s) => {
+                const label = s.shortLabel?.trim();
+                return (
+                  <option key={s.id} value={s.id}>
+                    {label ? `${label} · ` : ""}
+                    {formatRelativeUpdateMs(s.createdAt)} · {s.prose.replace(/\s/g, "").length}字
+                  </option>
+                );
+              })}
           </select>
-          {showDiff && compareSnapshotId && selectedSnapshotId && bSel && (() => {
-            const aText =
-              compareSnapshotId === "__chapter__"
-                ? (selectedChapter?.content ?? "")
-                : (snapshotBucket.snapshots.find((s) => s.id === compareSnapshotId)?.prose ?? "");
-            const bText = bSel.prose;
-            if (!aText || !bText) return null;
-            const rows = lineDiffRows(aText, bText);
-            if (!rows) {
-              return <p className="mt-1 text-[10px] text-muted-foreground/60">内容过长，无法对比。</p>;
-            }
-            return (
-              <div className="mt-1.5 max-h-64 overflow-y-auto rounded border border-border/40 bg-background/60 p-1.5 text-[10px] leading-relaxed">
-                {rows.map((r, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "whitespace-pre-wrap break-words",
-                      r.kind === "del" && "bg-red-500/10 text-red-600 dark:text-red-400",
-                      r.kind === "ins" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
-                      r.kind === "same" && "text-muted-foreground/60",
-                    )}
-                  >
-                    {r.kind === "del" ? "− " : r.kind === "ins" ? "+ " : "  "}
-                    {r.line || "\u00a0"}
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
+          {showDiff && compareSnapshotId && selectedSnapshotId && bSel
+            ? (() => {
+                const aText =
+                  compareSnapshotId === "__chapter__"
+                    ? (selectedChapter?.content ?? "")
+                    : (snapshotBucket.snapshots.find((s) => s.id === compareSnapshotId)?.prose ?? "");
+                const bText = bSel.prose;
+                if (!aText && !bText) return <p className="mt-1 text-[10px] text-muted-foreground/60">无内容可对比。</p>;
+                return (
+                  <ShengHuiSnapshotDiffPanel
+                    aText={aText}
+                    bText={bText}
+                    leftLabel={compareSnapshotId === "__chapter__" ? "左 · 当前正文" : "左 · 对比稿"}
+                    rightLabel="右 · 选中版本（基准）"
+                    showHunkApply={compareIsChapterVsSelected}
+                    busy={busy}
+                    onApplyHunk={onApplySnapshotHunkToChapter}
+                  />
+                );
+              })()
+            : null}
         </div>
       )}
 
+      <ShengHuiSelfReviewSection
+        busy={selfReviewBusy}
+        canRun={selfReviewCanRun}
+        onRun={onSelfReviewRun}
+        onStop={onSelfReviewStop}
+        text={selfReviewText}
+        error={selfReviewError}
+        onDismissError={onSelfReviewDismissError}
+      />
+
       {selectedSnapshotId && bSel ? (
         <div className="mt-auto flex flex-col gap-1.5 border-t border-border/40 pt-3">
-          <Button type="button" variant="outline" size="sm" className="text-xs" onClick={onMarkAdopted} disabled={busy}>
+          <Button type="button" variant="outline" size="sm" className="text-xs" onClick={onMarkAdopted} disabled={busy}
+            title="若主稿已手改，将自动另存为新快照后再标采纳">
             标为当前采纳
           </Button>
           <Button

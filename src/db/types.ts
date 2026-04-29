@@ -203,6 +203,8 @@ export type BibleCharacter = {
   relationships: string;
   voiceNotes: string;
   taboos: string;
+  /** 经典台词样例（N7，注入人物声音锁）；旧数据可能缺省 */
+  quoteSamples?: string;
   /** 性别：IndexedDB 兼容旧数据（undefined = 未知） */
   gender?: "male" | "female" | "unknown" | "none";
   sortOrder: number;
@@ -388,6 +390,13 @@ export type GlobalPromptTemplate = {
   type: PromptType;
   /** 用户自定义标签（可多个） */
   tags: string[];
+  /**
+   * 对外「提示词介绍」：列表/精选卡片仅展示此段 + 标题，不展示 `body`，避免核心指令泄漏。
+   * 支持 Markdown；与写作侧栏实际注入的 `body` 分离。
+   */
+  intro: string;
+  /** 可选：使用说明（短句，全屏表单项「使用方法」） */
+  usageMethod?: string;
   body: string;
   status: PromptStatus;
   /** 管理员驳回时写入的原因；approved/draft 为空 */

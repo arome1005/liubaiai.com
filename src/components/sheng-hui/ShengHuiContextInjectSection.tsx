@@ -44,7 +44,7 @@ export function ShengHuiContextInjectSection({
   return (
     <>
       <section className="flex flex-col gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">上下文注入</p>
+        <p className="sheng-hui-eyebrow">上下文注入</p>
         <div className="flex flex-col gap-1.5">
           <label
             className={cn("flex cursor-pointer items-start gap-1.5 text-[12px]", !chapterId && "cursor-not-allowed opacity-45")}

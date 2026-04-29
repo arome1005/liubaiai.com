@@ -2,6 +2,8 @@ import type { AiSettings } from "../../ai/types";
 import { formatSceneStateForPrompt, isSceneStateCardEmpty, type BodyTailParagraphCount, type SceneStateCard } from "../../ai/sheng-hui-generate";
 import type { Chapter, ReferenceSearchHit, Work } from "../../db/types";
 import type { ShengHuiBibleCharRow } from "../../util/sheng-hui-voice-lock";
+import type { ShengHuiContextTokenTreeState } from "../../hooks/useShengHuiContextTokenTree";
+import { ShengHuiContextTokenTreePanel } from "./ShengHuiContextTokenTreePanel";
 import { HubAiSettingsHint } from "../HubAiSettingsHint";
 import { Button } from "../ui/button";
 import { cn } from "../../lib/utils";
@@ -27,12 +29,14 @@ export function ShengHuiRightMaterialsBlock(props: {
   styleFeatures: Map<string, string>;
   extractingFeatureIds: Set<string>;
   onExtractStyleFeature: (chunkId: string, text: string) => void;
+  onStopExtractStyleFeature: (chunkId: string) => void;
   sceneState: SceneStateCard;
   onSceneStateChange: (s: SceneStateCard | ((prev: SceneStateCard) => SceneStateCard)) => void;
   sceneStateOpen: boolean;
   onSceneStateOpenChange: (v: boolean | ((b: boolean) => boolean)) => void;
   sceneStateExtracting: boolean;
   onExtractSceneStateFromSnapshot: () => void;
+  onStopSceneStateExtract: () => void;
   bibleCharacters: ShengHuiBibleCharRow[];
   detectedCharNames: Set<string>;
   lockedCharNames: Set<string>;
@@ -47,6 +51,8 @@ export function ShengHuiRightMaterialsBlock(props: {
   onIncludeSettingIndexChange: (v: boolean) => void;
   settingIndexLoading: boolean;
   chapterId: string | null;
+  /** N5：与当前装配同步的上下文分块粗估 */
+  contextTokenTreeState: ShengHuiContextTokenTreeState;
 }) {
   const {
     workId,
@@ -65,12 +71,14 @@ export function ShengHuiRightMaterialsBlock(props: {
     styleFeatures,
     extractingFeatureIds,
     onExtractStyleFeature,
+    onStopExtractStyleFeature,
     sceneState,
     onSceneStateChange,
     sceneStateOpen,
     onSceneStateOpenChange,
     sceneStateExtracting,
     onExtractSceneStateFromSnapshot,
+    onStopSceneStateExtract,
     bibleCharacters,
     detectedCharNames,
     lockedCharNames,
@@ -85,12 +93,16 @@ export function ShengHuiRightMaterialsBlock(props: {
     onIncludeSettingIndexChange,
     settingIndexLoading,
     chapterId,
+    contextTokenTreeState,
   } = props;
 
   return (
     <div className="space-y-4">
-      <section className="flex flex-col gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">藏经风格参考</p>
+      <ShengHuiContextTokenTreePanel state={contextTokenTreeState} />
+
+      <section className={cn("sheng-hui-rail-section flex flex-col gap-2 p-2.5", "sheng-hui-glass-section")}>
+        <div className="h-0.5 shrink-0 rounded-full bg-gradient-to-r from-chart-1/45 to-primary/20" aria-hidden />
+        <p className="sheng-hui-eyebrow">藏经风格参考</p>
         <p className="text-[11px] leading-relaxed text-muted-foreground/80">
           从参考书库检索段落，学习其笔法融入创作——仅吸收风格，不引用原文，不洗稿。
         </p>
@@ -152,15 +164,26 @@ export function ShengHuiRightMaterialsBlock(props: {
                       type="button"
                       className={cn(
                         "shrink-0 rounded px-1.5 py-0.5 text-[10px] transition-colors",
-                        feature
-                          ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                          : "bg-border/30 text-muted-foreground hover:bg-primary/10 hover:text-primary",
+                        isExtracting
+                          ? "bg-destructive/15 text-destructive hover:bg-destructive/25"
+                          : feature
+                            ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                            : "bg-border/30 text-muted-foreground hover:bg-primary/10 hover:text-primary",
                       )}
-                      disabled={isExtracting}
-                      onClick={() => void onExtractStyleFeature(hit.chunkId, hit.preview ?? "")}
-                      title={feature ? "重新提炼笔法" : "AI 提炼此段的笔法特征，代替原文注入（更安全、更精准）"}
+                      onClick={() =>
+                        isExtracting
+                          ? onStopExtractStyleFeature(hit.chunkId)
+                          : void onExtractStyleFeature(hit.chunkId, hit.preview ?? "")
+                      }
+                      title={
+                        isExtracting
+                          ? "停止本次提炼"
+                          : feature
+                            ? "重新提炼笔法"
+                            : "AI 提炼此段的笔法特征，代替原文注入（更安全、更精准）"
+                      }
                     >
-                      {isExtracting ? "提炼中…" : feature ? "已提炼 ↺" : "提炼笔法"}
+                      {isExtracting ? "停止" : feature ? "已提炼 ↺" : "提炼笔法"}
                     </button>
                   </div>
                   {feature ? (
@@ -185,7 +208,7 @@ export function ShengHuiRightMaterialsBlock(props: {
 
       <section className="flex flex-col gap-1.5">
         <div className="flex items-center gap-1.5">
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">场景状态卡</p>
+          <p className="sheng-hui-eyebrow">场景状态卡</p>
           <button
             type="button"
             className="ml-auto text-[10px] text-muted-foreground/70 hover:text-foreground"
@@ -224,17 +247,29 @@ export function ShengHuiRightMaterialsBlock(props: {
               </label>
             ))}
             <div className="flex items-center gap-1.5 pt-0.5">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="h-6 px-2 text-[11px]"
-                disabled={sceneStateExtracting || (!snapshotsNewestFirst.length && !selectedChapter?.content)}
-                onClick={() => void onExtractSceneStateFromSnapshot()}
-                title="从最新快照或当前正文末尾 AI 提取场景状态"
-              >
-                {sceneStateExtracting ? "提取中…" : "AI 提取"}
-              </Button>
+              {sceneStateExtracting ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="h-6 px-2 text-[11px]"
+                  onClick={onStopSceneStateExtract}
+                >
+                  停止
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-6 px-2 text-[11px]"
+                  disabled={!snapshotsNewestFirst.length && !selectedChapter?.content}
+                  onClick={() => void onExtractSceneStateFromSnapshot()}
+                  title="从最新快照或当前正文末尾 AI 提取场景状态"
+                >
+                  AI 提取
+                </Button>
+              )}
               {!isSceneStateCardEmpty(sceneState) && (
                 <button
                   type="button"
@@ -252,14 +287,16 @@ export function ShengHuiRightMaterialsBlock(props: {
       {detectedCharNames.size > 0 && (
         <section className="flex flex-col gap-1.5">
           <div className="flex items-center gap-1.5">
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">人物声音锁</p>
+            <p className="sheng-hui-eyebrow">人物声音锁</p>
             <span className="ml-auto text-[10px] text-muted-foreground/60">大纲中检测到</span>
           </div>
           <p className="text-[11px] leading-relaxed text-muted-foreground/70">勾选的人物口吻与禁忌将注入提示词，让对话更有辨识度。</p>
           <div className="flex flex-wrap gap-1.5">
             {Array.from(detectedCharNames).map((name) => {
               const char = bibleCharacters.find((c) => c.name === name);
-              const hasData = Boolean(char && (char.voiceNotes.trim() || char.taboos.trim()));
+              const hasData = Boolean(
+                char && (char.voiceNotes.trim() || char.taboos.trim() || char.quoteSamples.trim()),
+              );
               const locked = lockedCharNames.has(name);
               return (
                 <button
@@ -267,8 +304,8 @@ export function ShengHuiRightMaterialsBlock(props: {
                   type="button"
                   title={
                     hasData
-                      ? `口吻：${char!.voiceNotes || "—"}  禁忌：${char!.taboos || "—"}`
-                      : "该人物暂无口吻/禁忌设定，可在锦囊中补充"
+                      ? `口吻：${char!.voiceNotes || "—"}  禁忌：${char!.taboos || "—"}  台词：${char!.quoteSamples || "—"}`
+                      : "该人物暂无口吻/禁忌/台词设定，可在锦囊中补充"
                   }
                   onClick={() => onToggleLockedCharName(name, hasData)}
                   className={cn(

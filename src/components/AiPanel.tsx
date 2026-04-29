@@ -24,9 +24,11 @@ import {
 import { filterWorkBibleMarkdownBySections } from "../ai/work-bible-sections";
 import { getProviderConfig, loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiChatMessage, AiProviderConfig, AiProviderId, AiSettings } from "../ai/types";
+import { AI_DRAFT_HISTORY_MAX_ENTRIES, AI_DRAFT_HISTORY_RETENTION_DAYS } from "../util/ai-panel-draft";
 import { resolveInjectionConfirmPrompt } from "../util/ai-injection-confirm";
 import { CostGateModal } from "./CostGateModal";
 import { buildContextDegradeOverrides } from "../util/ai-degrade-retry";
+import { isAbortError } from "../util/is-abort-error";
 import { normalizeWorkTagList, workTagsToProfileText } from "../util/work-tags";
 import { useAiPanelToneDrift } from "./ai-panel/useAiPanelToneDrift";
 import { useAiPanelStudySelection } from "./ai-panel/useAiPanelStudySelection";
@@ -930,8 +932,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
       }
     } catch (e) {
       // 仅捕获上下文组装阶段（bible 导出、RAG 检索等）抛出的异常
-      const aborted = e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message));
-      if (aborted) {
+      if (isAbortError(e)) {
         dispatchGenPhase({ type: "abort" });
       } else {
         setError(e instanceof Error ? e.message : "AI 调用失败");
@@ -1117,8 +1118,8 @@ export const AiPanel = memo(function AiPanelBase(props: {
               disabled={draftHistory.length === 0}
               title={
                 draftHistory.length === 0
-                  ? "暂无生成历史（生成完成后会自动留存最近 5 条）"
-                  : `查看本章最近 ${draftHistory.length} 条生成历史`
+                  ? `暂无生成历史（生成成功后会本机保留，每章最多 ${AI_DRAFT_HISTORY_MAX_ENTRIES} 条、约 ${AI_DRAFT_HISTORY_RETENTION_DAYS} 天）`
+                  : `查看本章 ${draftHistory.length} 条生成历史（本机约保留 ${AI_DRAFT_HISTORY_RETENTION_DAYS} 天）`
               }
               onClick={() => {
                 if (draftHistory.length === 0) return;

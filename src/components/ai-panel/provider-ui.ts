@@ -146,9 +146,9 @@ export const PROVIDER_UI: Record<AiProviderId, ProviderUiCard> = {
     tip: "小米 MiMo",
     quote: '"工欲善其事，必先利其器。"',
     core:
-      "小米 MiMo 提供 OpenAI 兼容接口；写作常用 mimo-v2-pro（偏强）与 mimo-v2-flash（偏快），在高级后端配置中可一键选择。",
-    meters: { prose: 3, follow: 4, cost: 2 },
-    note: "Base URL 填官方 api.mimo-v2.com/v1 即可。本地开发请用 npm run dev，已走同源代理避免浏览器跨域拦截；静态部署或遇 Failed to fetch 时需后端转发。",
+      "小米 MiMo 提供 OpenAI 兼容接口；写作推荐 mimo-v2.5-pro（最新旗舰·最强）/ mimo-v2.5（性价比平衡）/ mimo-v2-pro（上代旗舰），在高级后端配置中可一键选择。",
+    meters: { prose: 4, follow: 4, cost: 3 },
+    note: "Base URL：未购 Token Plan 用 api.mimo-v2.com/v1；已购可用专属域名 token-plan-cn.xiaomimimo.com/v1（中国集群）/ token-plan-sgp / token-plan-ams 集群。本地开发已走同源代理，避免浏览器跨域；静态部署或遇 Failed to fetch 时需后端转发。",
   },
   // owner-only：不出现在选择器（picker 数组里被排除），保留键以满足 Record 类型
   "claude-code-local": {

@@ -18,6 +18,14 @@ export function buildShengHuiUrl(workId: string, chapterId: string | null): stri
   return `/sheng-hui?${p.toString()}`;
 }
 
+/** 推演工作台：与生辉、写作共用 `work` / `chapter` query，便于从生辉跳转并选中对应章。 */
+export function buildTuiyanWorkbenchUrl(workId: string, chapterId: string | null): string {
+  const p = new URLSearchParams();
+  p.set(SHENG_HUI_Q.work, workId);
+  if (chapterId) p.set(SHENG_HUI_Q.chapter, chapterId);
+  return `/logic?${p.toString()}`;
+}
+
 const EDITOR_CHAPTER = "chapter";
 const EDITOR_AI = "ai";
 

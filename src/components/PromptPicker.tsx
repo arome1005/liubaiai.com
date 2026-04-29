@@ -38,6 +38,10 @@ import {
   type PromptSlot,
   type PromptType,
 } from "../db/types";
+import {
+  matchesPromptListSearchWithBody,
+  promptLibraryListPreview,
+} from "../util/prompt-template-display";
 
 // ── 槽位常量（供调用方 import，避免硬编码字符串） ────────────────────────────────
 /** 写作侧栏可用槽位 */
@@ -89,6 +93,17 @@ const TYPE_LABEL: Partial<Record<PromptType, string>> = {
 export interface PromptPickerProps {
   /** 当前已选模板 id（null / undefined = 未选） */
   selectedId?: string | null;
+  /**
+   * 已选提示词标题（用于未打开弹窗时展示；弹窗内列表未加载时 `selected` 可能为空）
+   * 一般由父组件传入当前 `GlobalPromptTemplate.title`
+   */
+  selectedLabel?: string | null;
+  /** 未选择时触发区占位文案 */
+  emptyPlaceholder?: string;
+  /**
+   * 默认触发器外观：`button` 为原小按钮；`field` 为整行输入框式（长方形 + 占位/已选名）
+   */
+  triggerVariant?: "button" | "field";
   /** 选中回调；传 null 表示清除 */
   onPick: (template: GlobalPromptTemplate | null) => void;
   /** 触发器渲染函数 */
@@ -110,7 +125,16 @@ export interface PromptPickerProps {
 
 // ── 主组件 ────────────────────────────────────────────────────────────────────
 
-export function PromptPicker({ selectedId, onPick, trigger, filterTypes = TUIYAN_TYPES, filterSlots }: PromptPickerProps) {
+export function PromptPicker({
+  selectedId,
+  selectedLabel,
+  emptyPlaceholder = "选择提示词",
+  triggerVariant = "button",
+  onPick,
+  trigger,
+  filterTypes = TUIYAN_TYPES,
+  filterSlots,
+}: PromptPickerProps) {
   const [open, setOpen] = useState(false);
   const [templates, setTemplates] = useState<GlobalPromptTemplate[]>([]);
   const [loading, setLoading] = useState(false);
@@ -160,12 +184,7 @@ export function PromptPicker({ selectedId, onPick, trigger, filterTypes = TUIYAN
     if (typeFilter !== "all") list = list.filter((t) => t.type === typeFilter);
     const q = query.trim().toLowerCase();
     if (q) {
-      list = list.filter(
-        (t) =>
-          t.title.toLowerCase().includes(q) ||
-          t.body.toLowerCase().includes(q) ||
-          t.tags.some((tag) => tag.toLowerCase().includes(q)),
-      );
+      list = list.filter((t) => matchesPromptListSearchWithBody(t, q));
     }
     return list;
   }, [templates, typeFilter, query]);
@@ -174,6 +193,7 @@ export function PromptPicker({ selectedId, onPick, trigger, filterTypes = TUIYAN
     () => templates.find((t) => t.id === selectedId) ?? null,
     [templates, selectedId],
   );
+  const displayTitle = (selectedLabel?.trim() || selected?.title || "").trim() || null;
 
   const handlePick = (t: GlobalPromptTemplate | null) => {
     onPick(t);
@@ -181,28 +201,45 @@ export function PromptPicker({ selectedId, onPick, trigger, filterTypes = TUIYAN
   };
 
   // 触发器（默认样式）
-  const defaultTrigger = (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      className={cn(
-        "h-7 gap-1.5 px-2.5 text-xs",
-        selected
-          ? "border-primary/60 bg-primary/5 text-primary"
-          : "text-muted-foreground",
-      )}
-      onClick={() => setOpen(true)}
-    >
-      <Sparkles className="h-3.5 w-3.5" />
-      {selected ? (
-        <span className="max-w-[12rem] truncate">{selected.title}</span>
-      ) : (
-        "选择提示词"
-      )}
-      <ChevronDown className="h-3 w-3 opacity-60" />
-    </Button>
-  );
+  const defaultTrigger =
+    triggerVariant === "field" ? (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className={cn(
+          "flex h-9 w-full min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-background px-3 text-left text-sm shadow-sm transition-colors",
+          "hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+          displayTitle ? "text-foreground" : "text-muted-foreground",
+        )}
+      >
+        <span className="flex min-w-0 flex-1 items-center gap-2">
+          <Sparkles className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate">
+            {displayTitle ?? emptyPlaceholder}
+          </span>
+        </span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground/70" />
+      </button>
+    ) : (
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className={cn(
+          "h-7 gap-1.5 px-2.5 text-xs",
+          displayTitle ? "border-primary/60 bg-primary/5 text-primary" : "text-muted-foreground",
+        )}
+        onClick={() => setOpen(true)}
+      >
+        <Sparkles className="h-3.5 w-3.5" />
+        {displayTitle ? (
+          <span className="max-w-[12rem] truncate">{displayTitle}</span>
+        ) : (
+          emptyPlaceholder
+        )}
+        <ChevronDown className="h-3 w-3 opacity-60" />
+      </Button>
+    );
 
   return (
     <>
@@ -220,7 +257,7 @@ export function PromptPicker({ selectedId, onPick, trigger, filterTypes = TUIYAN
               <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
               <Input
                 className="h-8 pl-8 pr-8 text-sm"
-                placeholder="搜索标题、正文或标签…"
+                placeholder="搜索标题、介绍或标签…"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -268,6 +305,7 @@ export function PromptPicker({ selectedId, onPick, trigger, filterTypes = TUIYAN
               <div className="flex flex-col gap-1.5 py-1">
                 {displayed.map((t) => {
                   const isSelected = t.id === selectedId;
+                  const listPv = promptLibraryListPreview(t);
                   return (
                     <button
                       key={t.id}
@@ -292,8 +330,15 @@ export function PromptPicker({ selectedId, onPick, trigger, filterTypes = TUIYAN
                         </span>
                         {isSelected && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
                       </div>
-                      <p className="line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">
-                        {t.body}
+                      <p
+                        className={cn(
+                          "line-clamp-2 text-[11px] leading-relaxed",
+                          listPv.isPlaceholder
+                            ? "text-muted-foreground/80 italic"
+                            : "text-muted-foreground",
+                        )}
+                      >
+                        {listPv.text}
                       </p>
                       {t.tags.length > 0 && (
                         <div className="flex flex-wrap gap-1">

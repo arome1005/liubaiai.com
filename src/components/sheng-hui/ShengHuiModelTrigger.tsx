@@ -1,5 +1,6 @@
 import { Bot } from "lucide-react";
 import type { AiSettings } from "../../ai/types";
+import { getProviderConfig } from "../../ai/storage";
 import { PROVIDER_UI, providerLogoImgSrc } from "../ai-panel/provider-ui";
 import { shengHuiModelMetricLine } from "../../util/sheng-hui-ui-display";
 import { cn } from "../../lib/utils";
@@ -14,6 +15,9 @@ export function ShengHuiModelTrigger(props: {
   const logoSrc = providerLogoImgSrc(settings.provider);
   const label = PROVIDER_UI[settings.provider]?.label ?? settings.provider;
   const metric = shengHuiModelMetricLine(settings.provider);
+  // model / modelDisplayName 在 AiProviderConfig 上而非 AiSettings 顶层；走 getProviderConfig 拿当前 provider 的配置。
+  const cfg = getProviderConfig(settings, settings.provider);
+  const modelId = cfg.modelDisplayName?.trim() || cfg.model?.trim() || "";
   return (
     <button
       type="button"
@@ -31,6 +35,11 @@ export function ShengHuiModelTrigger(props: {
         <span className="block truncate font-semibold text-foreground" title={label}>
           {label}
         </span>
+        {modelId ? (
+          <span className="block truncate font-mono text-[8px] font-normal leading-tight text-muted-foreground/70" title="当前模型 id">
+            {modelId}
+          </span>
+        ) : null}
         {metric ? (
           <span className="block truncate text-[9px] font-normal leading-tight text-muted-foreground/80">{metric}</span>
         ) : null}

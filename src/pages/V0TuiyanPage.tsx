@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import {
   TuiyanPlanningPushDialog,
+  DEFAULT_KNOWLEDGE_PUSH_OPTIONS,
   type TuiyanPlanningPushCandidate,
   type KnowledgePushOptions,
 } from "../components/tuiyan/TuiyanPlanningPushDialog"
@@ -36,10 +37,16 @@ import {
   DEFAULT_PLANNING_SCALE,
   type PlanningScale,
 } from "../util/tuiyan-planning"
+import {
+  type PlanningThickness,
+  DEFAULT_PLANNING_THICKNESS,
+  normalizePlanningThickness,
+} from "../util/tuiyan-planning-thickness"
 import { useNavigate } from "react-router-dom"
 import { isFirstAiGateCancelledError } from "../ai/client"
 import { generateLogicThreeBranches, LogicBranchPredictError } from "../ai/logic-branch-predict"
 import { generatePlanningAdvisorReply, TuiyanPlanningChatError } from "../ai/tuiyan-planning-chat"
+import { useTuiyanDeepLink } from "../hooks/useTuiyanDeepLink"
 import { useTuiyanAutoLink } from "../hooks/useTuiyanAutoLink"
 import { useTuiyanPostPlanningKnowledgeOffer } from "../hooks/useTuiyanPostPlanningKnowledgeOffer"
 import { useTuiyanGenProgress } from "../hooks/useTuiyanGenProgress"
@@ -68,7 +75,7 @@ import {
 import type { Chapter, ReferenceLibraryEntry, Work } from "../db/types"
 import { resolveDefaultChapterId } from "../util/resolve-default-chapter"
 import { workTagsToProfileText } from "../util/work-tags"
-import { buildShengHuiUrl } from "../util/sheng-hui-deeplink"
+import { buildShengHuiUrl, SHENG_HUI_Q } from "../util/sheng-hui-deeplink"
 import { workPathSegment } from "../util/work-url"
 import { writeAiPanelDraft } from "../util/ai-panel-draft"
 import { writeEditorHitHandoff } from "../util/editor-hit-handoff"
@@ -213,6 +220,17 @@ export default function V0TuiyanPage() {
   const [planningMode, setPlanningMode] = useState<"model" | "template">("model")
   const [planningBusyLevel, setPlanningBusyLevel] = useState<TuiyanPlanningLevel | null>(null)
   const [planningError, setPlanningError] = useState("")
+  useTuiyanDeepLink(
+    pageLoading,
+    works,
+    outline,
+    chapters,
+    workId,
+    selectedOutlineId,
+    setWorkId,
+    setSelectedOutlineId,
+  )
+
   const { autoLinkEnabled, toggleAutoLink, runAutoLink, bumpChipLibRefreshKey, chipLibRefreshKey } =
     useTuiyanAutoLink(workId)
   const {
@@ -237,6 +255,20 @@ export default function V0TuiyanPage() {
   const handlePlanningScaleChange = useCallback((s: PlanningScale) => {
     setPlanningScale(s)
     localStorage.setItem("liubai:tuiyan:planningScale:v1", JSON.stringify(s))
+  }, [])
+  const [planningThickness, setPlanningThickness] = useState<PlanningThickness>(() => {
+    try {
+      const saved = localStorage.getItem("liubai:tuiyan:planningThickness:v1")
+      if (saved) return normalizePlanningThickness(JSON.parse(saved) as Partial<PlanningThickness>)
+    } catch {
+      /* ignore */
+    }
+    return DEFAULT_PLANNING_THICKNESS
+  })
+  const handlePlanningThicknessChange = useCallback((p: PlanningThickness) => {
+    const n = normalizePlanningThickness(p)
+    setPlanningThickness(n)
+    localStorage.setItem("liubai:tuiyan:planningThickness:v1", JSON.stringify(n))
   }, [])
   const [pushOverwriteConfirmOpen, setPushOverwriteConfirmOpen] = useState(false)
   const [pendingKnowledgeOpts, setPendingKnowledgeOpts] = useState<KnowledgePushOptions | null>(null)
@@ -436,9 +468,30 @@ export default function V0TuiyanPage() {
         const list = await listWorks()
         setWorks(list)
         if (list.length > 0) {
-          const lastId = localStorage.getItem(LS_LAST_WORK)
-          const pick = list.find((x) => x.id === lastId) ?? list[0]
+          let wQ: string | null = null
+          try {
+            wQ = new URLSearchParams(window.location.search).get(SHENG_HUI_Q.work)?.trim() || null
+          } catch {
+            /* ignore */
+          }
+          const fromUrl = wQ && list.some((w) => w.id === wQ) ? wQ : null
+          let lastId: string | null = null
+          try {
+            lastId = localStorage.getItem(LS_LAST_WORK)
+          } catch {
+            /* ignore */
+          }
+          const pick = fromUrl
+            ? list.find((w) => w.id === fromUrl)!
+            : (list.find((x) => x.id === lastId) ?? list[0])
           setWorkId(pick.id)
+          if (fromUrl) {
+            try {
+              localStorage.setItem(LS_LAST_WORK, fromUrl)
+            } catch {
+              /* ignore */
+            }
+          }
         }
       } finally {
         setPageLoading(false)
@@ -880,6 +933,7 @@ export default function V0TuiyanPage() {
     setPushOverwriteConfirmOpen,
     referenceImitationMode: effectiveReferencePolicy.imitationMode,
     onPlanningLevelKnowledgeOffer: offerAfterPlanningLevel,
+    planningThickness,
   })
 
   const updatePlanningNodeDraft = useCallback((nodeId: string, value: string) => {
@@ -1137,7 +1191,7 @@ export default function V0TuiyanPage() {
             <AlertDialogCancel onClick={() => setPendingKnowledgeOpts(null)}>取消</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                const opts = pendingKnowledgeOpts ?? { generateCharacters: false, generateTerms: false, levelFilter: [] }
+                const opts = pendingKnowledgeOpts ?? DEFAULT_KNOWLEDGE_PUSH_OPTIONS
                 setPendingKnowledgeOpts(null)
                 void doPushPlanningTree(opts)
               }}
@@ -1337,6 +1391,11 @@ export default function V0TuiyanPage() {
                 planningActiveOutline,
                 planningActiveVolume,
                 onUpdateSelectedNodeSummary: updatePlanningNodeSummary,
+                onUpdateSelectedNodeDetailDraft: updatePlanningNodeDraft,
+                selectedChapterDetailDraft:
+                  planningSelectedNode?.level === "chapter_detail"
+                    ? (planningDraftsByNodeId[planningSelectedNode.id] ?? "")
+                    : "",
                 onOpenPushDialog: () => setPlanningPushDialogOpen(true),
                 onGenerateMasterOutline: () => void generatePlanningLevel("master_outline", null),
                 onGenerateOutline: () => {
@@ -1350,6 +1409,8 @@ export default function V0TuiyanPage() {
                 },
                 planningScale,
                 onPlanningScaleChange: handlePlanningScaleChange,
+                planningThickness,
+                onPlanningThicknessChange: handlePlanningThicknessChange,
                 planningOutlineTargetVolumesByNodeId,
                 onPlanningOutlineTargetVolumesChange: handleOutlineTargetVolumesChange,
                 planningVolumeTargetChaptersByNodeId,

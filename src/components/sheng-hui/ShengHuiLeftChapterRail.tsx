@@ -15,6 +15,8 @@ export function ShengHuiLeftChapterRail(props: {
   isLg: boolean;
   leftExpanded: boolean;
   onSetLeftOpen: (open: boolean) => void;
+  /** 仿写区目标字数，用于 v0 式 `current/target` 展示 */
+  targetWords: number;
 }) {
   const {
     works,
@@ -27,6 +29,7 @@ export function ShengHuiLeftChapterRail(props: {
     isLg,
     leftExpanded,
     onSetLeftOpen,
+    targetWords,
   } = props;
 
   if (isLg && !leftExpanded) {
@@ -59,7 +62,7 @@ export function ShengHuiLeftChapterRail(props: {
         <div className="min-w-0 flex items-center gap-1.5">
           <BookOpen className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <div className="min-w-0">
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">章节目录</p>
+            <p className="sheng-hui-eyebrow">章节目录</p>
             <p className="text-[10px] text-muted-foreground/80">与写作页一致，点选切换当前章</p>
           </div>
         </div>
@@ -110,6 +113,16 @@ export function ShengHuiLeftChapterRail(props: {
                 const active = chapterId === c.id;
                 const n = c.wordCountCache ?? wordCount(c.content ?? "");
                 const has = n > 0;
+                const tw = targetWords > 0 ? targetWords : 0;
+                const hitTarget = tw > 0 && n >= tw;
+                const partial = tw > 0 && has && n < tw;
+                const statusTitle = !has
+                  ? "正文为空"
+                  : hitTarget
+                    ? "已达本页目标字数"
+                    : partial
+                      ? "有正文，未达目标字数"
+                      : "正文有字";
                 return (
                   <button
                     key={c.id}
@@ -125,15 +138,21 @@ export function ShengHuiLeftChapterRail(props: {
                     <span
                       className={cn(
                         "mt-1.5 size-1.5 shrink-0 rounded-full",
-                        has ? "bg-emerald-500/90 shadow-[0_0_0_1px_rgba(16,185,129,0.35)]" : "bg-muted-foreground/25",
+                        hitTarget
+                          ? "bg-[oklch(0.72_0.14_155)] shadow-[0_0_0_1px_oklch(0.6_0.1_155_/_0.4)] sheng-hui-oklch-adopted"
+                          : partial
+                            ? "bg-amber-500/90 shadow-[0_0_0_1px_rgba(245,158,11,0.4)] sheng-hui-oklch-streaming"
+                            : has
+                              ? "bg-emerald-500/90 shadow-[0_0_0_1px_rgba(16,185,129,0.35)]"
+                              : "sheng-hui-oklch-idle bg-muted-foreground/30",
                       )}
-                      title={has ? "正文有字" : "正文为空"}
+                      title={statusTitle}
                       aria-hidden
                     />
                     <span className="min-w-0 flex-1">
                       <span className="line-clamp-3 block">{c.title || "未命名章节"}</span>
                       <span className="mt-0.5 block text-[10px] text-muted-foreground/70 tabular-nums">
-                        {n > 0 ? `${n} 字` : "空"}
+                        {tw > 0 ? `${n} / ${tw}` : n > 0 ? `${n} 字` : "空"}
                       </span>
                     </span>
                   </button>

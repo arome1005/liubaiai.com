@@ -47,10 +47,10 @@ export function ShengHuiRightPanel(props: {
               key={id}
               type="button"
               className={cn(
-                "rounded-md px-2 py-1 text-[11px] font-medium",
+                "rounded-md px-2 py-1 text-[11px] font-medium transition-colors sheng-hui-right-tab",
                 activeTab === id
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-accent",
+                  ? "sheng-hui-right-tab--active sheng-hui-oklch-adopted text-foreground"
+                  : "sheng-hui-oklch-idle text-muted-foreground hover:bg-accent/90",
               )}
               onClick={() => onTabChange(id)}
             >

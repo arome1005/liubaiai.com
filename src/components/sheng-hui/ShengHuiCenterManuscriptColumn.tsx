@@ -1,10 +1,21 @@
 import { Link } from "react-router-dom";
+import { PenLine, BookOpen as BookOpenIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { ShengHuiStepHint } from "./ShengHuiStepHint";
+import { ShengHuiManuscriptStatusBar, type ShengHuiStatusRough } from "./ShengHuiManuscriptStatusBar";
+import { ShengHuiManuscriptDualModeBody } from "./ShengHuiManuscriptDualModeBody";
+import { ShengHuiToneDriftBar } from "./ShengHuiToneDriftBar";
+import type { ShengHuiParagraphToolbarAction } from "../../ai/sheng-hui-paragraph-toolbar-messages";
+import { useShengHuiManuscriptReadEditMode } from "../../hooks/useShengHuiManuscriptReadEditMode";
+import { useShengHuiToneDrift } from "../../hooks/useShengHuiToneDrift";
 import { buildWorkEditorUrl } from "../../util/sheng-hui-deeplink";
-import type { Work } from "../../db/types";
+import type { Work, WorkStyleCard } from "../../db/types";
 import { cn } from "../../lib/utils";
 import type { ShengHuiEmotionTemperature } from "../../ai/sheng-hui-generate";
+import type { AiSettings } from "../../ai/types";
+import type { ShengHuiBuildResult } from "../../hooks/useShengHuiGenerationLifecycle";
+import type { ShengHuiGenerationCompletePayload } from "../../hooks/useShengHuiGenerationCompleteCard";
+import { ShengHuiGenerationCompleteCard } from "./ShengHuiGenerationCompleteCard";
 
 export function ShengHuiCenterManuscriptColumn(props: {
   showStepHint: boolean;
@@ -27,6 +38,28 @@ export function ShengHuiCenterManuscriptColumn(props: {
   /** 仅顶栏+主稿，放大衬线区 */
   focusMode: boolean;
   targetWords: number;
+  /** 流式生成等业务错误；与 W4 状态条合并展示 */
+  generateError: string | null;
+  onDismissGenerateError: () => void;
+  genElapsedSec: number;
+  lastRoughEstimate: ShengHuiStatusRough;
+  todayTokensSnapshot: number;
+  settings: AiSettings;
+  setError: (v: string | null) => void;
+  buildGenerateArgs: () => Promise<ShengHuiBuildResult>;
+  /** 笔感卡，供调性检测与装配一致 */
+  styleCard: WorkStyleCard | undefined;
+  cloudAllowed: boolean;
+  /** 第三节：一次生成完成总结卡 */
+  generationComplete: ShengHuiGenerationCompletePayload | null;
+  onDismissGenerationComplete: () => void;
+  onRerunGeneration: () => void;
+  /** 段工具流在父级注册，便于与主栏「停止」并账 */
+  paragraphToolbar?: {
+    onAction: (action: ShengHuiParagraphToolbarAction, index: number) => void;
+    disabled: boolean;
+    busyIndex: number | null;
+  };
 }) {
   const {
     showStepHint,
@@ -47,6 +80,21 @@ export function ShengHuiCenterManuscriptColumn(props: {
     emotionTemperature,
     focusMode,
     targetWords,
+    generateError,
+    onDismissGenerateError,
+    genElapsedSec,
+    lastRoughEstimate,
+    todayTokensSnapshot,
+    settings,
+    // 保留 props（与当前接口同形）：未来段工具/错误重写可直接 re-bind 此处。
+    setError: _setError,
+    buildGenerateArgs: _buildGenerateArgs,
+    styleCard,
+    cloudAllowed,
+    generationComplete,
+    onDismissGenerationComplete,
+    onRerunGeneration,
+    paragraphToolbar: paragraphToolbarProp,
   } = props;
 
   const paperTint =
@@ -55,8 +103,22 @@ export function ShengHuiCenterManuscriptColumn(props: {
       : emotionTemperature >= 4
         ? "sheng-hui-paper--warm"
         : "sheng-hui-paper--neutral";
-  const progressPct =
-    targetWords > 0 && wordCount > 0 ? Math.min(100, Math.round((wordCount / targetWords) * 100)) : null;
+
+  const { isEditing, enterEdit, exitEdit } = useShengHuiManuscriptReadEditMode(output, busy);
+
+  const paragraphToolbar =
+    output.trim() && paragraphToolbarProp
+      ? paragraphToolbarProp
+      : undefined;
+
+  const { toneDriftHints, toneEmbedHint, toneEmbedBusy, toneEmbedErr } = useShengHuiToneDrift({
+    settings,
+    cloudAllowed,
+    styleCard,
+    mainBusy: busy,
+    output,
+  });
+  const hasProse = output.trim().length >= 2;
 
   return (
     <section
@@ -74,16 +136,68 @@ export function ShengHuiCenterManuscriptColumn(props: {
         )}
       >
         <div className="flex h-0.5 shrink-0 rounded-full bg-gradient-to-r from-primary/40 to-chart-2/35" aria-hidden />
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-medium leading-none tracking-tight text-foreground">主稿</span>
-          {busy ? <span className="animate-pulse text-[11px] text-primary">生成中…</span> : null}
-          {output.trim() && !busy ? (
-            <span className="text-[11px] text-muted-foreground/60 tabular-nums">{wordCount} 字</span>
-          ) : null}
-          {progressPct != null && targetWords > 0 ? (
-            <span className="text-[10px] text-muted-foreground/70 tabular-nums">目标 {targetWords} · 约 {progressPct}%</span>
-          ) : null}
+
+        <ShengHuiManuscriptStatusBar
+          generateError={generateError}
+          onDismissGenerateError={onDismissGenerateError}
+          busy={busy}
+          genElapsedSec={genElapsedSec}
+          wordCount={wordCount}
+          targetWords={targetWords}
+          lastRoughEstimate={lastRoughEstimate}
+          todayTokensSnapshot={todayTokensSnapshot}
+        />
+
+        {generationComplete ? (
+          <ShengHuiGenerationCompleteCard
+            payload={generationComplete}
+            onDismiss={onDismissGenerationComplete}
+            onRerun={() => {
+              onDismissGenerationComplete();
+              onRerunGeneration();
+            }}
+          />
+        ) : null}
+
+        <ShengHuiToneDriftBar
+          enabled={settings.toneDriftHintEnabled}
+          mainBusy={busy}
+          ruleHints={toneDriftHints}
+          embedHint={toneEmbedHint}
+          embedBusy={toneEmbedBusy}
+          embedErr={toneEmbedErr}
+          hasProse={hasProse}
+        />
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="sheng-hui-t2 leading-none tracking-tight text-foreground">主稿</span>
           <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            {!busy && !isEditing ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={enterEdit}
+                title="进入与生成相同的源文本编辑"
+              >
+                <PenLine className="size-3.5" aria-hidden />
+                编辑主稿
+              </Button>
+            ) : null}
+            {!busy && isEditing ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={exitEdit}
+                title="衬线排印、38em 阅读宽"
+              >
+                <BookOpenIcon className="size-3.5" aria-hidden />
+                阅读模式
+              </Button>
+            ) : null}
             <Button
               type="button"
               variant="ghost"
@@ -122,19 +236,18 @@ export function ShengHuiCenterManuscriptColumn(props: {
         ) : null}
         {writeBackStatus === "error" ? <p className="text-[11px] text-destructive">{writeBackError}</p> : null}
 
-        <textarea
-          className={cn(
-            "sheng-hui-paper sheng-hui-paper-typography min-h-0 min-h-[50vh] flex-1 resize-none rounded-xl border border-border/40 p-4 text-foreground placeholder:text-muted-foreground/40 focus:border-primary/35 focus:outline-none focus:ring-2 focus:ring-primary/15",
-            paperTint,
-            focusMode && "min-h-[60vh] text-[17px] leading-[1.9] sm:text-[18px]",
-            !focusMode && "bg-background/80",
-            focusMode && "bg-background/90",
-          )}
-          placeholder={busy ? "生成中…" : `在此编辑正文…\n（${modeDesc}）`}
-          value={output}
-          onChange={(e) => onOutputChange(e.target.value)}
-          aria-label="生辉主稿"
-          disabled={busy}
+        <ShengHuiManuscriptDualModeBody
+          output={output}
+          onOutputChange={onOutputChange}
+          busy={busy}
+          modeDesc={modeDesc}
+          paperTint={paperTint}
+          focusMode={focusMode}
+          emotionLabel={String(emotionTemperature)}
+          isEditing={isEditing}
+          onRequestEdit={enterEdit}
+          onRequestRead={exitEdit}
+          paragraphToolbar={paragraphToolbar}
         />
       </div>
     </section>

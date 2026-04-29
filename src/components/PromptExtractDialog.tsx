@@ -207,6 +207,8 @@ export function PromptExtractDialog(props: PromptExtractDialogProps) {
         title: effectiveName,
         type: selectedType,
         tags: effectiveTags,
+        intro:
+          "【藏经提炼】请在提示词库中补充「提示词介绍」；列表不展示正文。",
         body: streamText.trim(),
         status,
         slots,

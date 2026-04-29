@@ -30,7 +30,7 @@ export function ShengHuiRightColumnSyncHint({
 }: ShengHuiRightColumnSyncHintProps) {
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">说明</p>
+      <p className="sheng-hui-eyebrow">说明</p>
       <p className="text-[11px] leading-relaxed text-muted-foreground/90">
         <strong className="font-medium text-foreground/80">上下文注入、藏经风格参考、场景与人物</strong>{" "}
         请在右侧「素材」中调整；模式、大纲与生成在「仿写」。

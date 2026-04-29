@@ -9,6 +9,7 @@ import {
   generateShengHuiProseStream,
 } from "../ai/sheng-hui-generate";
 import { confirmInjectionPrompt, resolveInjectionConfirmPrompt } from "../util/ai-injection-confirm";
+import { isAbortError } from "../util/is-abort-error";
 import { appendShengHuiSnapshot, type ShengHuiSnapshot } from "../util/sheng-hui-snapshots";
 import type { AiSettings } from "../ai/types";
 
@@ -211,8 +212,7 @@ export function useShengHuiGenerationLifecycle(
         skipSnapshotAppend = true;
         return;
       }
-      const aborted = e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message));
-      if (!aborted) setError(e instanceof Error ? e.message : String(e));
+      if (!isAbortError(e)) setError(e instanceof Error ? e.message : String(e));
     } finally {
       if (!skipSnapshotAppend && runWorkId) {
         const t = accRef.current.trim();

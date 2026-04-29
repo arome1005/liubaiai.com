@@ -69,6 +69,12 @@ export function useShengHuiWorkspacePrefs() {
       if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
         e.preventDefault();
         toggleFocusMode();
+        return;
+      }
+      // 第三节：F11 切换专注，避免全屏时抢浏览器默认行为时仍用同一入口
+      if (e.key === "F11") {
+        e.preventDefault();
+        toggleFocusMode();
       }
     };
     window.addEventListener("keydown", onKey);

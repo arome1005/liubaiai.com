@@ -9,6 +9,7 @@ import type { AiChatMessage, AiProviderConfig, AiProviderId, AiSettings } from "
 import type { AiUsageEventRow } from "../../storage/ai-usage-db";
 import { ownerModeWillBypassBudget } from "../../util/owner-mode";
 import { errorSuggestsContextDegrade } from "../../util/ai-degrade-retry";
+import { isAbortError } from "../../util/is-abort-error";
 import type { CostGatePayload } from "../CostGateModal";
 import type { GenPhaseEvent } from "./useGenPhase";
 
@@ -198,9 +199,7 @@ export function useAiPanelStreamingRun(args: UseAiPanelStreamingRunArgs) {
           dispatchGenPhase({ type: "abort" });
           return { success: false, segmentText: "" };
         }
-        const aborted =
-          e instanceof Error && (e.name === "AbortError" || /abort/i.test(e.message));
-        if (aborted) {
+        if (isAbortError(e)) {
           dispatchGenPhase({ type: "abort" });
         } else {
           const msg = e instanceof Error ? e.message : "AI 调用失败";
