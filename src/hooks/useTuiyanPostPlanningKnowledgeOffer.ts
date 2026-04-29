@@ -21,7 +21,16 @@ type Args = {
 }
 
 /**
- * 任一层级规划（总纲…详细细纲）成功生成后：问是否用模型将人物/词条写满书斋，再衔接「生成即入库」chip 合并。
+ * 任一层级规划（总纲…详细细纲）成功生成后：问是否用模型为人物/词条卡补简要信息。
+ *
+ * 选「是」：调 `applyPlanningKnowledgeToLibrary` → 直接 upsert 到 `BibleCharacter` /
+ * `BibleGlossaryTerm` 表（与写作页书斋是同一张表），完成后：
+ *   1. `bumpChipLibRefreshKey()` → 规划页 chip 自动从「未入库」切到「已入库 · 自带卡片信息」
+ *   2. `runAutoLink(autoLinkItems)` → 仅当用户开了「生成即入库」时，再跑一次 chip 名/句级 autoLink
+ *      （处理 enrich 没覆盖到的 chip，例如纯地名/势力字段）
+ *   3. 写作页 → 书斋 → 立即可见（无需任何额外开关）
+ *
+ * 选「先不生成」：与此前一致，只跑 `runAutoLink`（受「生成即入库」开关控制）。
  */
 export function useTuiyanPostPlanningKnowledgeOffer({
   workId,
@@ -66,11 +75,16 @@ export function useTuiyanPostPlanningKnowledgeOffer({
       const st = await applyPlanningKnowledgeToLibrary(workId, p.extractInputs)
       bumpChipLibRefreshKey()
       runAutoLink(p.autoLinkItems)
-      const parts: string[] = [
-        `人物 新增 ${st.characters.added}、更新 ${st.characters.updated}`,
-        `词条 新增 ${st.terms.added}、更新 ${st.terms.updated}`,
-      ]
-      toast({ title: "已写入书斋", description: parts.join(" · ") })
+      const charTotal = st.characters.added + st.characters.updated
+      const termTotal = st.terms.added + st.terms.updated
+      const parts: string[] = []
+      if (charTotal > 0) parts.push(`人物 ${charTotal}`)
+      if (termTotal > 0) parts.push(`词条 ${termTotal}`)
+      const summary = parts.length > 0 ? parts.join(" · ") : "无新增内容"
+      toast({
+        title: "已写入书斋",
+        description: `${summary} · 写作页书斋已同步`,
+      })
     } catch (e) {
       const msg = e instanceof Error ? e.message : "未知错误"
       toast({ title: "书斋未写入", description: msg, variant: "destructive" })

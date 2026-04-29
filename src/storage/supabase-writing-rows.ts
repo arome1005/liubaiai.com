@@ -171,6 +171,7 @@ export function parseBibleCharacterRow(r: Json): BibleCharacter {
     relationships: (r.relationships as string) ?? "",
     voiceNotes: (r.voice_notes as string) ?? "",
     taboos: (r.taboos as string) ?? "",
+    quoteSamples: (r.quote_samples as string) ?? "",
     sortOrder: Number(r.sort_order),
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
@@ -337,11 +338,15 @@ export function parseWritingStyleSampleRow(r: Json): WritingStyleSample {
 
 export function parseGlobalPromptTemplateRow(r: Json): GlobalPromptTemplate {
   const reviewNote = (r.review_note as string | null | undefined) ?? undefined;
+  const intro = (r.intro as string | null | undefined) ?? "";
+  const usageMethod = (r.usage_method as string | null | undefined) ?? "";
   return {
     id: r.id as string,
     title: (r.title as string) ?? "",
     type: ((r.type as string) ?? "continue") as PromptType,
     tags: Array.isArray(r.tags) ? (r.tags as string[]) : [],
+    intro: intro,
+    usageMethod: usageMethod.trim() ? usageMethod : undefined,
     body: (r.body as string) ?? "",
     status: ((r.status as string) ?? "draft") as PromptStatus,
     ...(reviewNote ? { reviewNote } : {}),

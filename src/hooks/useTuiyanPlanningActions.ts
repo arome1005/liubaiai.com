@@ -33,17 +33,19 @@ import { loadAiSettings } from "../ai/storage"
 import type { TuiyanGenProgressControls } from "./useTuiyanGenProgress"
 import type { AutoLinkItem } from "../util/tuiyan-chip-autolink"
 import {
+  clampPlanningOutlineItemCount,
   countCharsNoPunct,
   countCharsWithPunct,
   listPlanningChildren,
   PLANNING_LEVEL_TO_SLOT,
-  PLANNING_MIN_CHARS,
   planningNodeTitleFallback,
   resolveOutlineTargetVolumeCount,
   resolveVolumeTargetChapterCount,
   serializePlanningNodeForCount,
   type PlanningScale,
 } from "../util/tuiyan-planning"
+import { filterPlanningPushCandidatesBySubtreeScope } from "../util/tuiyan-planning-push"
+import type { PlanningThickness } from "../util/tuiyan-planning-thickness"
 
 type ToastFn = ReturnType<typeof useToast>["toast"]
 type PlanningMode = "model" | "template"
@@ -62,6 +64,8 @@ export type UseTuiyanPlanningActionsArgs = {
   planningVolumeTargetChaptersByNodeId: Record<string, number>
   planningActiveOutline: TuiyanPlanningNode | null
   planningActiveVolume: TuiyanPlanningNode | null
+  /** 已归一化；与提示词、本地校验一致 */
+  planningThickness: PlanningThickness
   planningPushCandidates: TuiyanPlanningPushCandidate[]
   planningStructuredMetaByNodeId: Record<string, PlanningNodeStructuredMeta>
   makePlanningContext: (
@@ -129,6 +133,7 @@ export function useTuiyanPlanningActions({
   planningVolumeTargetChaptersByNodeId,
   planningActiveOutline,
   planningActiveVolume,
+  planningThickness,
   planningPushCandidates,
   planningStructuredMetaByNodeId,
   makePlanningContext,
@@ -183,7 +188,7 @@ export function useTuiyanPlanningActions({
       let genFailed = false
       try {
         if (planningMode === "template" && !selectedPromptTemplateRef.current) {
-          throw new TuiyanPlanningGenerateError("当前是模板高级模式，请先在顶部选择一个提示词模板。")
+          throw new TuiyanPlanningGenerateError("当前是模板高级模式，请先选择提示词模板。")
         }
         if (level === "master_outline") {
           if (!planningIdea.trim()) {
@@ -199,6 +204,7 @@ export function useTuiyanPlanningActions({
             signal: ac.signal,
             onChunk,
             workId,
+            planningThickness,
           })
           const it0 = items[0]!
           const masterText = serializePlanningNodeForCount(
@@ -207,9 +213,9 @@ export function useTuiyanPlanningActions({
             it0.structuredMeta as Record<string, string | undefined>,
           )
           const masterCharCount = countCharsNoPunct(masterText)
-          if (masterCharCount < PLANNING_MIN_CHARS.masterOutlineNoPunct) {
+          if (masterCharCount < planningThickness.masterOutlineMinNoPunct) {
             throw new TuiyanPlanningGenerateError(
-              `总纲字数（${masterCharCount}字，不含标点）不足 ${PLANNING_MIN_CHARS.masterOutlineNoPunct} 字，请重试。`,
+              `总纲字数（${masterCharCount}字，不含标点）不足 ${planningThickness.masterOutlineMinNoPunct} 字，请重试或在「高级设置」中调低下限。`,
             )
           }
           const nodes: TuiyanPlanningNode[] = items.slice(0, 1).map((it, idx) => ({
@@ -275,15 +281,17 @@ export function useTuiyanPlanningActions({
         }
         if (level === "outline") {
           const userInput = makePlanningContext("outline", parentNode)
+          const outlineN = clampPlanningOutlineItemCount(planningScale.outlineItemCount)
           const { items } = await generateTuiyanPlanningList({
             level: "outline",
-            desiredCount: 3,
+            desiredCount: outlineN,
             userInput,
             imitationMode: referenceImitationMode,
             settings: loadAiSettings(),
             signal: ac.signal,
             onChunk,
             workId,
+            planningThickness,
           })
           const outlineCombinedText = items
             .map((it) =>
@@ -295,9 +303,9 @@ export function useTuiyanPlanningActions({
             )
             .join("\n\n")
           const outlineCharCount = countCharsWithPunct(outlineCombinedText)
-          if (outlineCharCount < PLANNING_MIN_CHARS.outlineTotalWithPunct) {
+          if (outlineCharCount < planningThickness.outlineTotalWithPunct) {
             throw new TuiyanPlanningGenerateError(
-              `一级大纲合计字数（${outlineCharCount}字，含标点）不足 ${PLANNING_MIN_CHARS.outlineTotalWithPunct} 字，请重试。`,
+              `一级大纲合计字数（${outlineCharCount}字，含标点）不足 ${planningThickness.outlineTotalWithPunct} 字，请重试或在「高级设置」中调低下限。`,
             )
           }
           const nodes: TuiyanPlanningNode[] = items.map((it, idx) => ({
@@ -378,6 +386,7 @@ export function useTuiyanPlanningActions({
             signal: ac.signal,
             onChunk,
             workId,
+            planningThickness,
           })
           const volItem = items[0]!
           const volText = serializePlanningNodeForCount(
@@ -386,9 +395,9 @@ export function useTuiyanPlanningActions({
             volItem.structuredMeta as Record<string, string | undefined>,
           )
           const volCharCount = countCharsWithPunct(volText)
-          if (volCharCount < PLANNING_MIN_CHARS.volumeWithPunct) {
+          if (volCharCount < planningThickness.volumeWithPunct) {
             throw new TuiyanPlanningGenerateError(
-              `第 ${nextVolumeOrder + 1} 卷卷纲字数（${volCharCount}字，含标点）不足 ${PLANNING_MIN_CHARS.volumeWithPunct} 字，请重试。`,
+              `第 ${nextVolumeOrder + 1} 卷卷纲字数（${volCharCount}字，含标点）不足 ${planningThickness.volumeWithPunct} 字，请重试或在「高级设置」中调低下限。`,
             )
           }
           const newVolNode: TuiyanPlanningNode = {
@@ -446,7 +455,22 @@ export function useTuiyanPlanningActions({
             signal: ac.signal,
             onChunk,
             workId,
+            planningThickness,
           })
+          for (let i = 0; i < items.length; i++) {
+            const it = items[i]!
+            const coText = serializePlanningNodeForCount(
+              it.title,
+              it.summary,
+              it.structuredMeta as Record<string, string | undefined>,
+            )
+            const coCount = countCharsWithPunct(coText)
+            if (coCount < planningThickness.chapterOutlineMinPerNodeWithPunct) {
+              throw new TuiyanPlanningGenerateError(
+                `第 ${i + 1} 条章细纲（标题+摘要+结构化信息，含标点）为 ${coCount} 字，不足 ${planningThickness.chapterOutlineMinPerNodeWithPunct} 字，请重试或在「高级设置」中调低下限。`,
+              )
+            }
+          }
           const volumeChapters = chapters.filter((c) => c.volumeId === parentNode.id)
           const fallbackChapters = volumeChapters.length ? volumeChapters : chapters
           const nodes: TuiyanPlanningNode[] = items.map((it, idx) => ({
@@ -503,6 +527,7 @@ export function useTuiyanPlanningActions({
           signal: ac.signal,
           onChunk,
           workId,
+          planningThickness,
         })
         const existing = listPlanningChildren(planningTree, parentNode.id, "chapter_detail")[0]
         const detailNode: TuiyanPlanningNode =
@@ -511,7 +536,7 @@ export function useTuiyanPlanningActions({
             parentId: parentNode.id,
             level: "chapter_detail",
             title: `${parentNode.title}·详细细纲`,
-            summary: "可直接写作的详细细纲",
+            summary: "",
             order: 0,
           }
         setPlanningTree((prev) => {
@@ -576,25 +601,26 @@ export function useTuiyanPlanningActions({
       planningAbortRef,
       planningIdea,
       planningMode,
-      planningOutlineTargetVolumesByNodeId,
-      planningScale,
-      planningTree,
-      planningVolumeTargetChaptersByNodeId,
-      planningStructuredMetaByNodeId,
-      referenceImitationMode,
-      resetProgress,
-      onPlanningLevelKnowledgeOffer,
-      runAutoLink,
-      selectedPromptTemplateRef,
-      setPlanningBusyLevel,
-      setPlanningDraftsByNodeId,
-      setPlanningError,
-      setPlanningSelectedNodeId,
-      setPlanningStructuredMetaByNodeId,
-      setPlanningTree,
-      upsertPlanningMeta,
-      workId,
-    ],
+    planningOutlineTargetVolumesByNodeId,
+    planningScale,
+    planningThickness,
+    planningTree,
+    planningVolumeTargetChaptersByNodeId,
+    planningStructuredMetaByNodeId,
+    referenceImitationMode,
+    resetProgress,
+    onPlanningLevelKnowledgeOffer,
+    runAutoLink,
+    selectedPromptTemplateRef,
+    setPlanningBusyLevel,
+    setPlanningDraftsByNodeId,
+    setPlanningError,
+    setPlanningSelectedNodeId,
+    setPlanningStructuredMetaByNodeId,
+    setPlanningTree,
+    upsertPlanningMeta,
+    workId,
+  ],
   )
 
   const regenerateCurrentVolume = useCallback(async () => {
@@ -642,6 +668,7 @@ export function useTuiyanPlanningActions({
         signal: ac.signal,
         onChunk,
         workId,
+        planningThickness,
       })
       const volItem = items[0]!
       const volText = serializePlanningNodeForCount(
@@ -650,9 +677,9 @@ export function useTuiyanPlanningActions({
         volItem.structuredMeta as Record<string, string | undefined>,
       )
       const volCharCount = countCharsWithPunct(volText)
-      if (volCharCount < PLANNING_MIN_CHARS.volumeWithPunct) {
+      if (volCharCount < planningThickness.volumeWithPunct) {
         throw new TuiyanPlanningGenerateError(
-          `重生成的第 ${volumeOrder + 1} 卷卷纲字数（${volCharCount}字，含标点）不足 ${PLANNING_MIN_CHARS.volumeWithPunct} 字，请重试。`,
+          `重生成的第 ${volumeOrder + 1} 卷卷纲字数（${volCharCount}字，含标点）不足 ${planningThickness.volumeWithPunct} 字，请重试或在「高级设置」中调低下限。`,
         )
       }
       const newVolNode: TuiyanPlanningNode = {
@@ -714,6 +741,7 @@ export function useTuiyanPlanningActions({
     onPlanningLevelKnowledgeOffer,
     planningOutlineTargetVolumesByNodeId,
     planningScale,
+    planningThickness,
     planningTree,
     referenceImitationMode,
     resetProgress,
@@ -728,8 +756,20 @@ export function useTuiyanPlanningActions({
 
   const doPushPlanningTree = useCallback(async (opts: KnowledgePushOptions) => {
     if (!workId || planningPushCandidates.length === 0) return
+    const effective = filterPlanningPushCandidatesBySubtreeScope(
+      planningPushCandidates,
+      opts.subtreeScope,
+    )
+    if (effective.length === 0) {
+      toast({
+        title: "无法推送",
+        description: "所选子树无节点，请重选推送范围。",
+        variant: "destructive",
+      })
+      return
+    }
     const pushedAt = Date.now()
-    const nextEntries: TuiyanPushedOutlineEntry[] = planningPushCandidates.map((candidate) => ({
+    const nextEntries: TuiyanPushedOutlineEntry[] = effective.map((candidate) => ({
       id: candidate.id,
       parentId: candidate.parentId,
       level: candidate.level,
@@ -749,7 +789,7 @@ export function useTuiyanPlanningActions({
     }
 
     const filterLevels = opts.levelFilter
-    const extractInputs: KnowledgeExtractInput[] = planningPushCandidates
+    const extractInputs: KnowledgeExtractInput[] = effective
       .filter((c) => filterLevels.length === 0 || filterLevels.includes(c.level))
       .map((c) => ({
         nodeId: c.id,

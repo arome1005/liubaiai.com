@@ -622,6 +622,19 @@ export class WritingStoreHybrid implements WritingStore {
     return this.mergeGlobalPromptLists(remote, local);
   }
 
+  async getGlobalPromptTemplate(id: string): Promise<GlobalPromptTemplate | undefined> {
+    try {
+      const r = await this.remote.getGlobalPromptTemplate(id);
+      if (r) {
+        this.warmLocal(() => getDB().globalPromptTemplates.put(r));
+        return r;
+      }
+    } catch {
+      /* fall through */
+    }
+    return this.local.getGlobalPromptTemplate(id);
+  }
+
   async addGlobalPromptTemplate(
     input: Omit<GlobalPromptTemplate, "id" | "sortOrder" | "createdAt" | "updatedAt">,
   ): Promise<GlobalPromptTemplate> {

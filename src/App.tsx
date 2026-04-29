@@ -9,6 +9,7 @@ import { BiblePage } from "./pages/BiblePage";
 import { LuobiHubPage } from "./pages/LuobiHubPage";
 import { LuobiGeneratorPage } from "./pages/LuobiGeneratorPage";
 import { PromptsPage } from "./pages/PromptsPage";
+import { PromptFormPage } from "./pages/PromptFormPage";
 import { EditorPage } from "./pages/EditorPage";
 import { ReshapePage } from "./pages/ReshapePage";
 import { SummaryOverviewPage } from "./pages/SummaryOverviewPage";
@@ -148,6 +149,8 @@ export default function App() {
             <Route path="/luobi" element={<LuobiHubPage />} />
             <Route path="/luobi/generate/:mode" element={<LuobiGeneratorPage />} />
             <Route path="/prompts" element={<PromptsPage />} />
+            <Route path="/prompts/new" element={<PromptFormPage />} />
+            <Route path="/prompts/:id/edit" element={<PromptFormPage />} />
             <Route path="/work/:workId/bible" element={<BiblePage />} />
             <Route path="/work/:workId/summary" element={<SummaryOverviewPage />} />
             <Route path="/reference" element={<ReferenceLibraryPage />} />

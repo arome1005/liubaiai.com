@@ -89,15 +89,18 @@ import { useTopbar } from "../components/TopbarContext";
 import { EDITOR_TYPOGRAPHY_EVENT, loadEditorTypography, type EditorPaperTint } from "../util/editor-typography";
 import { useResolvedWorkFromRoute } from "../hooks/useResolvedWorkFromRoute";
 import { useEditorOpenAiFromQuery } from "../hooks/useEditorOpenAiFromQuery";
+import { useEditorChapterViewInserts } from "../hooks/useEditorChapterViewInserts";
 import { useEditorRightRailMount } from "../hooks/useEditorRightRailMount";
 import { useWorkAiContext } from "../hooks/useWorkAiContext";
 import { workPathSegment } from "../util/work-url";
 import { HOTKEY_EVENT, matchHotkey, readZenToggleHotkey } from "../util/hotkey-config";
 import { loadChapterNote, saveChapterNote, hasChapterNote, warmChapterNoteCache } from "../util/chapter-notes-storage";
 import { useEditorPersist, useAutoSave } from "../hooks/useEditorPersist";
+import { useEditorShengHuiHandoffNavigation } from "../hooks/useEditorShengHuiHandoffNavigation";
 import { downloadBlob, safeFilename } from "../util/download";
 import { ExportBookDialog } from "../components/ExportBookDialog";
 import { ChapterSnapshotDialog } from "../components/ChapterSnapshotDialog";
+import { EditorShengHuiContextSurface, EditorShengHuiToolbarMenu } from "../components/editor/EditorShengHuiFromWritingControls";
 import { BookSearchDialog } from "../components/BookSearchDialog";
 import { PushedOutlineTree } from "../components/editor/PushedOutlineTree";
 import { PullOutlineDialog } from "../components/editor/PullOutlineDialog";
@@ -314,14 +317,6 @@ export function EditorPage() {
   /** P1-A：content 防抖版本，传给 setTabContent 副作用，避免每次击键都重新挂载面板 */
   const aiPanelContent = useDebouncedValue(content, 600);
 
-  /** P1-A：稳定的 AiPanel / 右侧栏回调引用，防止 setTabContent 副作用因函数引用变化而重触发 */
-  const getSelectedText = useCallback(() => editorRef.current?.getSelectedText() ?? "", []);
-  const insertAtCursor = useCallback((t: string) => editorRef.current?.insertTextAtCursor(t), []);
-  const appendToEnd = useCallback((t: string) => editorRef.current?.appendTextToEnd(t), []);
-  const replaceSelection = useCallback((text: string) => editorRef.current?.replaceSelection(text), []);
-  const ensureChapterViewBeforeInsert = useCallback(() => {
-    setSidebarTab("chapter");
-  }, []);
   const onAiPanelClose = useCallback(() => {
     setAiOpen(false);
     setRightRailOpen(false);
@@ -330,11 +325,6 @@ export function EditorPage() {
   const onSummaryChapterPatch = useCallback((id: string, patch: Partial<Chapter>) => {
     setChapters((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)));
   }, []);
-  const onRefInsert = useCallback((t: string) => {
-    const ins = t.endsWith("\n") ? t : t + "\n\n";
-    editorRef.current?.insertTextAtCursor(ins);
-    setRightRailOpen(false);
-  }, [setRightRailOpen]);
 
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [batchSummaryOpen, setBatchSummaryOpen] = useState(false);
@@ -401,6 +391,18 @@ export function EditorPage() {
   const contentRef = useRef(content);
   const activeIdRef = useRef(activeId);
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
+  /** 侧栏「插入/追加/替换」：章纲 Tab 时编辑器未挂载，需等切回章节正文再写入（见 useEditorChapterViewInserts） */
+  const getSelectedText = useCallback(() => editorRef.current?.getSelectedText() ?? "", []);
+  const { insertAtCursor, appendToEnd, replaceSelection, ensureChapterViewBeforeInsert } =
+    useEditorChapterViewInserts(sidebarTab, setSidebarTab, activeId, editorRef);
+  const onRefInsert = useCallback(
+    (t: string) => {
+      const ins = t.endsWith("\n") ? t : t + "\n\n";
+      insertAtCursor(ins);
+      setRightRailOpen(false);
+    },
+    [insertAtCursor, setRightRailOpen],
+  );
   /** 章切换后把焦点还给正文（§E.2.3）；全屏/模态打开时不抢焦点 */
   useEffect(() => {
     if (!activeId) return;
@@ -465,6 +467,7 @@ export function EditorPage() {
   }, [sidebarTab, selectedOutlineEntryId, pushedOutlines]);
 
   const outlineMode = sidebarTab === "outline";
+  const goShengHuiHandoff = useEditorShengHuiHandoffNavigation(navigate, workId, activeId, getSelectedText);
   const [pullOutlineDialogOpen, setPullOutlineDialogOpen] = useState(false);
 
   const openPullOutlineDialog = useCallback(() => {
@@ -1053,23 +1056,16 @@ export function EditorPage() {
       setRightRailOpen(true);
       setRightRailActiveTab("ai");
     });
-    const tryInsert = async (n: number): Promise<void> => {
-      if (n <= 0) return;
-      if (!editorRef.current) {
-        await new Promise((r) => window.setTimeout(r, 60));
-        return tryInsert(n - 1);
-      }
+    void (async () => {
       const cur = contentRef.current ?? "";
       const needle = text.trim().slice(0, 80);
       if (needle && cur.includes(needle)) {
         if (!(await imperativeDialog.confirm("检测到正文中可能已存在相同片段，仍要在光标处插入吗？"))) return;
       }
-      editorRef.current?.insertTextAtCursor(text);
+      insertAtCursor(text);
       setLiuguangReturnVisible(true);
-    };
-    void tryInsert(12);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workId, activeId]);
+    })();
+  }, [workId, activeId, insertAtCursor]);
 
   // 流光转入：章末追加 / 写入侧栏草稿（与 insertCursor 类似，由 query param 触发一次）
   useEffect(() => {
@@ -1102,16 +1098,8 @@ export function EditorPage() {
         if (needle && cur.includes(needle)) {
           if (!(await imperativeDialog.confirm("检测到正文中可能已存在相同片段，仍要追加到章末吗？"))) return;
         }
-        const tryAppend = (n: number) => {
-          if (n <= 0) return;
-          if (editorRef.current) {
-            editorRef.current.appendTextToEnd(text);
-            setLiuguangReturnVisible(true);
-            return;
-          }
-          window.setTimeout(() => tryAppend(n - 1), 60);
-        };
-        tryAppend(12);
+        appendToEnd(text);
+        setLiuguangReturnVisible(true);
       })();
       return;
     }
@@ -1144,8 +1132,7 @@ export function EditorPage() {
       return tryDraft(n - 1);
     };
     void tryDraft(12);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workId, activeId, activeChapter]);
+  }, [workId, activeId, activeChapter, appendToEnd]);
 
   useEffect(() => {
     if (!workId || !activeId) return;
@@ -1199,7 +1186,7 @@ export function EditorPage() {
   function insertExcerptIntoEditor(text: string) {
     const ins = text.endsWith("\n") ? text : text + "\n\n";
     if (!activeChapter) return;
-    editorRef.current?.insertTextAtCursor(ins);
+    insertAtCursor(ins);
   }
 
   async function copySelectionToClipboard() {
@@ -1215,7 +1202,7 @@ export function EditorPage() {
   function duplicateSelectionAfterCaret() {
     const t = getSelectedText();
     if (!t) return;
-    editorRef.current?.insertTextAtCursor(t);
+    insertAtCursor(t);
   }
 
   useEffect(() => {
@@ -2882,6 +2869,10 @@ export function EditorPage() {
                 >
                   ⧉
                 </button>
+                <EditorShengHuiToolbarMenu
+                  disabled={!workId || !activeChapter}
+                  onShengHui={goShengHuiHandoff}
+                />
                 <button
                   type="button"
                   className="icon-btn editor-xy-inline-icon"
@@ -3181,15 +3172,21 @@ export function EditorPage() {
                     </div>
                   ) : null}
                   {activeChapter ? (
-                    <CodeMirrorEditor
-                      key={activeChapter.id}
-                      ref={editorRef}
-                      className="editor-textarea cm6-editor"
-                      value={content}
-                      onChange={setContent}
-                      ariaLabel="正文编辑器"
-                      placeholderText="请输入章节内容"
-                    />
+                    <EditorShengHuiContextSurface
+                      enabled={Boolean(workId && activeId && !outlineMode)}
+                      getSelectedText={getSelectedText}
+                      onShengHui={goShengHuiHandoff}
+                    >
+                      <CodeMirrorEditor
+                        key={activeChapter.id}
+                        ref={editorRef}
+                        className="editor-textarea cm6-editor"
+                        value={content}
+                        onChange={setContent}
+                        ariaLabel="正文编辑器"
+                        placeholderText="请输入章节内容"
+                      />
+                    </EditorShengHuiContextSurface>
                   ) : (
                     <div className="editor-xy-empty">
                       <div className="editor-xy-empty__card">

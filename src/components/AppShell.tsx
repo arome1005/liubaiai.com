@@ -44,6 +44,7 @@ function sectionLabelFromPath(pathname: string): string {
   if (pathname.startsWith("/inspiration")) return "流光";
   if (pathname.startsWith("/chat")) return "问策";
   if (pathname.startsWith("/sheng-hui")) return "生辉";
+  if (pathname.startsWith("/prompts")) return "落笔";
   if (pathname.startsWith("/luobi")) return "落笔";
   if (pathname.includes("/bible")) return "落笔";
   if (pathname.includes("/summary")) return "概要";
@@ -354,7 +355,9 @@ export function AppShell() {
   }, []);
 
   const isLuobiHubLike = pathname === "/luobi" || pathname.startsWith("/luobi/");
-  const showPageTopbar = !hubPaths.has(pathname) && !isWorkBibleOrSummaryPath(pathname) && !isLuobiHubLike;
+  const isPromptsHubLike = pathname === "/prompts" || pathname.startsWith("/prompts/");
+  const showPageTopbar =
+    !hubPaths.has(pathname) && !isWorkBibleOrSummaryPath(pathname) && !isLuobiHubLike && !isPromptsHubLike;
 
   const mastheadModules: {
     id: "library" | "logic" | "inspiration" | "chat" | "work" | "sheng-hui" | "reference";

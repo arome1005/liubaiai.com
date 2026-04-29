@@ -11,14 +11,79 @@ const apiProxy = {
   },
 } as const
 
+/**
+ * 上游连接 / 流式响应可超时较久（单次正文生成可达数分钟）；不显式拉长会被 vite 默认 ~120s
+ * 截断成 502；同时显式监听 `error` 事件，避免 ECONNRESET 透传成空响应。
+ */
+const LONG_PROXY_TIMEOUT_MS = 10 * 60 * 1000
+
+type ProxyConfigureOptions = {
+  on: (event: 'error' | 'proxyReq' | 'proxyRes', handler: (...args: unknown[]) => void) => void
+}
+
+function attachUpstreamErrorLogger(label: string) {
+  return (proxy: ProxyConfigureOptions) => {
+    proxy.on('error', (...args) => {
+      const err = args[0] as { code?: string; message?: string } | undefined
+      const res = args[2] as
+        | { headersSent?: boolean; writeHead?: (s: number, h: Record<string, string>) => void; end?: (b?: string) => void }
+        | undefined
+      // eslint-disable-next-line no-console
+      console.warn(`[proxy:${label}] upstream error:`, err?.code ?? err?.message ?? err)
+      if (res && !res.headersSent && res.writeHead && res.end) {
+        try {
+          res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' })
+          res.end(
+            JSON.stringify({
+              error: {
+                message: `${label} 上游连接异常（${err?.code ?? 'UPSTREAM_ERROR'}）。可稍候重试或在「设置 → AI」切换其它模型。`,
+              },
+            }),
+          )
+        } catch {
+          /* ignore */
+        }
+      }
+    })
+  }
+}
+
 const mimoProxy = {
   '/__proxy/mimo-v2': {
     target: 'https://api.mimo-v2.com',
     changeOrigin: true,
     secure: true,
     rewrite: (path: string) => path.replace(/^\/__proxy\/mimo-v2/, ''),
+    timeout: LONG_PROXY_TIMEOUT_MS,
+    proxyTimeout: LONG_PROXY_TIMEOUT_MS,
+    configure: attachUpstreamErrorLogger('小米 MiMo'),
   },
 } as const
+
+/**
+ * 小米 MiMo · Token Plan 套餐专属域名（订阅后才能用，需配套 tp-* API Key）。
+ * 与 `mimoProxy` 互不影响：未购套餐的用户仍走 api.mimo-v2.com。
+ */
+function makeMimoTokenPlanProxy(region: 'cn' | 'sgp' | 'ams') {
+  const path = `/__proxy/mimo-tp-${region}`
+  return {
+    [path]: {
+      target: `https://token-plan-${region}.xiaomimimo.com`,
+      changeOrigin: true,
+      secure: true,
+      rewrite: (p: string) => p.replace(new RegExp(`^/__proxy/mimo-tp-${region}`), ''),
+      timeout: LONG_PROXY_TIMEOUT_MS,
+      proxyTimeout: LONG_PROXY_TIMEOUT_MS,
+      configure: attachUpstreamErrorLogger(`小米 Token Plan ${region.toUpperCase()}`),
+    },
+  } as const
+}
+
+const mimoTokenPlanProxies = {
+  ...makeMimoTokenPlanProxy('cn'),
+  ...makeMimoTokenPlanProxy('sgp'),
+  ...makeMimoTokenPlanProxy('ams'),
+}
 
 /** 豆包/火山 Ark：与小米类似，浏览器直连常无 CORS，开发时走同源再转发到 volces */
 const doubaoArkProxy = {
@@ -27,6 +92,9 @@ const doubaoArkProxy = {
     changeOrigin: true,
     secure: true,
     rewrite: (path: string) => path.replace(/^\/__proxy\/doubao-ark/, ''),
+    timeout: LONG_PROXY_TIMEOUT_MS,
+    proxyTimeout: LONG_PROXY_TIMEOUT_MS,
+    configure: attachUpstreamErrorLogger('豆包 Ark'),
   },
 } as const
 
@@ -59,6 +127,7 @@ export default defineConfig({
     proxy: {
       ...apiProxy,
       ...mimoProxy,
+      ...mimoTokenPlanProxies,
       ...doubaoArkProxy,
     },
   },
@@ -70,6 +139,7 @@ export default defineConfig({
     proxy: {
       ...apiProxy,
       ...mimoProxy,
+      ...mimoTokenPlanProxies,
       ...doubaoArkProxy,
     },
   },

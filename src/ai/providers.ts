@@ -64,15 +64,31 @@ export function shouldUseRouterProtocol(cfg: AiProviderConfig): boolean {
   return isOpenRouterBaseUrl(cfg.baseUrl);
 }
 
-/** 开发环境下：官方 MiMo 域名走 Vite 同源代理，避免 CORS 导致 Failed to fetch */
+/**
+ * 开发环境下：将官方 MiMo 域名映射到对应同源代理，避免浏览器 CORS 拦截。
+ *
+ * 支持两类官方 Base URL：
+ *  - 通用：`api.mimo-v2.com/v1` / `api.xiaomimimo.com/v1`
+ *  - Token Plan 套餐专属：`token-plan-{cn,sgp,ams}.xiaomimimo.com/v1`
+ *    （Token Plan 的 API Key 仅在专属域名下有效，**不能**回退到 api.mimo-v2.com）
+ */
 function xiaomiBaseUrlForRequest(stored: string): string {
   const t = stored.trim();
-  const looksOfficial =
+  const isApiOfficial =
     t === "" ||
     /^https:\/\/api\.mimo-v2\.com\/v1\/?$/i.test(t) ||
     /^https:\/\/api\.xiaomimimo\.com\/v1\/?$/i.test(t);
-  if (import.meta.env.DEV && looksOfficial && typeof window !== "undefined") {
-    return `${window.location.origin}/__proxy/mimo-v2/v1`;
+  const tokenPlanMatch = t.match(
+    /^https:\/\/token-plan-(cn|sgp|ams)\.xiaomimimo\.com\/v1\/?$/i,
+  );
+  if (import.meta.env.DEV && typeof window !== "undefined") {
+    if (tokenPlanMatch) {
+      const region = tokenPlanMatch[1].toLowerCase();
+      return `${window.location.origin}/__proxy/mimo-tp-${region}/v1`;
+    }
+    if (isApiOfficial) {
+      return `${window.location.origin}/__proxy/mimo-v2/v1`;
+    }
   }
   if (t) return t;
   return "https://api.mimo-v2.com/v1";
@@ -148,7 +164,12 @@ function bearerTokenForOpenAiCompatible(cfg: AiProviderConfig): string | undefin
   return k;
 }
 
-/** 小米 MiMo 官方文档使用 max_completion_tokens（非 max_tokens），与部分 OpenAI 兼容实现不同 */
+/**
+ * 构造 OpenAI 兼容请求体；按 provider 做差异化处理：
+ * - 小米 MiMo：使用 `max_completion_tokens`（非 `max_tokens`）。
+ * - 智谱 GLM：`temperature` 严格在 `(0, 1)` 开区间内（0/1 会被 400），且 **不支持 `stream_options`**
+ *   （服务端 400 「unrecognized parameter」）。
+ */
 function openAiChatBody(
   cfg: AiProviderConfig,
   messages: AiChatMessage[],
@@ -156,19 +177,52 @@ function openAiChatBody(
   stream: boolean,
   maxOutputTokens?: number,
 ): Record<string, unknown> {
+  const isZhipu = cfg.id === "zhipu";
+  const tempLow = isZhipu ? 0.01 : 0;
+  const tempHigh = isZhipu ? 0.99 : 2;
   const body: Record<string, unknown> = {
     model: cfg.model,
     messages,
-    temperature: Math.min(2, Math.max(0, temperature)),
+    temperature: Math.min(tempHigh, Math.max(tempLow, temperature)),
   };
   if (cfg.id === "xiaomi") {
-    body.max_completion_tokens = maxOutputTokens != null ? clampStreamMaxOutputTokens(maxOutputTokens) : 8192;
+    body.max_completion_tokens =
+      maxOutputTokens != null ? clampStreamMaxOutputTokens(maxOutputTokens) : 8192;
+  } else if (maxOutputTokens != null) {
+    body.max_tokens = clampStreamMaxOutputTokens(maxOutputTokens);
   }
   if (stream) {
     body.stream = true;
-    body.stream_options = { include_usage: true };
+    if (!isZhipu) {
+      body.stream_options = { include_usage: true };
+    }
   }
   return body;
+}
+
+/**
+ * 对国内云服务（小米 MiMo / 智谱 GLM / 豆包等）开发反代偶发 502/503/504 做一次轻退避重试，
+ * 避免上游瞬时抖动直接报错；流式 *启动阶段* 重试是安全的（response 头还没消费）。
+ * 仅当 `init.body` 是字符串（已 JSON 序列化）时才能复用，避免 stream body 被消费。
+ */
+async function fetchOpenAiCompatibleWithRetry(
+  label: string,
+  url: string,
+  init: RequestInit,
+): Promise<Response> {
+  const r1 = await fetchOrThrowCorsHint(label, url, init);
+  if (r1.ok) return r1;
+  if (![502, 503, 504].includes(r1.status)) return r1;
+  if (init.signal?.aborted) return r1;
+  if (typeof init.body !== "string") return r1;
+  try {
+    await r1.text();
+  } catch {
+    /* ignore */
+  }
+  await new Promise((res) => setTimeout(res, 600));
+  if (init.signal?.aborted) return r1;
+  return fetchOrThrowCorsHint(label, url, init);
 }
 
 export async function generateWithProvider(args: {
@@ -306,13 +360,10 @@ async function generateOpenAI(
 ): Promise<AiGenerateResult> {
   const token = bearerTokenForOpenAiCompatible(cfg);
   const url = joinUrl(resolveOpenAiCompatibleBaseUrl(cfg), "/chat/completions");
-  const payload =
-    cfg.id === "xiaomi"
-      ? openAiChatBody(cfg, messages, temperature, false)
-      : { model: cfg.model, messages, temperature };
+  const payload = openAiChatBody(cfg, messages, temperature, false);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const resp = await fetchOrThrowCorsHint(cfg.label, url, {
+  const resp = await fetchOpenAiCompatibleWithRetry(cfg.label, url, {
     method: "POST",
     headers,
     body: JSON.stringify(payload),
@@ -338,22 +389,10 @@ async function generateOpenAIStream(
 ): Promise<AiGenerateResult> {
   const token = bearerTokenForOpenAiCompatible(cfg);
   const url = joinUrl(resolveOpenAiCompatibleBaseUrl(cfg), "/chat/completions");
-  const payload =
-    cfg.id === "xiaomi"
-      ? openAiChatBody(cfg, messages, temperature, true, maxOutputTokens)
-      : {
-          model: cfg.model,
-          messages,
-          temperature: Math.min(2, Math.max(0, temperature)),
-          stream: true,
-          stream_options: { include_usage: true },
-          ...(maxOutputTokens != null
-            ? { max_tokens: clampStreamMaxOutputTokens(maxOutputTokens) }
-            : {}),
-        };
+  const payload = openAiChatBody(cfg, messages, temperature, true, maxOutputTokens);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const resp = await fetchOrThrowCorsHint(cfg.label, url, {
+  const resp = await fetchOpenAiCompatibleWithRetry(cfg.label, url, {
     method: "POST",
     headers,
     body: JSON.stringify(payload),

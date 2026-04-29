@@ -126,6 +126,8 @@ import { writeAiPanelDraft } from "../util/ai-panel-draft";
 import { writeWenceRefsImport } from "../util/wence-refs-import";
 import { writeEditorHitHandoff } from "../util/editor-hit-handoff";
 import { writeEditorRefsImport } from "../util/editor-refs-import";
+import { useReferenceSearchShengHuiHandoff } from "../hooks/useReferenceSearchShengHuiHandoff";
+import { ReferenceSearchHitShengHuiRow } from "../components/reference/ReferenceSearchHitShengHuiRow";
 
 const CONTEXT_TAIL = 280;
 const CONTEXT_HEAD = 280;
@@ -1699,6 +1701,8 @@ export function ReferenceLibraryPage() {
     });
   }
 
+  const openSearchHitInShengHui = useReferenceSearchShengHuiHandoff(navigate, importWorkId, progressCursor);
+
   async function saveSelectionAsExcerpt() {
     if (!activeRefId) return;
     const ch = loadedChunks.cur;
@@ -2075,22 +2079,13 @@ export function ReferenceLibraryPage() {
               <ul className="space-y-2">
                 {searchHits.map((h) => (
                   <li key={`${h.chunkId}-${h.ordinal}-${h.highlightStart}-${h.snippetMatch}`}>
-                    <button
-                      type="button"
-                      className="w-full rounded-lg border border-black/5 dark:border-border/40 bg-slate-50 dark:bg-background/50 p-3 text-left transition-all duration-300 hover:border-primary/30 hover:bg-white dark:hover:bg-card/80 hover:shadow-sm"
-                      onClick={() => void onHitClick(h)}
-                    >
-                      <span className="text-sm font-medium text-foreground">{h.refTitle}</span>
-                      <span className="ml-2 text-xs text-muted-foreground">
-                        {chapterLabelForHit(h.refWorkId, h.ordinal) ? `${chapterLabelForHit(h.refWorkId, h.ordinal)} · ` : ""}
-                        段 {h.ordinal + 1} · {h.matchCount} 处命中
-                      </span>
-                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                        {h.snippetBefore}
-                        <mark className="rounded bg-primary/20 px-0.5 text-primary">{h.snippetMatch}</mark>
-                        {h.snippetAfter}
-                      </p>
-                    </button>
+                    <ReferenceSearchHitShengHuiRow
+                      hit={h}
+                      chapterLabel={chapterLabelForHit(h.refWorkId, h.ordinal) ?? ""}
+                      shengHuiDisabled={!importWorkId}
+                      onOpenInReader={() => void onHitClick(h)}
+                      onShengHui={() => void openSearchHitInShengHui(h)}
+                    />
                   </li>
                 ))}
               </ul>

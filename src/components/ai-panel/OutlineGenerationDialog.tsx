@@ -335,7 +335,13 @@ export const OutlineGenerationDialog = memo(function OutlineGenerationDialog(pro
                 type="button"
                 className="btn primary"
                 disabled={!canActOnDraft || justInsertedKind !== null}
-                title="把生成结果插入到中间正文编辑区（光标处）"
+                title={
+                  canActOnDraft
+                    ? "把生成结果插入到中间正文编辑区（光标处）"
+                    : seedMode
+                      ? "请先在上方点击「生成正文」，完成流式输出后再插入（当前大框是细纲，0 字时尚无可插入的正文）"
+                      : "生成完成且上方有输出时可插入；若正停留在「章纲」侧栏，插入会自动切到「章节正文」"
+                }
                 onClick={handleInsert}
               >
                 {insertLabel}

@@ -8,6 +8,10 @@ import {
   sortByPopularity,
 } from "../../util/article-summary-prompt-templates";
 import { cn } from "../../lib/utils";
+import {
+  matchesPromptListSearchWithBody,
+  promptLibraryListPreview,
+} from "../../util/prompt-template-display";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -76,12 +80,7 @@ export function ArticleSummaryPromptBrowseModal(props: ArticleSummaryPromptBrows
   const displayed = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return baseList;
-    return baseList.filter(
-      (t) =>
-        t.title.toLowerCase().includes(q) ||
-        t.body.toLowerCase().includes(q) ||
-        t.tags.some((tag) => tag.toLowerCase().includes(q)),
-    );
+    return baseList.filter((t) => matchesPromptListSearchWithBody(t, q));
   }, [baseList, query]);
 
   return (
@@ -160,6 +159,7 @@ export function ArticleSummaryPromptBrowseModal(props: ArticleSummaryPromptBrows
             <ul className="flex flex-col gap-1">
               {displayed.map((t) => {
                 const sel = t.id === selectedId;
+                const listPv = promptLibraryListPreview(t);
                 return (
                   <li key={t.id}>
                     <button
@@ -183,8 +183,13 @@ export function ArticleSummaryPromptBrowseModal(props: ArticleSummaryPromptBrows
                           </span>
                         )}
                       </div>
-                      <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-zinc-500">
-                        {t.body}
+                      <p
+                        className={cn(
+                          "mt-1 line-clamp-2 text-[11px] leading-relaxed",
+                          listPv.isPlaceholder ? "text-zinc-600 italic" : "text-zinc-500",
+                        )}
+                      >
+                        {listPv.text}
                       </p>
                       <p className="mt-1 text-[10px] text-zinc-600">
                         更新 {new Date(t.updatedAt).toLocaleDateString("zh-CN")}

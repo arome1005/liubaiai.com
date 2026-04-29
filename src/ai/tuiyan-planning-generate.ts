@@ -1,4 +1,9 @@
 import type { PlanningNodeStructuredMeta, TuiyanImitationMode } from "../db/types";
+import { countCharsWithPunct } from "../util/tuiyan-planning";
+import {
+  type PlanningThickness,
+  normalizePlanningThickness,
+} from "../util/tuiyan-planning-thickness";
 import { logTuiyanReferenceTouchpoint } from "../util/tuiyan-reference-dev-log";
 import { mergeTuiyanPlanningSystemWithReferenceHardRules } from "./tuiyan-reference-planning-system";
 import { generateWithProviderStream } from "./client";
@@ -92,7 +97,11 @@ const LEVEL_STRUCTURED_FIELDS: Record<TuiyanPlanningListLevel, string> = {
 标签：`,
 };
 
-function listSystemPrompt(level: TuiyanPlanningListLevel, count: number): string {
+function listSystemPrompt(
+  level: TuiyanPlanningListLevel,
+  count: number,
+  thickness: PlanningThickness,
+): string {
   const levelLabel =
     level === "master_outline"
       ? "总纲"
@@ -101,24 +110,27 @@ function listSystemPrompt(level: TuiyanPlanningListLevel, count: number): string
         : level === "volume"
           ? "卷纲"
           : "章节细纲";
+  const outlineListCount = Math.max(1, count);
+  const outlinePerItem = Math.max(200, Math.floor(thickness.outlineTotalWithPunct / outlineListCount));
   const levelRules =
     level === "master_outline"
       ? `
 - 总纲必须像作品的"灵魂定海神针"，重点写清：核心创意(Logline)、世界观/力量体系、主线起承转合、卖点与风格、不可违背的排他性规则。
 - 总纲不需要拆到具体章节，但必须能约束后续大纲、卷纲和章纲，避免后续推演跑偏。
-- 【字数要求】摘要正文去掉标点符号后，有效字数必须不低于 1000 字，不足则继续扩写，禁止截断。`
+- 【字数要求】摘要正文去掉标点符号后，有效字数必须不低于 ${thickness.masterOutlineMinNoPunct} 字，不足则继续扩写，禁止截断。`
       : level === "outline"
         ? `
 - 一级大纲必须服从总纲，把故事拆成可执行的阶段/大剧情，写清阶段目标、人物弧光、关键里程碑与伏笔回收方向。
-- 【字数要求】每条一级大纲的摘要含标点不低于 700 字，${count} 条合计含标点不低于 2000 字，不足必须继续扩写。`
+- 【字数要求】每条一级大纲的摘要含标点不低于 ${outlinePerItem} 字，${count} 条**合计**含标点不低于 ${thickness.outlineTotalWithPunct} 字，不足必须继续扩写。`
         : level === "volume"
           ? `
 - 卷纲必须服从总纲与一级大纲，写清本卷地图/势力、小BOSS、关键道具或能力、节奏高潮与卷尾钩子。
 - 标题必须使用"第N卷：卷名"的形式，N 与候选序号一致。
-- 【字数要求】本卷摘要含标点必须不低于 1500 字，需充分展开剧情地图、人物行动线与节奏设计，不足必须继续扩写。`
+- 【字数要求】本卷摘要含标点必须不低于 ${thickness.volumeWithPunct} 字，需充分展开剧情地图、人物行动线与节奏设计，不足必须继续扩写。`
           : `
 - 章节细纲必须服从上层所有约束，写清单章目标、冲突推进、场景拆解、爽点/虐点、结尾钩子。
-- 标题必须使用"第N章：章名"的形式，N 与候选序号一致。`;
+- 标题必须使用"第N章：章名"的形式，N 与候选序号一致。
+- 【字数要求】每条章节细纲的标题、摘要与下方各结构化字段**合计**含标点不低于 ${thickness.chapterOutlineMinPerNodeWithPunct} 字，不足必须继续扩写。`;
 
   const structuredFields = LEVEL_STRUCTURED_FIELDS[level];
 
@@ -219,6 +231,8 @@ export async function generateTuiyanPlanningList(args: {
   /** 每收到一批 delta 时回调，参数为已累积的字符数（用于真实进度条） */
   onChunk?: (accumulatedChars: number) => void;
   workId?: string | null;
+  /** 与 `normalizePlanningThickness` 对齐；缺省为产品默认（与现 PLANNING_MIN_CHARS 一致 + 章细纲/详细项） */
+  planningThickness?: Partial<PlanningThickness>;
 }): Promise<{
   items: Array<{ title: string; summary: string; structuredMeta: PlanningNodeStructuredMeta }>;
   rawText: string;
@@ -229,13 +243,14 @@ export async function generateTuiyanPlanningList(args: {
   if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
     throw new TuiyanPlanningGenerateError("请先在设置中填写当前模型的 API Key。");
   }
+  const t = normalizePlanningThickness(args.planningThickness);
   const count = Math.max(1, Math.min(PARSE_MAX_ITEMS, Math.floor(args.desiredCount)));
   const userInput = args.userInput.trim();
   logTuiyanReferenceTouchpoint(`planning_list:${args.level}`, userInput);
   const messages: AiChatMessage[] = [
     {
       role: "system",
-      content: mergeTuiyanPlanningSystemWithReferenceHardRules(listSystemPrompt(args.level, count), userInput, {
+      content: mergeTuiyanPlanningSystemWithReferenceHardRules(listSystemPrompt(args.level, count, t), userInput, {
         imitationMode: args.imitationMode,
       }),
     },
@@ -278,13 +293,16 @@ const DETAIL_STRUCTURED_FIELDS_JSON = `\`\`\`json
 }
 \`\`\``;
 
-const DETAIL_SYSTEM_PROMPT = `你是小说规划助手。请输出一份可直接执行的详细细纲，长度 600-1500 字。
+function buildDetailSystemPrompt(minTotalWithPunct: number): string {
+  const suggestHi = Math.min(5000, Math.max(1200, Math.floor(minTotalWithPunct * 1.5)));
+  return `你是小说规划助手。请输出一份可直接执行的详细细纲。整段输出（含下述 JSON 代码块与后文）含标点**总**字数：不低于 ${minTotalWithPunct} 字，以 ${minTotalWithPunct}–${suggestHi} 字为宜。
 内容应包含目标、冲突、推进节奏、关键场景与收束点。
 
 在正文开始之前，先输出以下 JSON 代码块（严格保持字段名不变，未知填空字符串）：
 ${DETAIL_STRUCTURED_FIELDS_JSON}
 
 然后另起一行输出详细细纲正文，不要附加任何解释。`;
+}
 
 type DetailStructuredMeta = Pick<
   PlanningNodeStructuredMeta,
@@ -327,6 +345,7 @@ export async function generateTuiyanPlanningDetail(args: {
   /** 每收到一批 delta 时回调，参数为已累积的字符数（用于真实进度条） */
   onChunk?: (accumulatedChars: number) => void;
   workId?: string | null;
+  planningThickness?: Partial<PlanningThickness>;
 }): Promise<{
   text: string;
   structuredMeta: DetailStructuredMeta;
@@ -337,12 +356,14 @@ export async function generateTuiyanPlanningDetail(args: {
   if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
     throw new TuiyanPlanningGenerateError("请先在设置中填写当前模型的 API Key。");
   }
+  const t = normalizePlanningThickness(args.planningThickness);
+  const minDetail = t.detailMinTotalWithPunct;
   const userInput = args.userInput.trim();
   logTuiyanReferenceTouchpoint("planning_detail:chapter_detail", userInput);
   const messages: AiChatMessage[] = [
     {
       role: "system",
-      content: mergeTuiyanPlanningSystemWithReferenceHardRules(DETAIL_SYSTEM_PROMPT, userInput, {
+      content: mergeTuiyanPlanningSystemWithReferenceHardRules(buildDetailSystemPrompt(minDetail), userInput, {
         imitationMode: args.imitationMode,
       }),
     },
@@ -364,6 +385,11 @@ export async function generateTuiyanPlanningDetail(args: {
   const raw = (r.text ?? "").trim();
   if (!raw) {
     throw new TuiyanPlanningGenerateError("模型返回为空，请重试或更换模型。");
+  }
+  if (countCharsWithPunct(raw) < minDetail) {
+    throw new TuiyanPlanningGenerateError(
+      `详细细纲整段（含 JSON 与正文，含标点）为 ${countCharsWithPunct(raw)} 字，不足 ${minDetail} 字，请重试或调低「高级设置」中的下限。`,
+    );
   }
   return parseDetailOutput(raw);
 }

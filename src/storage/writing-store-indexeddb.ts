@@ -1052,6 +1052,7 @@ export class WritingStoreIndexedDB implements WritingStore {
       relationships: input.relationships ?? "",
       voiceNotes: input.voiceNotes ?? "",
       taboos: input.taboos ?? "",
+      quoteSamples: input.quoteSamples ?? "",
       sortOrder: maxOrder + 1,
       createdAt: t,
       updatedAt: t,
@@ -1539,6 +1540,8 @@ export class WritingStoreIndexedDB implements WritingStore {
       title: (input.title ?? "").trim() || "未命名模板",
       type: input.type,
       tags: input.tags ?? [],
+      intro: (input.intro ?? "").trim(),
+      usageMethod: input.usageMethod?.trim() ? input.usageMethod.trim() : undefined,
       body: input.body ?? "",
       status: input.status ?? "approved",
       sortOrder: maxOrder + 1,
@@ -1558,10 +1561,19 @@ export class WritingStoreIndexedDB implements WritingStore {
     if (patch.type !== undefined) upd.type = patch.type;
     if (patch.tags !== undefined) upd.tags = patch.tags;
     if (patch.body !== undefined) upd.body = patch.body;
+    if (patch.intro !== undefined) upd.intro = (patch.intro ?? "").trim();
+    if (patch.usageMethod !== undefined) {
+      const u = (patch.usageMethod ?? "").trim();
+      upd.usageMethod = u || undefined;
+    }
     if (patch.status !== undefined) upd.status = patch.status;
     if (patch.reviewNote !== undefined) upd.reviewNote = patch.reviewNote;
     if (patch.sortOrder !== undefined) upd.sortOrder = patch.sortOrder;
     await getDB().globalPromptTemplates.update(id, upd as Partial<GlobalPromptTemplate>);
+  }
+
+  async getGlobalPromptTemplate(id: string): Promise<GlobalPromptTemplate | undefined> {
+    return getDB().globalPromptTemplates.get(id);
   }
 
   async deleteGlobalPromptTemplate(id: string): Promise<void> {

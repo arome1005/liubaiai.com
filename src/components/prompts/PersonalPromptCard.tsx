@@ -14,6 +14,7 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import type { GlobalPromptTemplate, PromptType } from "../../db/types";
 import { PROMPT_TYPE_LABELS } from "../../db/types";
+import { promptLibraryListPreview } from "../../util/prompt-template-display";
 
 const TYPE_COLOR: Record<PromptType, string> = {
   continue:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
@@ -81,8 +82,11 @@ export function PersonalPromptCard(props: PersonalPromptCardProps) {
   const [copied, setCopied] = useState(false);
 
   const initial = authorLabel.slice(0, 1).toUpperCase() || "?";
-  const preview =
-    item.body.length > 120 && !expanded ? item.body.slice(0, 120) + "…" : item.body;
+  const listPreview = promptLibraryListPreview(item);
+  const rawIntro = (item.intro ?? "").trim();
+  const fullText = listPreview.isPlaceholder ? listPreview.text : rawIntro;
+  const preview = fullText.length > 120 && !expanded ? fullText.slice(0, 120) + "…" : fullText;
+  const canToggleExpand = rawIntro.length > 120;
 
   const handleCopy = () => {
     void navigator.clipboard.writeText(item.body).then(() => {
@@ -174,10 +178,15 @@ export function PersonalPromptCard(props: PersonalPromptCardProps) {
         </div>
       )}
 
-      <p className="line-clamp-none whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+      <p
+        className={cn(
+          "line-clamp-none whitespace-pre-wrap break-words text-xs leading-relaxed",
+          listPreview.isPlaceholder ? "text-muted-foreground/80 italic" : "text-muted-foreground",
+        )}
+      >
         {preview}
       </p>
-      {item.body.length > 120 && (
+      {canToggleExpand && (
         <button
           type="button"
           onClick={() => setExpanded((v) => !v)}

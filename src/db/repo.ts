@@ -2,6 +2,7 @@
  * 对外 API：全部委托给存储抽象层 {@link getWritingStore}，
  * 便于 Web IndexedDB / 桌面 SQLite 切换时无需改页面逻辑。
  */
+import { ensureGlobalPromptShape } from "../util/prompt-template-display";
 import { isWorkBookNoRouteParam } from "../util/work-url";
 import { getWritingStore } from "../storage/instance";
 import { getDB } from "./database";
@@ -910,17 +911,25 @@ export async function deleteAllReferenceExtractsForBook(refWorkId: string): Prom
 // ── 全局提示词库（Sprint 1 + Sprint 2）────────────────────────────────────────
 
 export async function listGlobalPromptTemplates(): Promise<GlobalPromptTemplate[]> {
-  return getWritingStore().listGlobalPromptTemplates();
+  const rows = await getWritingStore().listGlobalPromptTemplates();
+  return rows.map(ensureGlobalPromptShape);
+}
+
+export async function getGlobalPromptTemplate(id: string): Promise<GlobalPromptTemplate | undefined> {
+  const r = await getWritingStore().getGlobalPromptTemplate(id);
+  return r ? ensureGlobalPromptShape(r) : undefined;
 }
 
 /** Sprint 2：返回所有 status=approved 的模板（含他人已发布） */
 export async function listApprovedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
-  return getWritingStore().listApprovedPromptTemplates();
+  const rows = await getWritingStore().listApprovedPromptTemplates();
+  return rows.map(ensureGlobalPromptShape);
 }
 
 /** 管理员审核：返回所有 status=submitted 的模板（需配套 Supabase RLS 策略） */
 export async function listSubmittedPromptTemplates(): Promise<GlobalPromptTemplate[]> {
-  return getWritingStore().listSubmittedPromptTemplates();
+  const rows = await getWritingStore().listSubmittedPromptTemplates();
+  return rows.map(ensureGlobalPromptShape);
 }
 
 export async function addGlobalPromptTemplate(

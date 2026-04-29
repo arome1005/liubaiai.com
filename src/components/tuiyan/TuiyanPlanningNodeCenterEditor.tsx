@@ -1,5 +1,5 @@
-import { useEffect, useRef } from "react"
 import type { PlanningNodeStructuredMeta, TuiyanPlanningLevel, TuiyanPlanningMeta, TuiyanPlanningNode } from "../../db/types"
+import { useTextareaAutoHeight } from "../../hooks/useTextareaAutoHeight"
 import { PLANNING_LEVEL_LABEL, STRUCTURED_FIELDS_BY_LEVEL } from "../../util/tuiyan-planning"
 import { Badge } from "../ui/badge"
 import { Button } from "../ui/button"
@@ -12,18 +12,6 @@ import { StructuredMetaChips } from "./StructuredMetaChips"
  */
 const PAPER_INPUT_BASE =
   "block w-full border-0 bg-transparent p-0 outline-none ring-0 placeholder:text-muted-foreground/60 focus:outline-none focus:ring-0 disabled:cursor-not-allowed disabled:opacity-60"
-
-/** 让 textarea 随内容自动伸高，不产生内部滚动条 */
-function useAutoResize(value: string) {
-  const ref = useRef<HTMLTextAreaElement>(null)
-  useEffect(() => {
-    const el = ref.current
-    if (!el) return
-    el.style.height = "auto"
-    el.style.height = `${el.scrollHeight}px`
-  }, [value])
-  return ref
-}
 
 export type TuiyanPlanningNodeCenterEditorProps = {
   node: TuiyanPlanningNode
@@ -63,7 +51,7 @@ export function TuiyanPlanningNodeCenterEditor({
   const modeHint = meta?.mode === "template" ? "模板高级模式" : "模型一键模式"
   const mainText = node.level === "chapter_detail" ? draftText : node.summary
   const hasStructuredFields = STRUCTURED_FIELDS_BY_LEVEL[node.level].length > 0
-  const mainTextareaRef = useAutoResize(mainText)
+  const mainTextareaRef = useTextareaAutoHeight(mainText)
 
   const bodyLabel = node.level === "chapter_detail" ? "详细细纲（800-1500 字）" : "本层摘要"
 
@@ -103,18 +91,6 @@ export function TuiyanPlanningNodeCenterEditor({
           disabled={disabled}
         />
 
-        {/* chapter_detail 多一行单句摘要（贴在标题之下，作小副标） */}
-        {node.level === "chapter_detail" && (
-          <input
-            type="text"
-            value={node.summary}
-            onChange={(e) => onSummaryChange(node.id, e.target.value)}
-            className={`${PAPER_INPUT_BASE} mt-2 text-sm text-muted-foreground`}
-            placeholder="一句话概括本章细纲..."
-            disabled={disabled}
-          />
-        )}
-
         {/* 正文区：和标题在同一张纸内连续，仅靠小标签和留白分段 */}
         <div className="mt-4 mb-2 text-[11px] uppercase tracking-wide text-muted-foreground/80">
           {bodyLabel}
@@ -127,7 +103,9 @@ export function TuiyanPlanningNodeCenterEditor({
               ? onDraftChange(node.id, e.target.value)
               : onSummaryChange(node.id, e.target.value)
           }
-          className={`${PAPER_INPUT_BASE} min-h-[200px] resize-none overflow-hidden text-[15px] leading-[1.85] text-foreground`}
+          className={`${PAPER_INPUT_BASE} ${
+            node.level === "chapter_detail" ? "min-h-[5rem]" : "min-h-[200px]"
+          } resize-none overflow-hidden text-[15px] leading-[1.85] text-foreground`}
           placeholder={node.level === "chapter_detail" ? "详细细纲会显示在这里..." : "可手动编辑本层摘要..."}
           disabled={disabled}
         />

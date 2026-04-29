@@ -254,6 +254,8 @@ export function ReferenceAiChatDialog(props: {
         title,
         type: "style" as PromptType,
         tags,
+        intro:
+          "【藏经提炼】已保存为草稿。请到提示词库编辑本项，填写「提示词介绍」（对外展示，不含正文）。",
         body: msg.content.trim(),
         status,
         slots: undefined,

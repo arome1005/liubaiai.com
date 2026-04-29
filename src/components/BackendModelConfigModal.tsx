@@ -176,8 +176,16 @@ export function BackendModelConfigModal(props: {
     [],
   );
 
-  /** 小米 MiMo 写作常用（文档另有 omni/tts 等可手动填写） */
-  const xiaomiWritingModels = useMemo(() => ["mimo-v2-pro", "mimo-v2-flash"] as const, []);
+  /** 小米 MiMo 写作推荐（V2.5 系列为最新旗舰；V2 系列保留作为兼容兜底，TTS / Omni 等手动填写） */
+  const xiaomiWritingModels = useMemo(
+    () =>
+      [
+        { id: "mimo-v2.5-pro", label: "mimo-v2.5-pro（最新旗舰·最强）" },
+        { id: "mimo-v2.5", label: "mimo-v2.5（次新·性价比平衡）" },
+        { id: "mimo-v2-pro", label: "mimo-v2-pro（上代旗舰）" },
+      ] as const,
+    [],
+  );
 
   /** 智谱文本模型（ID 以 docs.bigmodel.cn 对话补全示例为准） */
   const zhipuPresetModels = useMemo(
@@ -205,7 +213,7 @@ export function BackendModelConfigModal(props: {
       case "kimi":
         return [...kimiPresetModels];
       case "xiaomi":
-        return [...xiaomiWritingModels];
+        return xiaomiWritingModels.map((m) => m.id);
       case "gemini":
         return [...geminiPresetModels];
       case "mlx":
@@ -601,19 +609,19 @@ export function BackendModelConfigModal(props: {
                           <div className="space-y-3">
                             <select className="w-full rounded-lg border border-border/40 bg-background/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
                               value={cfg.model} onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))}>
-                              {xiaomiWritingModels.map((m) => <option key={m} value={m}>{m === "mimo-v2-pro" ? "mimo-v2-pro（写作·偏强）" : "mimo-v2-flash（写作·偏快）"}</option>)}
-                              {cfg.model !== "mimo-v2-pro" && cfg.model !== "mimo-v2-flash" && cfg.model ? <option value={cfg.model}>{cfg.model}（当前）</option> : null}
+                              {xiaomiWritingModels.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
+                              {cfg.model && !xiaomiWritingModels.some((x) => x.id === cfg.model) ? <option value={cfg.model}>{cfg.model}（当前）</option> : null}
                             </select>
                             <div className="flex items-center gap-2">
                               <Button type="button" size="sm" variant="outline" disabled={testState.xiaomi.status === "testing"}
-                                onClick={() => { setTestState((prev) => ({ ...prev, xiaomi: { status: "testing" } })); void (async () => { const model = cfg.model.trim() || "mimo-v2-flash"; try { await testOpenAICompatibleModel({ cfg: getProviderConfig(settings, "xiaomi"), model }); setTestState((prev) => ({ ...prev, xiaomi: { status: "ok", message: "连接成功" } })); setModelHealth((h) => ({ ...h, xiaomi: { ...h.xiaomi, [model]: { verdict: "ok", testedAt: Date.now() } } })); setModelHealthDirty((d) => ({ ...d, xiaomi: true })); } catch (e) { const msg = e instanceof Error ? e.message : "连接失败"; setTestState((prev) => ({ ...prev, xiaomi: { status: "err", message: msg } })); setModelHealth((h) => ({ ...h, xiaomi: { ...h.xiaomi, [model]: { verdict: "err", testedAt: Date.now() } } })); setModelHealthDirty((d) => ({ ...d, xiaomi: true })); } })(); }}>
+                                onClick={() => { setTestState((prev) => ({ ...prev, xiaomi: { status: "testing" } })); void (async () => { const model = cfg.model.trim() || "mimo-v2.5"; try { await testOpenAICompatibleModel({ cfg: getProviderConfig(settings, "xiaomi"), model }); setTestState((prev) => ({ ...prev, xiaomi: { status: "ok", message: "连接成功" } })); setModelHealth((h) => ({ ...h, xiaomi: { ...h.xiaomi, [model]: { verdict: "ok", testedAt: Date.now() } } })); setModelHealthDirty((d) => ({ ...d, xiaomi: true })); } catch (e) { const msg = e instanceof Error ? e.message : "连接失败"; setTestState((prev) => ({ ...prev, xiaomi: { status: "err", message: msg } })); setModelHealth((h) => ({ ...h, xiaomi: { ...h.xiaomi, [model]: { verdict: "err", testedAt: Date.now() } } })); setModelHealthDirty((d) => ({ ...d, xiaomi: true })); } })(); }}>
                                 测试该模型版本
                               </Button>
                               <TestBadge status={testState.xiaomi.status} message={"message" in testState.xiaomi ? testState.xiaomi.message : undefined} />
                             </div>
                             <input className="w-full rounded-lg border border-border/40 bg-background/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
-                              value={cfg.model} onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))} placeholder="模型 ID，如 mimo-v2-pro / mimo-v2-flash" />
-                            <p className="text-[11px] text-muted-foreground/70">写作常用上述二者；其它如 mimo-v2-omni 请手动填写。</p>
+                              value={cfg.model} onChange={(e) => onChange(patchProviderConfig(settings, id, { model: e.target.value }))} placeholder="模型 ID，如 mimo-v2.5-pro / mimo-v2.5 / mimo-v2-pro" />
+                            <p className="text-[11px] text-muted-foreground/70">写作推荐 mimo-v2.5-pro（最强）/ mimo-v2.5（平衡）/ mimo-v2-pro（上代）；TTS、Omni 等其它型号请手动填写。</p>
                           </div>
                         ) : id === "zhipu" ? (
                           <div className="space-y-3">

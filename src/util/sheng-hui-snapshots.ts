@@ -4,6 +4,8 @@
 const STORE_KEY = "liubai:shengHuiSnapshots:v1";
 
 export const SHENG_HUI_SNAPSHOTS_MAX_PER_BUCKET = 40;
+/** W5：列表短名上限（与审计「8 字短名」一致，按码点截断） */
+export const SHENG_HUI_SNAPSHOT_SHORT_LABEL_MAX = 8;
 
 export type ShengHuiSnapshot = {
   id: string;
@@ -11,6 +13,10 @@ export type ShengHuiSnapshot = {
   prose: string;
   /** 生成时使用的大纲与文策摘要，便于列表辨认 */
   outlinePreview: string;
+  /** 用户编辑的短名，至多 {@link SHENG_HUI_SNAPSHOT_SHORT_LABEL_MAX} 字 */
+  shortLabel?: string;
+  /** 收藏：列表中优先展示，便于挑版本 */
+  starred?: boolean;
 };
 
 export type ShengHuiSnapshotBucket = {
@@ -23,6 +29,12 @@ type StoreV1 = {
   v: 1;
   buckets: Record<string, ShengHuiSnapshotBucket>;
 };
+
+function clampShortLabel(raw: string): string {
+  const t = raw.trim();
+  if (!t) return "";
+  return [...t].slice(0, SHENG_HUI_SNAPSHOT_SHORT_LABEL_MAX).join("");
+}
 
 function newId(): string {
   try {
@@ -81,7 +93,14 @@ function normalizeBucket(raw: ShengHuiSnapshotBucket | undefined): ShengHuiSnaps
     if (typeof createdAt !== "number" || !Number.isFinite(createdAt)) continue;
     if (typeof prose !== "string") continue;
     if (typeof outlinePreview !== "string") continue;
-    snapshots.push({ id, createdAt, prose, outlinePreview });
+    const shortLabelRaw = (s as { shortLabel?: unknown }).shortLabel;
+    const starredRaw = (s as { starred?: unknown }).starred;
+    const entry: ShengHuiSnapshot = { id, createdAt, prose, outlinePreview };
+    if (typeof shortLabelRaw === "string" && shortLabelRaw.trim()) {
+      entry.shortLabel = clampShortLabel(shortLabelRaw);
+    }
+    if (starredRaw === true) entry.starred = true;
+    snapshots.push(entry);
   }
   let adoptedId = raw.adoptedId;
   if (adoptedId !== null && typeof adoptedId !== "string") adoptedId = null;
@@ -121,6 +140,7 @@ export function appendShengHuiSnapshot(
     createdAt: Date.now(),
     prose,
     outlinePreview: outlinePreviewFrom(outlineAndStrategy),
+    starred: false,
   };
   const nextSnapshots = prune([...prev.snapshots, snap]);
   let adoptedId = prev.adoptedId;
@@ -156,4 +176,94 @@ export function deleteShengHuiSnapshot(workId: string, chapterId: string | null,
   store.buckets[key] = { snapshots, adoptedId };
   writeStore(store);
   return store.buckets[key]!;
+}
+
+/**
+ * 更新单条快照的短名/收藏；`shortLabel: null` 或空串表示清除短名。
+ */
+export function updateShengHuiSnapshotMeta(
+  workId: string,
+  chapterId: string | null,
+  snapshotId: string,
+  patch: { shortLabel?: string | null; starred?: boolean },
+): ShengHuiSnapshotBucket {
+  const store = readStore();
+  const key = bucketKey(workId, chapterId);
+  const prev = normalizeBucket(store.buckets[key]);
+  const snapshots = prev.snapshots.map((s) => {
+    if (s.id !== snapshotId) return s;
+    const next: ShengHuiSnapshot = { ...s };
+    if ("shortLabel" in patch) {
+      const v = patch.shortLabel;
+      if (v == null || !String(v).trim()) {
+        delete next.shortLabel;
+      } else {
+        const c = clampShortLabel(String(v));
+        next.shortLabel = c || undefined;
+        if (!next.shortLabel) delete next.shortLabel;
+      }
+    }
+    if ("starred" in patch) {
+      if (patch.starred) next.starred = true;
+      else {
+        delete next.starred;
+      }
+    }
+    return next;
+  });
+  if (!prev.snapshots.some((x) => x.id === snapshotId)) {
+    return prev;
+  }
+  store.buckets[key] = { snapshots, adoptedId: prev.adoptedId };
+  writeStore(store);
+  return normalizeBucket(store.buckets[key]);
+}
+
+/**
+ * A.2/A.3 脏稿同步：「标为采纳」时，若当前主稿内容与被选快照 prose 不同，
+ * 先把当前内容存为新快照（`outlinePreview` 用传入值），再将新快照标为 adoptedId。
+ * 若相同，直接标原快照 adoptedId。
+ * 返回更新后的桶和实际被标为采纳的 snapshotId。
+ */
+export function appendAndAdoptShengHuiSnapshot(
+  workId: string,
+  chapterId: string | null,
+  currentOutput: string,
+  selectedSnapshotId: string,
+  outlinePreview: string,
+): { bucket: ShengHuiSnapshotBucket; adoptedId: string } {
+  const store = readStore();
+  const key = bucketKey(workId, chapterId);
+  const prev = normalizeBucket(store.buckets[key]);
+  const selected = prev.snapshots.find((s) => s.id === selectedSnapshotId);
+  const isDirty = !selected || selected.prose !== currentOutput;
+  if (isDirty && currentOutput.trim()) {
+    const snap: ShengHuiSnapshot = {
+      id: newId(),
+      createdAt: Date.now(),
+      prose: currentOutput,
+      outlinePreview: (() => {
+        const t = outlinePreview.trim().replace(/\s+/g, " ");
+        return t.length <= 100 ? t : t.slice(0, 100) + "…";
+      })(),
+    };
+    const nextSnapshots = prune([...prev.snapshots, snap]);
+    store.buckets[key] = { snapshots: nextSnapshots, adoptedId: snap.id };
+    writeStore(store);
+    return { bucket: normalizeBucket(store.buckets[key]), adoptedId: snap.id };
+  }
+  const next = selectedSnapshotId;
+  store.buckets[key] = { snapshots: prev.snapshots, adoptedId: next };
+  writeStore(store);
+  return { bucket: normalizeBucket(store.buckets[key]), adoptedId: next };
+}
+
+/** 列表：收藏优先，同组内按时间新→旧。 */
+export function sortShengHuiSnapshotsForList(snapshots: ShengHuiSnapshot[]): ShengHuiSnapshot[] {
+  return [...snapshots].sort((a, b) => {
+    const sa = a.starred ? 1 : 0;
+    const sb = b.starred ? 1 : 0;
+    if (sa !== sb) return sb - sa;
+    return b.createdAt - a.createdAt;
+  });
 }

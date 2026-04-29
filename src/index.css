@@ -2703,11 +2703,204 @@ select {
   line-height: 1.65;
 }
 
+.sheng-hui-workspace .sheng-hui-output {
+  font-size: var(--sheng-hui-type-3);
+  line-height: 1.65;
+}
+
 /* 生辉 /sheng-hui 主稿面：与写作页排版变量（`--editor-*`）一致 */
 .sheng-hui-paper {
   font-family: var(--editor-font-stack, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif);
   font-size: var(--editor-font-size, 16px);
   line-height: var(--editor-line-height, 1.8);
+}
+
+/* 生辉主稿：阅读向衬线（与默认 UI sans 区隔）。不限制 max-width，避免整栏 textarea 被 38em 压成细条；行宽由中间栏 grid 与「专注模式」的 max-w 控制。 */
+.sheng-hui-paper-typography {
+  font-family: "Source Serif 4", "Noto Serif SC", "PingFang SC", "Songti SC", "SimSun", serif;
+  font-feature-settings: "ss01" 1;
+  line-height: 1.85;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.sheng-hui-paper--cool {
+  background: color-mix(in oklch, var(--background) 92%, oklch(0.55 0.02 250)) !important;
+}
+.sheng-hui-paper--neutral {
+  background: color-mix(in oklch, var(--background) 94%, oklch(0.75 0.04 85)) !important;
+}
+.sheng-hui-paper--warm {
+  background: color-mix(in oklch, var(--background) 90%, oklch(0.82 0.06 75)) !important;
+}
+
+/* 生辉 N8：仿写台内字号阶梯（标题 18→16→14→12→11；正文 16 / 行高 1.85；元信息 11 + muted） */
+.sheng-hui-workspace {
+  --sheng-hui-type-1: 1.125rem;
+  --sheng-hui-type-2: 1rem;
+  --sheng-hui-type-3: 0.875rem;
+  --sheng-hui-type-4: 0.75rem;
+  --sheng-hui-type-meta: 0.6875rem;
+  --sheng-hui-body-size: 1rem;
+  --sheng-hui-body-leading: 1.85;
+}
+
+.sheng-hui-workspace .sheng-hui-paper {
+  font-size: var(--sheng-hui-body-size);
+  line-height: var(--sheng-hui-body-leading);
+}
+
+.sheng-hui-workspace .sheng-hui-paper-typography,
+.sheng-hui-workspace .sheng-hui-manuscript-read {
+  line-height: var(--sheng-hui-body-leading);
+}
+
+.sheng-hui-workspace .sheng-hui-t1 {
+  font-size: var(--sheng-hui-type-1);
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.sheng-hui-workspace .sheng-hui-t2 {
+  font-size: var(--sheng-hui-type-2);
+  line-height: 1.35;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+.sheng-hui-workspace .sheng-hui-t3 {
+  font-size: var(--sheng-hui-type-3);
+  line-height: 1.4;
+  font-weight: 600;
+}
+.sheng-hui-workspace .sheng-hui-eyebrow {
+  font-size: var(--sheng-hui-type-4);
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--app-color-muted-foreground) 92%, transparent);
+}
+
+.sheng-hui-workspace .sheng-hui-type-meta {
+  font-size: var(--sheng-hui-type-meta);
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--app-color-muted-foreground) 72%, transparent);
+}
+
+/* 主稿区纸纹：叠在纸面色上，不挡交互（由父级 `relative` + 子级 `z-index` 配合） */
+.sheng-hui-manuscript-paper-grain {
+  background-image: url("/images/paper-grain.png");
+  background-size: 256px 256px;
+  background-repeat: repeat;
+  opacity: 0.07;
+  mix-blend-mode: overlay;
+}
+
+:root[data-theme="dark"] .sheng-hui-manuscript-paper-grain {
+  opacity: 0.09;
+}
+
+/* 第三节 UI：流式主稿外框微动效（粗估「typing」质感替代） */
+.sheng-hui-manuscript-surface--streaming {
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--app-color-primary) 28%, transparent),
+    0 0 24px -8px color-mix(in oklch, var(--app-color-primary) 25%, transparent);
+  animation: sheng-hui-stream-edge 2.2s ease-in-out infinite;
+}
+
+@keyframes sheng-hui-stream-edge {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklch, var(--app-color-primary) 22%, transparent),
+      0 0 20px -10px color-mix(in oklch, var(--app-color-primary) 18%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklch, var(--app-color-primary) 38%, transparent),
+      0 0 28px -6px color-mix(in oklch, var(--app-color-primary) 32%, transparent);
+  }
+}
+
+/* 右栏 tab：oklch 状态色（采纳感 /  idle） */
+.sheng-hui-right-tab--active {
+  background: color-mix(in oklch, oklch(0.72 0.14 150) 38%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, oklch(0.55 0.12 150) 45%, transparent);
+}
+
+:root[data-theme="dark"] .sheng-hui-right-tab--active {
+  background: color-mix(in oklch, oklch(0.55 0.12 150) 30%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, oklch(0.65 0.1 150) 40%, transparent);
+}
+
+.sheng-hui-oklch-adopted {
+  color: color-mix(in oklch, oklch(0.55 0.16 150) 90%, var(--app-color-foreground));
+}
+
+.sheng-hui-oklch-idle {
+  color: color-mix(in oklch, oklch(0.55 0.02 260) 80%, var(--app-color-muted-foreground));
+}
+
+.sheng-hui-oklch-streaming {
+  color: color-mix(in oklch, oklch(0.75 0.16 75) 85%, var(--app-color-foreground));
+}
+
+.sheng-hui-zen-badge {
+  box-shadow: 0 0 0 1px color-mix(in oklch, oklch(0.7 0.12 85) 30%, transparent);
+}
+
+.sheng-hui-usage-oklch {
+  color: color-mix(in oklch, oklch(0.62 0.1 75) 90%, var(--app-color-foreground));
+}
+
+.sheng-hui-gen-complete {
+  border-color: color-mix(in oklch, oklch(0.75 0.12 85) 45%, var(--app-color-border));
+}
+
+.sheng-hui-latin-mixed {
+  font-family: "Source Serif 4", "Noto Serif SC", "PingFang SC", "Songti SC", "SimSun", ui-serif, serif;
+  font-feature-settings: "ss01" 1, "kern" 1;
+}
+
+.sheng-hui-rail-section {
+  border-radius: var(--radius-lg, 1rem);
+  border: 1px solid color-mix(in srgb, var(--app-color-border) 50%, transparent);
+  background: color-mix(in srgb, var(--app-color-card) 72%, transparent);
+  box-shadow:
+    var(--shadow-sm, 0 1px 2px rgba(0, 0, 0, 0.06)),
+    inset 0 1px 0 0 color-mix(in srgb, #fff 5%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+/* 生辉 N1 阅读态：限宽 38em、段首缩进、段距（与审核报告一致） */
+.sheng-hui-manuscript-read {
+  max-width: 38em;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  font-family: "Source Serif 4", "Noto Serif SC", "PingFang SC", "Songti SC", "SimSun", serif;
+  font-feature-settings: "ss01" 1;
+  line-height: 1.85;
+  text-align: justify;
+  text-wrap: pretty;
+  overflow-y: auto;
+}
+
+.sheng-hui-manuscript-read__p {
+  margin-bottom: 1em;
+  text-indent: 2em;
+}
+
+.sheng-hui-manuscript-read__p:last-of-type,
+.sheng-hui-manuscript-read__p:only-of-type {
+  margin-bottom: 0;
+}
+
+.sheng-hui-manuscript-read__empty {
+  min-height: 3rem;
+  line-height: 1.6;
+  text-align: start;
+  text-indent: 0;
 }
 
 /* 流光 /inspiration — 步 35 碎片 */

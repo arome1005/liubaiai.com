@@ -76,13 +76,30 @@ export type PlanningScale = {
   volumeCount: number
   /** 每卷目标章节数（20-90） */
   chaptersPerVolume: number
+  /**
+   * 一级大纲条数（阶段/大剧情条数），默认 3；短篇可改为 1–2 条。
+   * @see {@link clampPlanningOutlineItemCount}
+   */
+  outlineItemCount: number
 }
 
-export const DEFAULT_PLANNING_SCALE: PlanningScale = { volumeCount: 5, chaptersPerVolume: 40 }
+export const DEFAULT_PLANNING_SCALE: PlanningScale = {
+  volumeCount: 5,
+  chaptersPerVolume: 40,
+  outlineItemCount: 3,
+}
 export const PLANNING_SCALE_VOLUME_MIN = 3
 export const PLANNING_SCALE_VOLUME_MAX = 8
 export const PLANNING_SCALE_CHAPTERS_MIN = 20
 export const PLANNING_SCALE_CHAPTERS_MAX = 90
+export const PLANNING_OUTLINE_ITEM_MIN = 1
+export const PLANNING_OUTLINE_ITEM_MAX = 12
+
+export function clampPlanningOutlineItemCount(n: number): number {
+  const r = Math.round(Number(n))
+  if (!Number.isFinite(r)) return DEFAULT_PLANNING_SCALE.outlineItemCount
+  return Math.max(PLANNING_OUTLINE_ITEM_MIN, Math.min(PLANNING_OUTLINE_ITEM_MAX, r))
+}
 
 // ── 字数要求（固定规则） ───────────────────────────────────────────────────────
 

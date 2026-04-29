@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   AlertCircle,
@@ -9,35 +9,30 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
-  FileText,
   Layers,
   MessageSquare,
-  PenLine,
   Plus,
   Search,
-  Scissors,
   Sparkles,
-  ScrollText,
   Star,
   Trash2,
-  Type,
-  Tag,
   User,
-  Users,
   X,
-  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "../lib/utils";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../components/ui/dialog";
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../components/ui/alert-dialog";
 import {
   addGlobalPromptTemplate,
   deleteGlobalPromptTemplate,
@@ -56,10 +51,16 @@ import {
   type PromptType,
 } from "../db/types";
 import { getSupabase } from "../lib/supabase";
+import { TYPE_ICONS, TYPE_COLOR_BADGE } from "../components/prompts/PromptTypeGrid";
 import { PersonalPromptCard } from "../components/prompts/PersonalPromptCard";
 import { readLastWorkId } from "../util/lastWorkId";
 import { workPathSegment } from "../util/work-url";
 import { bumpPromptHeat, getPromptHeat } from "../util/prompt-usage-heat";
+import {
+  matchesPromptListSearch,
+  matchesPromptListSearchWithBody,
+  promptLibraryListPreview,
+} from "../util/prompt-template-display";
 
 // ── 收藏持久化 ────────────────────────────────────────────────────────────────
 
@@ -78,35 +79,7 @@ function saveFavorites(set: Set<string>): void {
   localStorage.setItem(FAVORITES_KEY, JSON.stringify([...set]));
 }
 
-// ── 图标 & 颜色映射 ────────────────────────────────────────────────────────────
-
-const TYPE_ICONS: Record<PromptType, React.ReactNode> = {
-  continue:       <PenLine    className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  outline:        <Layers     className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  volume:         <BookOpen   className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  scene:          <FileText   className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  style:          <Type       className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  opening:        <Zap        className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  character:      <Users      className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  worldbuilding:  <Sparkles   className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  book_split:     <Scissors   className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  universal_entry:  <Tag        className="h-3.5 w-3.5" strokeWidth={1.6} />,
-  article_summary: <ScrollText className="h-3.5 w-3.5" strokeWidth={1.6} />,
-};
-
-const TYPE_COLOR: Record<PromptType, string> = {
-  continue:       "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300",
-  outline:        "bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300",
-  volume:         "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300",
-  scene:          "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300",
-  style:          "bg-pink-100 text-pink-700 dark:bg-pink-900/40 dark:text-pink-300",
-  opening:        "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-  character:      "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300",
-  worldbuilding:  "bg-teal-100 text-teal-700 dark:bg-teal-900/40 dark:text-teal-300",
-  book_split:     "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-200",
-  universal_entry:  "bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-200",
-  article_summary: "bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200",
-};
+const TYPE_COLOR = TYPE_COLOR_BADGE;
 
 const STATUS_STYLE: Record<PromptStatus, string> = {
   draft:     "bg-muted text-muted-foreground",
@@ -133,25 +106,6 @@ function pickAuthorLabel(u: {
   const em = u.email?.trim();
   if (em) return em.split("@")[0] || em;
   return "本地用户";
-}
-
-// ── 表单状态 ──────────────────────────────────────────────────────────────────
-
-type FormState = {
-  title: string;
-  type: PromptType;
-  tagsInput: string;
-  body: string;
-};
-
-const EMPTY_FORM: FormState = { title: "", type: "continue", tagsInput: "", body: "" };
-
-function templateToForm(t: GlobalPromptTemplate): FormState {
-  return { title: t.title, type: t.type, tagsInput: t.tags.join("，"), body: t.body };
-}
-
-function parseTags(raw: string): string[] {
-  return raw.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean);
 }
 
 // ── 状态 Badge ────────────────────────────────────────────────────────────────
@@ -191,16 +145,35 @@ function PromptCard(props: {
   const [expanded, setExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const handleCopy = () => {
-    void navigator.clipboard.writeText(item.body).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    });
-  };
+  const listPreview = promptLibraryListPreview(item);
+  const rawIntro = (item.intro ?? "").trim();
+  const fullPreview = listPreview.isPlaceholder
+    ? listPreview.text
+    : rawIntro;
+  const previewText =
+    fullPreview.length > 130 && !expanded
+      ? fullPreview.slice(0, 130) + "…"
+      : fullPreview;
+  const canToggleExpand = rawIntro.length > 130;
 
-  const bodyPreview = item.body.length > 130 && !expanded
-    ? item.body.slice(0, 130) + "…"
-    : item.body;
+  const handleCopy = () => {
+    if (isOwn) {
+      void navigator.clipboard.writeText(item.body).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      });
+    } else {
+      const t = (item.intro ?? "").trim();
+      if (!t) {
+        toast.info("作者未填写对外介绍，可尝试「装配」以使用正文", { duration: 4000 });
+        return;
+      }
+      void navigator.clipboard.writeText(t).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1800);
+      });
+    }
+  };
 
   const isRejected = isOwn && item.status === "rejected";
 
@@ -266,13 +239,21 @@ function PromptCard(props: {
         </div>
       )}
 
-      {/* 正文 */}
-      <p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
-        {bodyPreview}
+      {/* 仅「提示词介绍」：不展示 body */}
+      <p
+        className={cn(
+          "whitespace-pre-wrap break-words text-xs leading-relaxed",
+          listPreview.isPlaceholder ? "text-muted-foreground/80 italic" : "text-muted-foreground",
+        )}
+      >
+        {previewText}
       </p>
-      {item.body.length > 130 && (
-        <button type="button" onClick={() => setExpanded((v) => !v)}
-          className="self-start text-[11px] text-primary hover:underline">
+      {canToggleExpand && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="self-start text-[11px] text-primary hover:underline"
+        >
           {expanded ? "收起" : "展开全部"}
         </button>
       )}
@@ -320,101 +301,6 @@ function PromptCard(props: {
   );
 }
 
-// ── 新建/编辑弹层 ─────────────────────────────────────────────────────────────
-
-function PromptFormDialog(props: {
-  open: boolean;
-  isNew: boolean;
-  form: FormState;
-  saving: boolean;
-  onChange: (patch: Partial<FormState>) => void;
-  onSave: () => void;
-  onClose: () => void;
-}) {
-  const { open, isNew, form, saving, onChange, onSave, onClose } = props;
-  const bodyRef = useRef<HTMLTextAreaElement>(null);
-
-  useEffect(() => {
-    if (open) setTimeout(() => bodyRef.current?.focus(), 80);
-  }, [open]);
-
-  return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
-      <DialogContent
-        className="max-h-[90dvh] w-full max-w-lg overflow-y-auto"
-        onKeyDown={(e) => {
-          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); if (!saving) onSave(); }
-          if (e.key === "Escape") { e.stopPropagation(); onClose(); }
-        }}
-      >
-        <DialogHeader>
-          <DialogTitle>{isNew ? "新建提示词" : "编辑提示词"}</DialogTitle>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-4 py-2">
-          {/* 标题 */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium">标题</label>
-            <Input placeholder="给这条提示词起个名字" value={form.title}
-              onChange={(e) => onChange({ title: e.target.value })} maxLength={80} />
-          </div>
-
-          {/* 类型 */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium">类型</label>
-            <div className="flex flex-wrap gap-2">
-              {PROMPT_TYPES.map((pt) => (
-                <button key={pt} type="button" onClick={() => onChange({ type: pt })}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-                    form.type === pt
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-muted/50 text-muted-foreground hover:border-primary/40 hover:text-foreground",
-                  )}>
-                  {TYPE_ICONS[pt]}
-                  {PROMPT_TYPE_LABELS[pt]}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* 标签 */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium">
-              标签
-              <span className="ml-1.5 text-xs font-normal text-muted-foreground">逗号分隔</span>
-            </label>
-            <Input placeholder="爽文，升级，逆袭…" value={form.tagsInput}
-              onChange={(e) => onChange({ tagsInput: e.target.value })} />
-          </div>
-
-          {/* 正文 */}
-          <div className="flex flex-col gap-1.5">
-            <label className="text-sm font-medium">
-              正文
-              <span className="ml-1.5 text-xs font-normal text-muted-foreground">⌘↩ 保存</span>
-            </label>
-            <textarea
-              ref={bodyRef}
-              className="min-h-[12rem] w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              placeholder="在这里写提示词正文…"
-              value={form.body}
-              onChange={(e) => onChange({ body: e.target.value })}
-            />
-          </div>
-        </div>
-
-        <DialogFooter className="gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={saving}>取消</Button>
-          <Button onClick={onSave} disabled={saving || !form.body.trim()}>
-            {saving ? "保存中…" : isNew ? "创建" : "保存"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // ── 主页面 ────────────────────────────────────────────────────────────────────
 
 export function PromptsPage() {
@@ -434,13 +320,7 @@ export function PromptsPage() {
   const [personalSort, setPersonalSort] = useState<PersonalSort>("updated");
   const [heatTick, setHeatTick] = useState(0);
 
-  // 弹层
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
-
-  const isNew = editingId === null;
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
 
   // ── 数据加载 ────────────────────────────────────────────────────────────────
 
@@ -502,11 +382,9 @@ export function PromptsPage() {
     if (typeFilter !== "all") list = list.filter((t) => t.type === typeFilter);
     const q = searchQuery.trim().toLowerCase();
     if (q) {
-      list = list.filter(
-        (t) =>
-          t.title.toLowerCase().includes(q) ||
-          t.body.toLowerCase().includes(q) ||
-          t.tags.some((tag) => tag.toLowerCase().includes(q)),
+      const canSearchBody = viewTab === "mine" || viewTab === "personal";
+      list = list.filter((t) =>
+        canSearchBody ? matchesPromptListSearchWithBody(t, q) : matchesPromptListSearch(t, q),
       );
     }
     if (viewTab === "personal") {
@@ -532,45 +410,24 @@ export function PromptsPage() {
     });
   };
 
-  // ── 弹层 ────────────────────────────────────────────────────────────────────
-
-  const openNew = () => { setEditingId(null); setForm(EMPTY_FORM); setDialogOpen(true); };
-  const openEdit = (item: GlobalPromptTemplate) => {
-    setEditingId(item.id); setForm(templateToForm(item)); setDialogOpen(true);
+  const openNew = () => {
+    navigate("/prompts/new");
   };
-  const closeDialog = () => { setDialogOpen(false); setEditingId(null); setForm(EMPTY_FORM); };
-
-  const handleSave = async () => {
-    if (!form.body.trim()) return;
-    setSaving(true);
-    try {
-      const tags = parseTags(form.tagsInput);
-      if (isNew) {
-        await addGlobalPromptTemplate({
-          title: form.title.trim() || "未命名模板",
-          type: form.type, tags, body: form.body, status: "approved",
-        });
-      } else {
-        await updateGlobalPromptTemplate(editingId!, {
-          title: form.title.trim() || "未命名模板",
-          type: form.type, tags, body: form.body,
-          status: "approved",
-          reviewNote: "",
-        });
-      }
-      await refresh();
-      closeDialog();
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "保存失败";
-      toast.error(msg);
-    } finally { setSaving(false); }
+  const openEdit = (item: GlobalPromptTemplate) => {
+    navigate(`/prompts/${item.id}/edit`);
   };
 
   // ── 另存为草稿（他人精选 → 我的草稿） ─────────────────────────────────────
 
   const handleSaveAsMyDraft = async (item: GlobalPromptTemplate) => {
     await addGlobalPromptTemplate({
-      title: item.title, type: item.type, tags: item.tags, body: item.body, status: "draft",
+      title: item.title,
+      type: item.type,
+      tags: item.tags,
+      intro: item.intro ?? "",
+      body: item.body,
+      status: "draft",
+      usageMethod: item.usageMethod,
     });
     setViewTab("mine");
     await refresh();
@@ -578,10 +435,15 @@ export function PromptsPage() {
 
   // ── 删除 ────────────────────────────────────────────────────────────────────
 
-  const handleDelete = async (id: string, title: string) => {
-    if (!window.confirm(`删除「${title}」？此操作不可恢复。`)) return;
+  const runDelete = async (id: string) => {
     await deleteGlobalPromptTemplate(id);
-    setFavorites((prev) => { const next = new Set(prev); next.delete(id); saveFavorites(next); return next; });
+    setFavorites((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      saveFavorites(next);
+      return next;
+    });
+    setDeleteTarget(null);
     await refresh();
   };
 
@@ -621,7 +483,7 @@ export function PromptsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">提示词库</h1>
           <p className="mt-0.5 text-sm text-muted-foreground">
-            管理可跨作品复用的写作提示词；点「装配」可直接注入当前作品 AI 侧栏。
+            列表仅展示「提示词介绍」；正文通过「装配」注入侧栏，避免在库中泄露核心指令。
           </p>
         </div>
         <Button onClick={openNew} className="gap-1.5">
@@ -681,7 +543,7 @@ export function PromptsPage() {
           <div className="mb-4 flex flex-col gap-3">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input className="pl-9 pr-9" placeholder="搜索标题、正文或标签…"
+                <Input className="pl-9 pr-9" placeholder="搜索标题、介绍或标签（「我的」可搜正文）"
                   value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
                 {searchQuery && (
                   <button type="button" onClick={() => setSearchQuery("")}
@@ -771,7 +633,7 @@ export function PromptsPage() {
                         isFavorite={favorites.has(item.id)}
                         onToggleFavorite={() => toggleFavorite(item.id)}
                         onEdit={() => openEdit(item)}
-                        onDelete={() => void handleDelete(item.id, item.title)}
+                        onDelete={() => setDeleteTarget({ id: item.id, title: item.title })}
                         onAssemble={() => handleAssemble(item)}
                         onMoveUp={() => void handleMove(item.id, -1)}
                         onMoveDown={() => void handleMove(item.id, 1)}
@@ -788,7 +650,7 @@ export function PromptsPage() {
                       isFavorite={favorites.has(item.id)}
                       onToggleFavorite={() => toggleFavorite(item.id)}
                       onEdit={isOwn ? () => openEdit(item) : undefined}
-                      onDelete={isOwn ? () => void handleDelete(item.id, item.title) : undefined}
+                      onDelete={isOwn ? () => setDeleteTarget({ id: item.id, title: item.title }) : undefined}
                       onSaveAsMyDraft={!isOwn ? () => void handleSaveAsMyDraft(item) : undefined}
                       onAssemble={() => handleAssemble(item)}
                       onMoveUp={isOwn && viewTab === "mine" ? () => void handleMove(item.id, -1) : undefined}
@@ -803,13 +665,25 @@ export function PromptsPage() {
         </main>
       </div>
 
-      {/* ── 新建/编辑弹层 ── */}
-      <PromptFormDialog
-        open={dialogOpen} isNew={isNew} form={form} saving={saving}
-        onChange={(patch) => setForm((f) => ({ ...f, ...patch }))}
-        onSave={() => void handleSave()}
-        onClose={closeDialog}
-      />
+      <AlertDialog open={deleteTarget != null} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除提示词？</AlertDialogTitle>
+            <AlertDialogDescription>
+              「{deleteTarget?.title ?? ""}」将永久删除，无法恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => { if (deleteTarget) void runDelete(deleteTarget.id); }}
+            >
+              删除
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
