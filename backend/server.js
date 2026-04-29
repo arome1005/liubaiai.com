@@ -13,6 +13,11 @@ import {
   normalizeEmail as normalizeEmailOtp,
   timingSafeEqualHex,
 } from "./otp.js";
+import {
+  getVertexAccessToken,
+  vertexConfigStatus,
+  vertexProjectAndLocation,
+} from "./vertex-token.js";
 
 const pool = createPool();
 
@@ -229,6 +234,104 @@ export async function buildServer() {
     "/api/proxy/doubao-ark/*",
     { bodyLimit: 32 * 1024 * 1024 },
     proxyDoubaoArkToVolc,
+  );
+
+  // ===== Vertex AI 代理：SA JSON 留在 VPS，浏览器只调本路由 =====
+  // 鉴权：复用 requireAuth（Supabase JWT），避免 Vertex 代理被公网爬走赠金
+  // 协议：与 Gemini 原生 generateContent / streamGenerateContent 等价的请求/响应体
+  function vertexBuildUrl(model, stream) {
+    const safeModel = encodeURIComponent(String(model ?? "").trim());
+    if (!safeModel) throw new Error("缺少 model 查询参数");
+    const { project, location } = vertexProjectAndLocation();
+    const action = stream ? "streamGenerateContent?alt=sse" : "generateContent";
+    return `https://${location}-aiplatform.googleapis.com/v1/projects/${encodeURIComponent(project)}/locations/${encodeURIComponent(location)}/publishers/google/models/${safeModel}:${action}`;
+  }
+
+  // 健康检查：不走 requireAuth，返回是否配好；不返回 SA 内容
+  app.get("/api/ai/vertex/health", async () => ({
+    ok: true,
+    vertex: vertexConfigStatus(),
+  }));
+
+  app.post(
+    "/api/ai/vertex/generate",
+    { preHandler: requireAuth, bodyLimit: 4 * 1024 * 1024 },
+    async (req, reply) => {
+      const model = String(req.query?.model ?? "").trim();
+      let url, token;
+      try {
+        url = vertexBuildUrl(model, false);
+        token = await getVertexAccessToken();
+      } catch (e) {
+        req.log.error(e, "vertex generate prep failed");
+        return reply.code(503).send({ error: "VERTEX_NOT_CONFIGURED", message: String(e?.message ?? e) });
+      }
+      let r;
+      try {
+        r = await fetch(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(req.body ?? {}),
+        });
+      } catch (e) {
+        req.log.error(e, "vertex generate upstream fetch failed");
+        return reply.code(502).send({ error: "UPSTREAM_FETCH_FAILED", message: String(e?.message ?? e) });
+      }
+      reply.status(r.status);
+      const ct = r.headers.get("content-type");
+      if (ct) reply.header("content-type", ct);
+      const buf = await r.arrayBuffer();
+      return reply.send(Buffer.from(buf));
+    },
+  );
+
+  app.post(
+    "/api/ai/vertex/stream",
+    { preHandler: requireAuth, bodyLimit: 4 * 1024 * 1024 },
+    async (req, reply) => {
+      const model = String(req.query?.model ?? "").trim();
+      let url, token;
+      try {
+        url = vertexBuildUrl(model, true);
+        token = await getVertexAccessToken();
+      } catch (e) {
+        req.log.error(e, "vertex stream prep failed");
+        return reply.code(503).send({ error: "VERTEX_NOT_CONFIGURED", message: String(e?.message ?? e) });
+      }
+      let r;
+      try {
+        r = await fetch(url, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${token}`,
+            accept: "text/event-stream",
+          },
+          body: JSON.stringify(req.body ?? {}),
+        });
+      } catch (e) {
+        req.log.error(e, "vertex stream upstream fetch failed");
+        return reply.code(502).send({ error: "UPSTREAM_FETCH_FAILED", message: String(e?.message ?? e) });
+      }
+      reply.status(r.status);
+      const ct = r.headers.get("content-type");
+      if (ct) reply.header("content-type", ct);
+      // 上游错误：直接缓冲返回 JSON，避免把错误信息当 SSE 流喂前端
+      if (!r.ok || !r.body) {
+        const buf = await r.arrayBuffer();
+        return reply.send(Buffer.from(buf));
+      }
+      try {
+        return reply.send(Readable.fromWeb(r.body));
+      } catch (e) {
+        req.log.warn(e, "vertex stream fromWeb fallback to buffer");
+        const buf = await r.arrayBuffer();
+        return reply.send(Buffer.from(buf));
+      }
+    },
   );
 
   // ===== URL 预览（流光书签）=====
