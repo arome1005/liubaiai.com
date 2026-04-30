@@ -67,12 +67,18 @@ export async function autoLinkChipsFromNodes(
 
   for (const { summary, structuredMeta, level, nodeId } of items) {
     // ── 人物字段 ────────────────────────────────────────────────────────────
-    // 优先：卷纲 mainCharactersDetail（AI 生成的结构化对象，含 role/voiceNotes/motivation/arcInVolume）
-    const hasMainDetail =
-      Array.isArray(structuredMeta.mainCharactersDetail) &&
-      structuredMeta.mainCharactersDetail.length > 0
-    if (hasMainDetail) {
-      for (const e of structuredMeta.mainCharactersDetail!) {
+    // 优先：4 层各自的人物 *Detail（含 role/voiceNotes/motivation/arcInVolume）
+    const charDetailArrays = [
+      structuredMeta.coreCharactersDetail,
+      structuredMeta.characterAllocationDetail,
+      structuredMeta.mainCharactersDetail,
+      structuredMeta.appearedCharactersDetail,
+    ]
+    let hasAnyCharDetail = false
+    for (const arr of charDetailArrays) {
+      if (!Array.isArray(arr) || arr.length === 0) continue
+      hasAnyCharDetail = true
+      for (const e of arr) {
         if (!e?.name || charMap.has(e.name)) continue
         const motivationParts: string[] = []
         if (e.role) motivationParts.push(`身份：${e.role}`)
@@ -90,35 +96,41 @@ export async function autoLinkChipsFromNodes(
         })
       }
     }
-    // 兼容路径：appearedCharacters/coreCharacters 走文本字段；
-    // mainCharacters 仅在没有 mainCharactersDetail 时回落（避免 detail 给的"方源"和文本切碎产生的"方源（..."重复入库）
-    const charTextFields: Array<string | undefined> = [
-      structuredMeta.appearedCharacters,
-      structuredMeta.coreCharacters,
-    ]
-    if (!hasMainDetail) charTextFields.push(structuredMeta.mainCharacters)
-    for (const field of charTextFields) {
-      for (const name of parseNames(field)) {
-        if (!charMap.has(name)) {
-          charMap.set(name, {
-            name,
-            motivation: extractContextForName(summary, name),
-            voiceNotes: "",
-            relationships: "",
-            taboos: "",
-            sourceLevel: level,
-            sourceNodeId: nodeId,
-          })
+    // 兼容路径：仅在本节点完全没有任何人物 detail 时，才回落到文本字段切名字
+    // （避免 detail 给的"方源"和老节点文本切碎产生的"方源（..."重复入库）
+    if (!hasAnyCharDetail) {
+      const charTextFields: Array<string | undefined> = [
+        structuredMeta.appearedCharacters,
+        structuredMeta.coreCharacters,
+        structuredMeta.mainCharacters,
+      ]
+      for (const field of charTextFields) {
+        for (const name of parseNames(field)) {
+          if (!charMap.has(name)) {
+            charMap.set(name, {
+              name,
+              motivation: extractContextForName(summary, name),
+              voiceNotes: "",
+              relationships: "",
+              taboos: "",
+              sourceLevel: level,
+              sourceNodeId: nodeId,
+            })
+          }
         }
       }
     }
 
     // ── 地点字段 ───────────────────────────────────────────────────────────────
-    const hasLocationsDetail =
-      Array.isArray(structuredMeta.keyLocationsDetail) &&
-      structuredMeta.keyLocationsDetail.length > 0
-    if (hasLocationsDetail) {
-      for (const e of structuredMeta.keyLocationsDetail!) {
+    const locationDetailArrays = [
+      structuredMeta.keyLocationsDetail,
+      structuredMeta.locationsDetail,
+    ]
+    let hasAnyLocationDetail = false
+    for (const arr of locationDetailArrays) {
+      if (!Array.isArray(arr) || arr.length === 0) continue
+      hasAnyLocationDetail = true
+      for (const e of arr) {
         if (!e?.name || termMap.has(e.name)) continue
         termMap.set(e.name, {
           entryKind: "地点",
@@ -129,28 +141,32 @@ export async function autoLinkChipsFromNodes(
         })
       }
     }
-    const locationFields: Array<string | undefined> = [structuredMeta.locations]
-    if (!hasLocationsDetail) locationFields.push(structuredMeta.keyLocations)
-    for (const field of locationFields) {
-      for (const title of parseNames(field)) {
-        if (!termMap.has(title)) {
-          termMap.set(title, {
-            entryKind: "地点",
-            title,
-            body: extractContextForName(summary, title),
-            sourceLevel: level,
-            sourceNodeId: nodeId,
-          })
+    if (!hasAnyLocationDetail) {
+      for (const field of [structuredMeta.locations, structuredMeta.keyLocations]) {
+        for (const title of parseNames(field)) {
+          if (!termMap.has(title)) {
+            termMap.set(title, {
+              entryKind: "地点",
+              title,
+              body: extractContextForName(summary, title),
+              sourceLevel: level,
+              sourceNodeId: nodeId,
+            })
+          }
         }
       }
     }
 
     // ── 势力字段 ───────────────────────────────────────────────────────────────
-    const hasFactionsDetail =
-      Array.isArray(structuredMeta.coreFactionsDetail) &&
-      structuredMeta.coreFactionsDetail.length > 0
-    if (hasFactionsDetail) {
-      for (const e of structuredMeta.coreFactionsDetail!) {
+    const factionDetailArrays = [
+      structuredMeta.coreFactionsDetail,
+      structuredMeta.mainFactionsDetail,
+    ]
+    let hasAnyFactionDetail = false
+    for (const arr of factionDetailArrays) {
+      if (!Array.isArray(arr) || arr.length === 0) continue
+      hasAnyFactionDetail = true
+      for (const e of arr) {
         if (!e?.name || termMap.has(e.name)) continue
         termMap.set(e.name, {
           entryKind: "势力",
@@ -161,18 +177,18 @@ export async function autoLinkChipsFromNodes(
         })
       }
     }
-    const factionFields: Array<string | undefined> = [structuredMeta.mainFactions]
-    if (!hasFactionsDetail) factionFields.push(structuredMeta.coreFactions)
-    for (const field of factionFields) {
-      for (const title of parseNames(field)) {
-        if (!termMap.has(title)) {
-          termMap.set(title, {
-            entryKind: "势力",
-            title,
-            body: extractContextForName(summary, title),
-            sourceLevel: level,
-            sourceNodeId: nodeId,
-          })
+    if (!hasAnyFactionDetail) {
+      for (const field of [structuredMeta.mainFactions, structuredMeta.coreFactions]) {
+        for (const title of parseNames(field)) {
+          if (!termMap.has(title)) {
+            termMap.set(title, {
+              entryKind: "势力",
+              title,
+              body: extractContextForName(summary, title),
+              sourceLevel: level,
+              sourceNodeId: nodeId,
+            })
+          }
         }
       }
     }
@@ -192,8 +208,7 @@ export async function autoLinkChipsFromNodes(
           sourceNodeId: nodeId,
         })
       }
-    }
-    if (!hasItemsDetail) {
+    } else {
       for (const title of parseNames(structuredMeta.keyItems)) {
         if (!termMap.has(title)) {
           termMap.set(title, {
@@ -208,15 +223,31 @@ export async function autoLinkChipsFromNodes(
     }
 
     // ── 世界观核心词条（总纲）─────────────────────────────────────────────────
-    for (const title of parseNames(structuredMeta.worldSettingTerms)) {
-      if (!termMap.has(title)) {
-        termMap.set(title, {
+    const hasWorldTermsDetail =
+      Array.isArray(structuredMeta.worldSettingTermsDetail) &&
+      structuredMeta.worldSettingTermsDetail.length > 0
+    if (hasWorldTermsDetail) {
+      for (const e of structuredMeta.worldSettingTermsDetail!) {
+        if (!e?.name || termMap.has(e.name)) continue
+        termMap.set(e.name, {
           entryKind: "术语",
-          title,
-          body: extractContextForName(summary, title),
+          title: e.name,
+          body: e.note ?? extractContextForName(summary, e.name),
           sourceLevel: level,
           sourceNodeId: nodeId,
         })
+      }
+    } else {
+      for (const title of parseNames(structuredMeta.worldSettingTerms)) {
+        if (!termMap.has(title)) {
+          termMap.set(title, {
+            entryKind: "术语",
+            title,
+            body: extractContextForName(summary, title),
+            sourceLevel: level,
+            sourceNodeId: nodeId,
+          })
+        }
       }
     }
   }

@@ -74,23 +74,51 @@ const FIELD_NAME_MAP: Record<string, keyof PlanningNodeStructuredMeta> = {
 
 // ── 每个层级追加到格式末尾的结构化字段行 ────────────────────────────────────
 
+/**
+ * Prompt 设计准则：
+ * - 文本字段（"本卷人物：" 等）**只写干净名字**，多者用「、」分隔。
+ *   不要在名字后用括号「（…）」或破折号「—」附带描述。
+ * - 详细信息（身份/性格/动机/弧光/备注/作用 等）**全部**写到末尾的
+ *   `结构化数据JSON：` 块的对应 *Detail 字段里。
+ * - chip 显示用文本字段（短小干净的名字），点开 chip 看 popover 才显示
+ *   detail 信息——这是产品对"人物卡 / 词条卡"的设计要求。
+ */
 const LEVEL_STRUCTURED_FIELDS: Record<TuiyanPlanningListLevel, string> = {
   master_outline: `核心创意：
 世界观：
-世界观核心词条：（**仅列有名号的设定词条**，如境界/力量/宗门名等，5-15 个用「、」分隔。✗ 不要写描述句或效果说明）
+世界观核心词条：（**只写名号**，多者用「、」分隔，5-15 个。✓ 示例：先天五太、真龙血脉、九天玄宫。详细释义请填入下方 JSON 块的 worldSettingTermsDetail。✗ 不要写描述句或效果说明）
 主要冲突：
-核心人物：（**仅列有名字的具体人物**，多人用「、」分隔，身份放入「（…）」。✓ 示例：方源（主角）、翱沧（仙王父亲）。✗ 不要写"得知真相""情感核心"等事件或抽象概念）
-故事阶段：`,
+核心人物：（**只写名字**，多人用「、」分隔。✓ 示例：方源、翱沧、王家仙王。详细身份/性格/背景请填入下方 JSON 块的 coreCharactersDetail。✗ 不要写"得知真相""情感核心"等事件或抽象概念，**也不要在名字后加括号或破折号**）
+故事阶段：
+结构化数据JSON：（**在以上文本字段全部填好后**，再附加一个 JSON 对象，给 chip 卡片预填详细信息。JSON 必须能直接 JSON.parse，禁止内部使用单引号、禁止注释。name 必须与上方文本字段中的实体名一致。）
+{
+  "coreCharactersDetail": [
+    {"name": "方源", "role": "主角", "gender": "male", "voiceNotes": "性格描述（≤150字）", "motivation": "动机/背景（≤300字）"}
+  ],
+  "worldSettingTermsDetail": [
+    {"name": "境界体系名", "note": "释义（≤120字）"}
+  ]
+}
+（gender 仅限 "male"/"female"/"unknown"；可选字段缺失则省略整个 key，不要给 null/空字符串。）`,
   outline: `阶段目标：
-人物分配：（**仅列有名字的具体人物**，多人用「、」分隔；本阶段角色定位放入「（…）」）
-主要势力：（**仅列有名号的势力/组织/族群**，多者用「、」分隔。✗ 不要写势力关系判断或描述句）
-人物弧光：`,
-  volume: `本卷人物：（**仅列有名字的具体人物**，多人用「、」分隔；单人状态/弧光放入「（…）」内描述。✓ 示例：方源（主角，本卷苏醒、初显锋芒）、翱沧（父亲，仙王身份归关铸道基）。✗ 不要写"得知母亲真相""确立精气神同修之路""情感核心"等事件或抽象概念）
-核心势力：（**仅列有名号的势力/组织/族群**，多者用「、」分隔。✓ 示例：真龙界原始龙族、仙古十凶族群、王家。✗ 不要写"展现同盟氛围"等关系或描述句）
-关键地点：（**仅列有名号的具体场所**，多者用「、」分隔；附属说明放入「（…）」。✓ 示例：化龙池（修炼场）、真龙族宝库禁地。✗ 不要写抽象空间或方位泛指）
-关键道具：（**仅列具体物件、功法名或机遇事件名**，多者用「、」分隔；说明放入「（…）」。✓ 示例：青铜石棺（封印之所）、太初龙凰种、元神剑诀秘典、混沌焱。✗ 不要写"奠定根基""被吸收""凝聚父子之情"等效果或感受）
+人物分配：（**只写名字**，多人用「、」分隔。✓ 示例：方源、翱沧、王家仙王。详细本阶段定位请填入下方 JSON 块的 characterAllocationDetail。✗ 不要在名字后加括号或破折号）
+主要势力：（**只写名号**，多者用「、」分隔。✓ 示例：真龙界原始龙族、王家。详细备注请填入下方 JSON 块的 mainFactionsDetail。✗ 不要写势力关系判断或描述句）
+人物弧光：
+结构化数据JSON：（同上规则）
+{
+  "characterAllocationDetail": [
+    {"name": "方源", "role": "主角", "gender": "male", "motivation": "本阶段定位/任务（≤200字）"}
+  ],
+  "mainFactionsDetail": [
+    {"name": "势力名", "note": "性质/立场（≤80字）"}
+  ]
+}`,
+  volume: `本卷人物：（**只写名字**，多人用「、」分隔。✓ 示例：方源、翱沧、王家仙王、金无妄。详细身份/性格/动机/本卷弧光请填入下方 JSON 块的 mainCharactersDetail。✗ 不要写"得知母亲真相""情感核心"等事件，**也不要在名字后加括号或破折号**）
+核心势力：（**只写名号**，多者用「、」分隔。✓ 示例：真龙界原始龙族、仙古十凶族群、王家。详细备注请填入 coreFactionsDetail。✗ 不要写势力关系或描述句）
+关键地点：（**只写名号**，多者用「、」分隔。✓ 示例：化龙池、真龙族宝库禁地。详细备注请填入 keyLocationsDetail。）
+关键道具：（**只写名号**，多者用「、」分隔。✓ 示例：青铜石棺、太初龙凰种、元神剑诀秘典、混沌焱。详细作用/类型请填入 keyItemsDetail。✗ 不要写"奠定根基""凝聚父子之情"等效果或感受）
 本卷钩子：
-结构化数据JSON：（**在以上文本字段全部填好后**，再附加一个 JSON 对象，给 chip 卡片预填详细信息。schema 见下；JSON 必须能直接 JSON.parse，禁止内部使用单引号、禁止注释。name 必须与上方文本字段中的实体名一致。）
+结构化数据JSON：（同上规则）
 {
   "mainCharactersDetail": [
     {"name": "方源", "role": "主角", "gender": "male", "voiceNotes": "性格描述（≤150字）", "motivation": "动机/背景（≤300字）", "arcInVolume": "本卷弧光（≤80字）"}
@@ -107,11 +135,20 @@ const LEVEL_STRUCTURED_FIELDS: Record<TuiyanPlanningListLevel, string> = {
 }
 （type 仅限 "item"/"technique"/"opportunity"；gender 仅限 "male"/"female"/"unknown"；可选字段缺失则省略整个 key，不要给 null/空字符串。）`,
   chapter_outline: `冲突点：
-登场人物：（**仅列有名字的具体人物**，多人用「、」分隔；单人本章状态放入「（…）」。✓ 示例：方源（突破筑基）、翱沧（旁观）。✗ 不要写事件名或抽象概念）
-涉及地点：（**仅列有名号的具体场所**，多者用「、」分隔。✗ 不要泛指方位）
+登场人物：（**只写名字**，多人用「、」分隔。✓ 示例：方源、翱沧、王家仙王。详细本章状态/作用请填入下方 JSON 块的 appearedCharactersDetail。✗ 不要写事件名或抽象概念，**也不要在名字后加括号或破折号**）
+涉及地点：（**只写名号**，多者用「、」分隔。✓ 示例：原始帝城边关、破碎的星空战场。详细备注请填入下方 JSON 块的 locationsDetail。✗ 不要泛指方位）
 关键节拍：
 必出现信息：
-标签：`,
+标签：
+结构化数据JSON：（同上规则）
+{
+  "appearedCharactersDetail": [
+    {"name": "方源", "role": "主角", "motivation": "本章作用/动机（≤120字）"}
+  ],
+  "locationsDetail": [
+    {"name": "地点名", "note": "用途（≤80字）"}
+  ]
+}`,
 };
 
 function listSystemPrompt(
@@ -221,25 +258,45 @@ function splitOutDetailJsonBlock(block: string): {
   }
 
   const detail: Partial<PlanningNodeStructuredMeta> = {};
+  /** 把 unknown[] 过滤成至少有 string name 的对象数组。 */
+  const filterByName = (arr: unknown[]): unknown[] =>
+    arr.filter(
+      (e) => !!e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string",
+    );
+
+  // 总纲
+  if (Array.isArray(parsed.coreCharactersDetail)) {
+    detail.coreCharactersDetail = filterByName(parsed.coreCharactersDetail) as PlanningNodeStructuredMeta["coreCharactersDetail"];
+  }
+  if (Array.isArray(parsed.worldSettingTermsDetail)) {
+    detail.worldSettingTermsDetail = filterByName(parsed.worldSettingTermsDetail) as PlanningNodeStructuredMeta["worldSettingTermsDetail"];
+  }
+  // 一级大纲
+  if (Array.isArray(parsed.characterAllocationDetail)) {
+    detail.characterAllocationDetail = filterByName(parsed.characterAllocationDetail) as PlanningNodeStructuredMeta["characterAllocationDetail"];
+  }
+  if (Array.isArray(parsed.mainFactionsDetail)) {
+    detail.mainFactionsDetail = filterByName(parsed.mainFactionsDetail) as PlanningNodeStructuredMeta["mainFactionsDetail"];
+  }
+  // 卷纲
   if (Array.isArray(parsed.mainCharactersDetail)) {
-    detail.mainCharactersDetail = (parsed.mainCharactersDetail as unknown[]).filter(
-      (e): e is { name: string } => !!e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string",
-    ) as PlanningNodeStructuredMeta["mainCharactersDetail"];
+    detail.mainCharactersDetail = filterByName(parsed.mainCharactersDetail) as PlanningNodeStructuredMeta["mainCharactersDetail"];
   }
   if (Array.isArray(parsed.coreFactionsDetail)) {
-    detail.coreFactionsDetail = (parsed.coreFactionsDetail as unknown[]).filter(
-      (e): e is { name: string } => !!e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string",
-    ) as PlanningNodeStructuredMeta["coreFactionsDetail"];
+    detail.coreFactionsDetail = filterByName(parsed.coreFactionsDetail) as PlanningNodeStructuredMeta["coreFactionsDetail"];
   }
   if (Array.isArray(parsed.keyLocationsDetail)) {
-    detail.keyLocationsDetail = (parsed.keyLocationsDetail as unknown[]).filter(
-      (e): e is { name: string } => !!e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string",
-    ) as PlanningNodeStructuredMeta["keyLocationsDetail"];
+    detail.keyLocationsDetail = filterByName(parsed.keyLocationsDetail) as PlanningNodeStructuredMeta["keyLocationsDetail"];
   }
   if (Array.isArray(parsed.keyItemsDetail)) {
-    detail.keyItemsDetail = (parsed.keyItemsDetail as unknown[]).filter(
-      (e): e is { name: string } => !!e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string",
-    ) as PlanningNodeStructuredMeta["keyItemsDetail"];
+    detail.keyItemsDetail = filterByName(parsed.keyItemsDetail) as PlanningNodeStructuredMeta["keyItemsDetail"];
+  }
+  // 章纲
+  if (Array.isArray(parsed.appearedCharactersDetail)) {
+    detail.appearedCharactersDetail = filterByName(parsed.appearedCharactersDetail) as PlanningNodeStructuredMeta["appearedCharactersDetail"];
+  }
+  if (Array.isArray(parsed.locationsDetail)) {
+    detail.locationsDetail = filterByName(parsed.locationsDetail) as PlanningNodeStructuredMeta["locationsDetail"];
   }
 
   return { textBlock, detail };

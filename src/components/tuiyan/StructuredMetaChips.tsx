@@ -46,27 +46,43 @@ function combineCharacterMotivation(
   return parts.length ? parts.join("\n") : undefined
 }
 
-/** 根据字段 key 从 meta.*Detail 抽 name → 预填信息 的映射。 */
+/** 根据字段 key 从 meta.*Detail 抽 name → 预填信息 的映射，覆盖 4 层。 */
 function buildChipPrefillMap(
   meta: PlanningNodeStructuredMeta | undefined,
   key: keyof PlanningNodeStructuredMeta,
 ): Map<string, ChipPrefill> {
   const map = new Map<string, ChipPrefill>()
   if (!meta) return map
-  if (key === "mainCharacters" && meta.mainCharactersDetail) {
-    for (const e of meta.mainCharactersDetail) {
+  // ── 人物字段（4 层各自的 detail）
+  const charDetailArr =
+    key === "mainCharacters" ? meta.mainCharactersDetail :
+    key === "coreCharacters" ? meta.coreCharactersDetail :
+    key === "characterAllocation" ? meta.characterAllocationDetail :
+    key === "appearedCharacters" ? meta.appearedCharactersDetail :
+    undefined
+  if (charDetailArr) {
+    for (const e of charDetailArr) {
       map.set(e.name, {
         gender: e.gender,
         voiceNotes: e.voiceNotes,
         motivation: combineCharacterMotivation(e.role, e.motivation, e.arcInVolume),
       })
     }
-  } else if (key === "coreFactions" && meta.coreFactionsDetail) {
+    return map
+  }
+  // ── 词条/势力/地点/道具字段
+  if (key === "coreFactions" && meta.coreFactionsDetail) {
     for (const e of meta.coreFactionsDetail) map.set(e.name, { note: e.note })
+  } else if (key === "mainFactions" && meta.mainFactionsDetail) {
+    for (const e of meta.mainFactionsDetail) map.set(e.name, { note: e.note })
   } else if (key === "keyLocations" && meta.keyLocationsDetail) {
     for (const e of meta.keyLocationsDetail) map.set(e.name, { note: e.note })
+  } else if (key === "locations" && meta.locationsDetail) {
+    for (const e of meta.locationsDetail) map.set(e.name, { note: e.note })
   } else if (key === "keyItems" && meta.keyItemsDetail) {
     for (const e of meta.keyItemsDetail) map.set(e.name, { note: e.effect })
+  } else if (key === "worldSettingTerms" && meta.worldSettingTermsDetail) {
+    for (const e of meta.worldSettingTermsDetail) map.set(e.name, { note: e.note })
   }
   return map
 }
