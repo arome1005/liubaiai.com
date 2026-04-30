@@ -67,6 +67,8 @@ function getProviderModelId(settings: AiSettings, providerId: AiProviderId): str
       return settings.anthropic.model
     case "gemini":
       return settings.gemini.model
+    case "vertex":
+      return settings.vertex.model
     case "doubao":
       return settings.doubao.model
     case "zhipu":
@@ -79,6 +81,8 @@ function getProviderModelId(settings: AiSettings, providerId: AiProviderId): str
       return settings.ollama.model
     case "mlx":
       return settings.mlx.model
+    case "claude-code-local":
+      return settings.claudeCodeLocal.model
   }
 }
 
@@ -90,6 +94,8 @@ function patchProviderModel(settings: AiSettings, providerId: AiProviderId, mode
       return { ...settings, anthropic: { ...settings.anthropic, model: modelId } }
     case "gemini":
       return { ...settings, gemini: { ...settings.gemini, model: modelId } }
+    case "vertex":
+      return { ...settings, vertex: { ...settings.vertex, model: modelId } }
     case "doubao":
       return { ...settings, doubao: { ...settings.doubao, model: modelId } }
     case "zhipu":
@@ -102,6 +108,8 @@ function patchProviderModel(settings: AiSettings, providerId: AiProviderId, mode
       return { ...settings, ollama: { ...settings.ollama, model: modelId } }
     case "mlx":
       return { ...settings, mlx: { ...settings.mlx, model: modelId } }
+    case "claude-code-local":
+      return { ...settings, claudeCodeLocal: { ...settings.claudeCodeLocal, model: modelId } }
   }
 }
 
@@ -157,6 +165,24 @@ export const AI_MODELS: AIModel[] = [
     notes: "适合头脑风暴、灵感激发、打破创作瓶颈。指令遵从度稍低，可能有惊喜也可能跑题。",
     provider: "Gemini",
     providerId: "gemini",
+  },
+  {
+    id: "vertex_gcp",
+    name: "云谷",
+    subtitle: "Vertex · 后端代管",
+    icon: (
+      <ModelPersonaLogo
+        src={LOGO.gemini}
+        ringClassName="bg-gradient-to-br from-emerald-100 to-teal-200 dark:from-emerald-900/40 dark:to-teal-800/40"
+      />
+    ),
+    quote: "金石在炉，凭栏借火。",
+    description:
+      "经本站后端代理到 Google Cloud Vertex 上的 Gemini 系模型，与「观云」同脉；密钥留在服务器，适合使用 GCP 赠金与项目配额。",
+    ratings: { literary: 4, instruction: 3, tokenCost: 2 },
+    notes: "需登录。默认建议模型 ID 为 gemini-2.5-pro；请在高级后端配置确认 Project/区域与 Vertex 中已启用该模型。",
+    provider: "Vertex AI",
+    providerId: "vertex",
   },
   {
     id: "liaoyuan",

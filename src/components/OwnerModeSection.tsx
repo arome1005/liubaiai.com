@@ -25,17 +25,9 @@ import {
   readSidecarDailyTokens,
   calcSidecarEquivCostUsd,
 } from "../util/owner-mode";
+import { ADVANCED_UX_GATE_PIN } from "../util/backend-advanced-config-gate";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { cn } from "../lib/utils";
-
-/**
- * 高级接入访问码（防误触级别，非真正的安全门）。
- *
- * 仅用于在打开「高级接入」配置弹窗前增加一道用户主动确认步骤，
- * 避免普通用户误点开启本地直连模式。
- * 注意：访问码会进生产 bundle，不要把这里当作秘密保护。
- */
-const ADVANCED_ACCESS_PASSCODE = "1005";
 
 type ConnState = "idle" | "checking" | "ok" | "fail";
 
@@ -206,7 +198,7 @@ export function OwnerModeSection({ currentEmail }: { currentEmail: string | null
             className="space-y-3"
             onSubmit={(e) => {
               e.preventDefault();
-              if (pwInput.trim() === ADVANCED_ACCESS_PASSCODE) {
+              if (pwInput.trim() === ADVANCED_UX_GATE_PIN) {
                 setPwOpen(false);
                 setPwInput("");
                 setPwError(false);

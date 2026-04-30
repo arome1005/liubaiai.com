@@ -9,6 +9,8 @@
  * 注意：浏览器直连第三方 API 可能遭遇 CORS；这是 provider 端策略，不是这里的 bug。
  */
 import type { AiProviderConfig } from "../../ai/types";
+import { apiUrl } from "../../api/base";
+import { authFetchHeaders } from "../../lib/supabase";
 import { resolveOpenAiCompatibleBaseUrl } from "../../ai/client";
 import {
   resolveAnthropicNativeMessagesBaseUrl,
@@ -44,6 +46,30 @@ export async function testGeminiModel(args: {
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: "ping" }] }],
       generationConfig: { temperature: 0.1 },
+    }),
+  });
+  const raw: unknown = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(messageFromApiJsonBody(raw) || `HTTP ${resp.status}`);
+  const text = geminiGenerateTextFromJson(raw).trim();
+  return text ? "连接成功（该模型可用）" : "连接成功（该模型可用）";
+}
+
+/**
+ * Vertex：经本站 Fastify 代理，需已登录（Supabase Bearer）；
+ * 与 `generate` 同请求体，用于在设置页对预置 model id 做连通性探测并写入健康表。
+ */
+export async function testVertexModel(args: { model: string }): Promise<string> {
+  const model = (args.model ?? "").trim();
+  if (!model) throw new Error("请先选择/填写 Model");
+  const headers = await authFetchHeaders({ "Content-Type": "application/json" });
+  if (!headers.Authorization) throw new Error("请先登录后再测试");
+  const url = apiUrl(`/api/ai/vertex/generate?model=${encodeURIComponent(model)}`);
+  const resp = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: "ping" }] }],
+      generationConfig: { temperature: 0.1, maxOutputTokens: 32 },
     }),
   });
   const raw: unknown = await resp.json().catch(() => ({}));

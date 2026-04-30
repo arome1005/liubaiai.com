@@ -6,6 +6,7 @@ const ALL: AiProviderId[] = [
   "openai",
   "anthropic",
   "gemini",
+  "vertex",
   "ollama",
   "mlx",
   "doubao",

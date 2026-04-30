@@ -28,7 +28,6 @@ function attachUpstreamErrorLogger(label: string) {
       const res = args[2] as
         | { headersSent?: boolean; writeHead?: (s: number, h: Record<string, string>) => void; end?: (b?: string) => void }
         | undefined
-      // eslint-disable-next-line no-console
       console.warn(`[proxy:${label}] upstream error:`, err?.code ?? err?.message ?? err)
       if (res && !res.headersSent && res.writeHead && res.end) {
         try {

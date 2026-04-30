@@ -282,7 +282,14 @@ export function remapImportMergePayload(
   for (const c of bibleGlossIn) {
     const nw = workMap.get(c.workId);
     if (!nw) continue;
-    newBibleGloss.push({ ...c, id: crypto.randomUUID(), workId: nw });
+    newBibleGloss.push({
+      id: crypto.randomUUID(),
+      workId: nw,
+      term: c.term,
+      note: c.note ?? "",
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+    });
   }
 
   const newStyleCards: WorkStyleCard[] = [];

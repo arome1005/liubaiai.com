@@ -167,10 +167,9 @@ export type WritingStyleSampleSlice = { title: string; body: string };
 
 /** 装配器用的术语表切片（§11 步 44；与锦囊「术语表」同源） */
 export type WritingGlossaryTermSlice = {
-  term: string;
-  category: "name" | "term" | "dead";
-  note: string;
-};
+  term: string
+  note: string
+}
 
 /** 材料预览块（可解释性 UI，与真实注入同源计算） */
 export type WritingMaterialInjectBlock = {
@@ -369,17 +368,14 @@ export function buildWritingSidepanelCtxParts(input: WritingSidepanelAssembleInp
       .filter((g) => (g.term ?? "").trim())
       .sort((a, b) => b.term.length - a.term.length);
     if (gloss.length > 0) {
-      const catLab = (c: WritingGlossaryTermSlice["category"]) =>
-        c === "name" ? "人名" : c === "dead" ? "已死" : "术语";
       const body = gloss
         .map((g) => {
           const t = g.term.trim();
-          const lab = catLab(g.category);
           const n = (g.note ?? "").trim();
-          return n ? `- **${t}**（${lab}）\n  备注：${n}` : `- **${t}**（${lab}）`;
+          return n ? `- **${t}**\n  备注：${n}` : `- **${t}**`
         })
-        .join("\n");
-      ctxParts.push("本书术语表（请与下列写法一致；备注为设定说明）：\n" + body);
+        .join("\n")
+      ctxParts.push("本书术语表（请与下列写法一致；备注为设定说明）：\n" + body)
     }
   }
 
@@ -448,17 +444,14 @@ function buildWritingSidepanelCtxPartTags(
       .filter((g) => (g.term ?? "").trim())
       .sort((a, b) => b.term.length - a.term.length);
     if (gloss.length > 0) {
-      const catLab = (c: WritingGlossaryTermSlice["category"]) =>
-        c === "name" ? "人名" : c === "dead" ? "已死" : "术语";
       const body = gloss
         .map((g) => {
           const t = g.term.trim();
-          const lab = catLab(g.category);
-          const n = (g.note ?? "").trim();
-          return n ? `- **${t}**（${lab}）\n  备注：${n}` : `- **${t}**（${lab}）`;
+          const n = (g.note ?? "").trim()
+          return n ? `- **${t}**\n  备注：${n}` : `- **${t}**`
         })
-        .join("\n");
-      out.push({ text: "本书术语表（请与下列写法一致；备注为设定说明）：\n" + body, bucket: "bible" });
+        .join("\n")
+      out.push({ text: "本书术语表（请与下列写法一致；备注为设定说明）：\n" + body, bucket: "bible" })
     }
   }
 

@@ -67,6 +67,7 @@ function providerLogoImgSrc(p: AiProviderId): string | null {
     case "anthropic":
       return "/logos/claude.png";
     case "gemini":
+    case "vertex":
       return "/logos/gemini.png";
     case "ollama":
     case "mlx":
@@ -89,6 +90,7 @@ function providerLogoFallbackText(p: AiProviderId): string {
     case "anthropic":
       return "雨";
     case "gemini":
+    case "vertex":
       return "云";
     case "doubao":
       return "豆";
@@ -131,6 +133,8 @@ function getProviderModelId(settings: AiSettings, providerId: AiProviderId): str
       return settings.anthropic.model;
     case "gemini":
       return settings.gemini.model;
+    case "vertex":
+      return settings.vertex.model;
     case "doubao":
       return settings.doubao.model;
     case "zhipu":
@@ -143,6 +147,8 @@ function getProviderModelId(settings: AiSettings, providerId: AiProviderId): str
       return settings.ollama.model;
     case "mlx":
       return settings.mlx.model;
+    case "claude-code-local":
+      return settings.claudeCodeLocal.model;
   }
 }
 
@@ -154,6 +160,8 @@ function patchProviderModel(settings: AiSettings, providerId: AiProviderId, mode
       return { ...settings, anthropic: { ...settings.anthropic, model: modelId } };
     case "gemini":
       return { ...settings, gemini: { ...settings.gemini, model: modelId } };
+    case "vertex":
+      return { ...settings, vertex: { ...settings.vertex, model: modelId } };
     case "doubao":
       return { ...settings, doubao: { ...settings.doubao, model: modelId } };
     case "zhipu":
@@ -166,6 +174,8 @@ function patchProviderModel(settings: AiSettings, providerId: AiProviderId, mode
       return { ...settings, ollama: { ...settings.ollama, model: modelId } };
     case "mlx":
       return { ...settings, mlx: { ...settings.mlx, model: modelId } };
+    case "claude-code-local":
+      return { ...settings, claudeCodeLocal: { ...settings.claudeCodeLocal, model: modelId } };
   }
 }
 

@@ -33,6 +33,7 @@ export function DefaultsPanel({
               <option value="openai">见山（OpenAI）</option>
               <option value="anthropic">听雨（Claude）</option>
               <option value="gemini">观云（Gemini）</option>
+              <option value="vertex">Vertex AI（GCP）</option>
               <option value="doubao">燎原（豆包）</option>
               <option value="zhipu">智谱 GLM</option>
               <option value="kimi">Kimi</option>

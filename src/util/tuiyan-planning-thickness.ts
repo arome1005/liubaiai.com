@@ -18,6 +18,8 @@ export type PlanningThickness = {
   detailMinTotalWithPunct: number
 }
 
+export type PlanningThicknessKey = keyof PlanningThickness
+
 export const DEFAULT_PLANNING_THICKNESS: PlanningThickness = {
   masterOutlineMinNoPunct: PLANNING_MIN_CHARS.masterOutlineNoPunct,
   outlineTotalWithPunct: PLANNING_MIN_CHARS.outlineTotalWithPunct,
@@ -37,6 +39,12 @@ export const PLANNING_THICKNESS_LIMITS = {
 function clampN(n: number, lo: number, hi: number): number {
   if (!Number.isFinite(n)) return lo
   return Math.max(lo, Math.min(hi, Math.round(n)))
+}
+
+/** 单字段钳位；用于输入框失焦提交（避免在每次按键时钳位导致无法输入中间态）。 */
+export function clampPlanningThicknessField(key: PlanningThicknessKey, raw: number): number {
+  const { min, max } = PLANNING_THICKNESS_LIMITS[key]
+  return clampN(raw, min, max)
 }
 
 export function normalizePlanningThickness(partial: Partial<PlanningThickness> | undefined): PlanningThickness {
@@ -71,8 +79,6 @@ export function normalizePlanningThickness(partial: Partial<PlanningThickness> |
 }
 
 /** 弹窗内高亮：即将被下一次「生成」约束的档（与当前树选中节点一致） */
-export type PlanningThicknessKey = keyof PlanningThickness
-
 export function planningNextThicknessKey(selected: TuiyanPlanningNode | null): PlanningThicknessKey {
   if (!selected) return "masterOutlineMinNoPunct"
   switch (selected.level) {
@@ -92,22 +98,12 @@ export function planningNextThicknessKey(selected: TuiyanPlanningNode | null): P
 
 const THICKNESS_LABEL: Record<PlanningThicknessKey, string> = {
   masterOutlineMinNoPunct: "总纲",
-  outlineTotalWithPunct: "一级大纲（条数合计，见规模设置中的条数）",
+  outlineTotalWithPunct: "一级大纲（3 条合计）",
   volumeWithPunct: "卷纲（每卷）",
   chapterOutlineMinPerNodeWithPunct: "章细纲（每条·标题+摘要+结构化信息）",
   detailMinTotalWithPunct: "详细细纲（整段，含 JSON 与正文）",
 }
 
-/**
- * @param outlineItemCount 与「规模」中一级大纲条数一致，用于高亮行文案
- */
-export function planningNextThicknessLabel(
-  selected: TuiyanPlanningNode | null,
-  outlineItemCount: number = 3,
-): string {
-  const key = planningNextThicknessKey(selected)
-  if (key === "outlineTotalWithPunct") {
-    return `一级大纲（${outlineItemCount} 条合计·最低字数）`
-  }
-  return THICKNESS_LABEL[key]
+export function planningNextThicknessLabel(selected: TuiyanPlanningNode | null): string {
+  return THICKNESS_LABEL[planningNextThicknessKey(selected)]
 }

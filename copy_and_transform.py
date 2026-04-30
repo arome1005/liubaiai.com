@@ -2,8 +2,9 @@ import os
 import re
 import shutil
 
-src_file = '/Users/arome/Desktop/留白写作/v0UI设计参考v-2.0/components/modules/tuiyan-module.tsx'
-dst_file = '/Users/arome/Desktop/留白写作/src/pages/LogicPage.tsx'
+_repo = os.path.dirname(os.path.abspath(__file__))
+src_file = os.path.join(_repo, "design", "v0-ui-reference", "components", "modules", "tuiyan-module.tsx")
+dst_file = os.path.join(_repo, "src", "pages", "LogicPage.tsx")
 
 with open(src_file, 'r', encoding='utf-8') as f:
     content = f.read()
@@ -23,8 +24,8 @@ with open(dst_file, 'w', encoding='utf-8') as f:
     f.write(content)
 
 # We also need to copy any missing UI components to src/components/ui/
-v0_ui_dir = '/Users/arome/Desktop/留白写作/v0UI设计参考v-2.0/components/ui/'
-src_ui_dir = '/Users/arome/Desktop/留白写作/src/components/ui/'
+v0_ui_dir = os.path.join(_repo, "design", "v0-ui-reference", "components", "ui")
+src_ui_dir = os.path.join(_repo, "src", "components", "ui")
 
 if not os.path.exists(src_ui_dir):
     os.makedirs(src_ui_dir)

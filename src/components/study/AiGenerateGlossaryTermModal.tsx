@@ -24,22 +24,13 @@ const JSON_RULES = `
 
 【输出格式要求（须严格遵守）】
 请严格只输出一个 JSON 对象，不要 markdown 代码块，不要额外说明。
-JSON 字段：term, category, note。
-category 只能是以下字符串之一：name（人名/称谓类词条）、term（术语法宝地名等非人设定）、dead（已死角色标记，若剧情明确为已故角色用此项）。
-若主要为物品/势力/术法等，请用 term。name 与 term 的划分以剧情用法为准，优先保证书斋可检索、可对照。
-note 为释义、设定约束、与剧情相关的注意事项；须为字符串。term 不超过 40 字。`;
+JSON 字段：term, note（均为字符串）。人名/地名/术法/势力/是否已故等一切说明与分类，请全部写在 note 中，不要单独输出分类字段。
+term 不超过 40 字。note 为释义、设定约束、与剧情相关的注意事项。`;
 
 function unwrapJsonBlock(raw: string): string {
   const s = raw.trim();
   const fenced = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
   return fenced ? fenced[1]!.trim() : s;
-}
-
-function normalizeCategory(
-  v: string | undefined,
-): BibleGlossaryTerm["category"] {
-  if (v === "name" || v === "term" || v === "dead") return v;
-  return "term";
 }
 
 export type AiGenerateGlossaryTermModalProps = {
@@ -161,9 +152,7 @@ export function AiGenerateGlossaryTermModal(props: AiGenerateGlossaryTermModalPr
       .join("\n\n---\n\n");
 
     const current = selectedTerm
-      ? `当前词条（可重写）：\n- 名称：${selectedTerm.term || "未命名"}\n- 类别：${
-          selectedTerm.category === "name" ? "人名" : selectedTerm.category === "dead" ? "已死" : "术语"
-        }\n- 备注：${selectedTerm.note || "暂无"}`
+      ? `当前词条（可重写）：\n- 名称：${selectedTerm.term || "未命名"}\n- 备注：${selectedTerm.note || "暂无"}`
       : "当前没有选中词条，将新建一条。";
 
     const systemHead = activeTemplate.body.trim();
@@ -192,30 +181,26 @@ ${chapterContext}`;
       });
 
       const parsed = JSON.parse(unwrapJsonBlock(output)) as Partial<{
-        term: string;
-        category: string;
-        note: string;
-      }>;
+        term: string
+        note: string
+      }>
       if (!(parsed.term ?? "").trim()) {
-        throw new Error("AI 未返回有效词条名");
+        throw new Error("AI 未返回有效词条名")
       }
 
-      const cat = normalizeCategory(parsed.category);
-
-      let targetId = selectedTerm?.id ?? null;
+      const noteText = (parsed.note ?? "").trim()
+      let targetId = selectedTerm?.id ?? null
       if (!targetId) {
         const created = await addGlossaryTerm(workId, {
           term: parsed.term!.trim() || "新术语",
-          category: cat,
-          note: (parsed.note ?? "").trim(),
-        });
-        targetId = created.id;
+          note: noteText,
+        })
+        targetId = created.id
       } else {
         await updateGlossaryTerm(targetId, {
           term: (parsed.term ?? "").trim() || "新术语",
-          category: cat,
-          note: (parsed.note ?? "").trim(),
-        });
+          note: noteText,
+        })
       }
       await onRefresh();
       onTermGenerated?.(targetId);

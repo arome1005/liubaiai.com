@@ -60,7 +60,8 @@ function providerLogoSrc(providerId: string | null | undefined): string | null {
   switch (providerId) {
     case "openai":    return "/logos/openai.png";
     case "anthropic": return "/logos/claude.png";
-    case "gemini":    return "/logos/gemini.png";
+    case "gemini":
+    case "vertex":    return "/logos/gemini.png";
     case "doubao":    return "/logos/doubao.png";
     case "zhipu":     return "/logos/zhipu.png";
     case "kimi":      return "/logos/kimi.png";

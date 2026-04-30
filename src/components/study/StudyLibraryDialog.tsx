@@ -1,19 +1,37 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronDown, HelpCircle } from "lucide-react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { approxRoughTokenCount } from "../../ai/approx-tokens";
 import { generateWithProviderStream, isFirstAiGateCancelledError } from "../../ai/client";
 import { isLocalAiProvider } from "../../ai/local-provider";
 import { getProviderConfig, loadAiSettings } from "../../ai/storage";
-import { listBibleCharacters, listBibleGlossaryTerms, listWorks } from "../../db/repo";
-import type { BibleCharacter, BibleGlossaryTerm, Chapter, Work } from "../../db/types";
+import type { AiProviderId, AiSettings } from "../../ai/types";
+import { aiModelIdToProvider, aiProviderToModelId } from "../../util/ai-ui-model-map";
+import { AI_MODELS } from "../ai-model-selector";
+import { UnifiedAIModelSelector as AIModelSelector } from "../ai-model-selector-unified";
+import {
+  buildExtractCharactersMessages,
+  buildExtractTermsMessages,
+  parseExtractedCharacters,
+  parseExtractedTerms,
+  type ExtractedCharacterDraft,
+  type ExtractedTermDraft,
+} from "../../util/ai-bulk-extract-prompt";
+import { listBibleCharacters, listBibleGlossaryTerms, listChapters, listVolumes, listWorks } from "../../db/repo";
+import type { BibleCharacter, BibleGlossaryTerm, Chapter, Volume, Work } from "../../db/types";
+import { isAbortError } from "../../util/is-abort-error";
 import { workPathSegment } from "../../util/work-url";
+import { clampStreamMaxOutputTokens } from "../../ai/writing-body-output-budget";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { AiGenerateCharacterModal } from "./AiGenerateCharacterModal";
 import { AiGenerateGlossaryTermModal } from "./AiGenerateGlossaryTermModal";
 import { CharacterQuickUpdateDialog } from "./CharacterQuickUpdateDialog";
+import { StudyImportChapterLinkDialog } from "./StudyImportChapterLinkDialog";
 
 export type StudyLibraryTab = "characters" | "terms";
 type CharacterGender = "male" | "female" | "unknown" | "none";
@@ -21,6 +39,15 @@ type CharacterGender = "male" | "female" | "unknown" | "none";
 const CHARACTER_NAME_MAX = 15;
 const CHARACTER_PERSONALITY_MAX = 300;
 const CHARACTER_PROFILE_MAX = 1000;
+
+/** 与本次流式请求的 `maxOutputTokens` 一致（经 clamp），进度 = 粗估已输出 token / 此上限（非定时器模拟） */
+const EXTRACT_STREAM_MAX_OUTPUT_TOKENS = clampStreamMaxOutputTokens(16_384);
+
+function extractStreamProgressPercentFromOutput(output: string): number {
+  const t = approxRoughTokenCount(output);
+  if (t <= 0) return 0;
+  return Math.min(99, Math.floor((t / EXTRACT_STREAM_MAX_OUTPUT_TOKENS) * 100));
+}
 
 export function StudyLibraryDialog(props: {
   open: boolean;
@@ -59,14 +86,12 @@ export function StudyLibraryDialog(props: {
     taboos: "",
   });
   const [termDraft, setTermDraft] = useState<{
-    term: string;
-    category: BibleGlossaryTerm["category"];
-    note: string;
+    term: string
+    note: string
   }>({
     term: "",
-    category: "term",
     note: "",
-  });
+  })
   const [saving, setSaving] = useState(false);
   const [aiGenModalOpen, setAiGenModalOpen] = useState(false);
   const [aiGlossaryGenModalOpen, setAiGlossaryGenModalOpen] = useState(false);
@@ -84,6 +109,40 @@ export function StudyLibraryDialog(props: {
   const [importSelectedIds, setImportSelectedIds] = useState<Set<string>>(() => new Set());
   const [importQuery, setImportQuery] = useState("");
   const [importing, setImporting] = useState(false);
+  /** "bible"=复制对方书斋已有；"ai-extract"=AI 扫源作品正文 */
+  const [importSource, setImportSource] = useState<"bible" | "ai-extract">("bible");
+  /** AI 扫描送入模型的章节 id（order 由 util 排序）；切换来源作品时在 effect 中重置 */
+  const [extractLinkedChapterIds, setExtractLinkedChapterIds] = useState<string[]>([]);
+  const [extractSourceChapters, setExtractSourceChapters] = useState<Chapter[]>([]);
+  const [extractSourceVolumes, setExtractSourceVolumes] = useState<Volume[]>([]);
+  const [extractChapterLinkOpen, setExtractChapterLinkOpen] = useState(false);
+  const extractImportWorkKeyRef = useRef<string>("");
+  const [extractRunning, setExtractRunning] = useState(false);
+  const [extractStreamPercent, setExtractStreamPercent] = useState(0);
+  const extractAbortRef = useRef<AbortController | null>(null);
+  const [extractProgress, setExtractProgress] = useState<string>("");
+  const [extractCharacters, setExtractCharacters] = useState<ExtractedCharacterDraft[]>([]);
+  const [extractTerms, setExtractTerms] = useState<ExtractedTermDraft[]>([]);
+  const [extractLastError, setExtractLastError] = useState<string>("");
+  /** 扫描专用模型，独立于「设置 → AI」全局选择，避免来回切换 */
+  const [extractModelId, setExtractModelId] = useState<string>(() => aiProviderToModelId(loadAiSettings().provider));
+  const [extractModelPickerOpen, setExtractModelPickerOpen] = useState(false);
+  const extractCurrentModel = useMemo(
+    () => AI_MODELS.find((m) => m.id === extractModelId) ?? AI_MODELS[0]!,
+    [extractModelId],
+  );
+  const importSourceWorkTitle = useMemo(() => {
+    const w = importWorks.find((x) => x.id === importSourceWorkId);
+    return (w?.title ?? "").trim() || "未命名作品";
+  }, [importWorks, importSourceWorkId]);
+
+  const extractLinkButtonLabel = useMemo(() => {
+    if (!importSourceWorkId) return "请选择来源作品";
+    if (extractSourceChapters.length === 0) return "正在加载章节…";
+    if (extractLinkedChapterIds.length === 0) return "点击配置关联章节";
+    return `已选 ${extractLinkedChapterIds.length} 章`;
+  }, [importSourceWorkId, extractSourceChapters.length, extractLinkedChapterIds.length]);
+
   const [batchDialogOpen, setBatchDialogOpen] = useState(false);
   const [batchSelectedIds, setBatchSelectedIds] = useState<Set<string>>(() => new Set());
   const [batchQuery, setBatchQuery] = useState("");
@@ -120,15 +179,37 @@ export function StudyLibraryDialog(props: {
 
   const importRowsDisplayed = useMemo(() => {
     const q = importQuery.trim().toLowerCase();
-    const rows = importMode === "characters" ? importRowsCharacters : importRowsTerms;
+    const rows: Array<BibleCharacter | BibleGlossaryTerm | ExtractedCharacterDraft | ExtractedTermDraft> =
+      importMode === "characters"
+        ? importSource === "ai-extract"
+          ? extractCharacters
+          : importRowsCharacters
+        : importSource === "ai-extract"
+          ? extractTerms
+          : importRowsTerms;
     if (!q) return rows;
     if (importMode === "characters") {
-      return (rows as BibleCharacter[]).filter((c) =>
+      return (rows as Array<BibleCharacter | ExtractedCharacterDraft>).filter((c) =>
         `${c.name}\n${c.motivation}\n${c.voiceNotes}\n${c.relationships}`.toLowerCase().includes(q),
       );
     }
-    return (rows as BibleGlossaryTerm[]).filter((t) => `${t.term}\n${t.note}`.toLowerCase().includes(q));
-  }, [importMode, importQuery, importRowsCharacters, importRowsTerms]);
+    return (rows as Array<BibleGlossaryTerm | ExtractedTermDraft>).filter((t) =>
+      `${t.term}\n${t.note}`.toLowerCase().includes(q),
+    );
+  }, [importMode, importQuery, importSource, importRowsCharacters, importRowsTerms, extractCharacters, extractTerms]);
+
+  /** 未应用筛选词的数据条数（用于决定是否在列表顶栏显示筛选框） */
+  const importRowsUnfiltered = useMemo(() => {
+    return importMode === "characters"
+      ? importSource === "ai-extract"
+        ? extractCharacters
+        : importRowsCharacters
+      : importSource === "ai-extract"
+        ? extractTerms
+        : importRowsTerms;
+  }, [importMode, importSource, importRowsCharacters, importRowsTerms, extractCharacters, extractTerms]);
+
+  const showImportSearchBar = importRowsUnfiltered.length > 0;
 
   const batchRowsDisplayed = useMemo(() => {
     const q = batchQuery.trim().toLowerCase();
@@ -147,6 +228,7 @@ export function StudyLibraryDialog(props: {
     setImportMode(props.tab);
     setImportQuery("");
     setImportSelectedIds(new Set());
+    setExtractModelId((prev) => prev || aiProviderToModelId(loadAiSettings().provider));
     let cancelled = false;
     void (async () => {
       setImportLoadingWorks(true);
@@ -168,7 +250,37 @@ export function StudyLibraryDialog(props: {
   }, [importDialogOpen, props.tab, props.workId]);
 
   useEffect(() => {
+    if (!importDialogOpen) return;
+    if (importRowsUnfiltered.length === 0) setImportQuery("");
+  }, [importDialogOpen, importRowsUnfiltered.length]);
+
+  /** AI 扫描：加载来源作品的章节 / 卷，并在切换来源作品时默认勾选前 50 章 */
+  useEffect(() => {
+    if (!importDialogOpen || importSource !== "ai-extract" || !importSourceWorkId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [ch, vol] = await Promise.all([listChapters(importSourceWorkId), listVolumes(importSourceWorkId)]);
+        if (cancelled) return;
+        setExtractSourceChapters(ch);
+        setExtractSourceVolumes(vol);
+        const valid = ch.filter((c) => (c.content ?? "").trim()).sort((a, b) => a.order - b.order);
+        if (extractImportWorkKeyRef.current !== importSourceWorkId) {
+          extractImportWorkKeyRef.current = importSourceWorkId;
+          setExtractLinkedChapterIds(valid.slice(0, 50).map((c) => c.id));
+        }
+      } catch (e) {
+        if (!cancelled) toast.error(e instanceof Error ? e.message : "加载来源章节失败");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [importDialogOpen, importSource, importSourceWorkId]);
+
+  useEffect(() => {
     if (!importDialogOpen || !importSourceWorkId) return;
+    if (importSource !== "bible") return; // AI 提取由「开始扫描」按钮触发
     setImportSelectedIds(new Set());
     let cancelled = false;
     void (async () => {
@@ -190,7 +302,19 @@ export function StudyLibraryDialog(props: {
     return () => {
       cancelled = true;
     };
-  }, [importDialogOpen, importSourceWorkId, importMode]);
+  }, [importDialogOpen, importSourceWorkId, importMode, importSource]);
+
+  /** Tab 切换 / 类型 / 源作品变化时清掉勾选与历史结果，避免串号 */
+  useEffect(() => {
+    setImportSelectedIds(new Set());
+    setExtractLastError("");
+    if (importSource === "bible") {
+      // 切回"复制已有"时清掉上次扫描的草稿，避免误导
+      setExtractCharacters([]);
+      setExtractTerms([]);
+      setExtractProgress("");
+    }
+  }, [importSource, importMode, importSourceWorkId]);
 
   function swapOrderIds(list: BibleCharacter[], id: string, dir: -1 | 1): string[] | null {
     const idx = list.findIndex((x) => x.id === id);
@@ -347,16 +471,14 @@ export function StudyLibraryDialog(props: {
     if (!selectedTerm) {
       setTermDraft({
         term: "",
-        category: "term",
         note: "",
-      });
-      return;
+      })
+      return
     }
     setTermDraft({
       term: selectedTerm.term ?? "",
-      category: selectedTerm.category,
       note: selectedTerm.note ?? "",
-    });
+    })
   }, [selectedTerm]);
 
   useEffect(() => {
@@ -376,13 +498,9 @@ export function StudyLibraryDialog(props: {
   }, [characterDraft, selectedCharacter, selectedCharacterGender]);
 
   const termDirty = useMemo(() => {
-    if (!selectedTerm) return false;
-    return (
-      termDraft.term !== selectedTerm.term ||
-      termDraft.category !== selectedTerm.category ||
-      termDraft.note !== selectedTerm.note
-    );
-  }, [termDraft, selectedTerm]);
+    if (!selectedTerm) return false
+    return termDraft.term !== selectedTerm.term || termDraft.note !== selectedTerm.note
+  }, [termDraft, selectedTerm])
 
   async function saveCharacter() {
     if (!selectedCharacter) return;
@@ -419,9 +537,8 @@ export function StudyLibraryDialog(props: {
     try {
       await props.updateGlossaryTerm(selectedTerm.id, {
         term: termDraft.term.trim(),
-        category: termDraft.category,
         note: termDraft.note,
-      });
+      })
       await props.onRefresh();
       toast.success("词条已保存");
     } catch (err) {
@@ -657,7 +774,9 @@ ${chapterContext}`;
     setImporting(true);
     try {
       if (importMode === "characters") {
-        const selected = importRowsCharacters.filter((r) => ids.includes(r.id));
+        const sourceRows: Array<BibleCharacter | ExtractedCharacterDraft> =
+          importSource === "ai-extract" ? extractCharacters : importRowsCharacters;
+        const selected = sourceRows.filter((r) => ids.includes(r.id));
         const existed = new Set(props.characters.map((c) => (c.name ?? "").trim().toLowerCase()).filter(Boolean));
         let ok = 0;
         let skipped = 0;
@@ -683,7 +802,9 @@ ${chapterContext}`;
         if (firstCreatedId) setSelectedCharacterId(firstCreatedId);
         toast.success(`导入人物 ${ok} 条${skipped ? `，跳过重名 ${skipped} 条` : ""}。`);
       } else {
-        const selected = importRowsTerms.filter((r) => ids.includes(r.id));
+        const sourceRows: Array<BibleGlossaryTerm | ExtractedTermDraft> =
+          importSource === "ai-extract" ? extractTerms : importRowsTerms;
+        const selected = sourceRows.filter((r) => ids.includes(r.id));
         const existed = new Set(props.glossaryTerms.map((t) => (t.term ?? "").trim().toLowerCase()).filter(Boolean));
         let ok = 0;
         let skipped = 0;
@@ -696,9 +817,8 @@ ${chapterContext}`;
           }
           const created = await props.addGlossaryTerm(props.workId, {
             term: row.term || "未命名词条",
-            category: row.category ?? "term",
             note: row.note ?? "",
-          });
+          })
           if (!firstCreatedId) firstCreatedId = created.id;
           if (key) existed.add(key);
           ok += 1;
@@ -713,6 +833,119 @@ ${chapterContext}`;
     } finally {
       setImporting(false);
     }
+  }
+
+  async function runAiExtract() {
+    if (!importSourceWorkId) {
+      toast.error("请先选择来源作品。");
+      return;
+    }
+    const sourceWork = importWorks.find((w) => w.id === importSourceWorkId);
+    setExtractLastError("");
+    setImportSelectedIds(new Set());
+    setExtractStreamPercent(0);
+    setExtractRunning(true);
+    setExtractProgress("正在加载来源作品的章节…");
+    try {
+      const chapters = await listChapters(importSourceWorkId);
+      const validChapters = chapters.filter((c) => (c.content ?? "").trim());
+      if (validChapters.length === 0) {
+        setExtractLastError("来源作品没有可用正文，先把章节写入后再扫描。");
+        setExtractProgress("");
+        return;
+      }
+
+      // 隐私门：调云端模型必须开启「允许正文上云」
+      const sBase: AiSettings = loadAiSettings();
+      const overrideProvider: AiProviderId = aiModelIdToProvider(extractModelId);
+      const merged: AiSettings = { ...sBase, provider: overrideProvider };
+      if (!isLocalAiProvider(merged.provider)) {
+        if (!merged.privacy?.consentAccepted || !merged.privacy?.allowCloudProviders) {
+          setExtractLastError("请先在设置中开启云端模型。");
+          return;
+        }
+        if (!merged.privacy?.allowChapterContent) {
+          setExtractLastError("请先在隐私设置中开启「允许正文上云」。");
+          return;
+        }
+      }
+      const config = getProviderConfig(merged, merged.provider);
+
+      const builder = importMode === "characters" ? buildExtractCharactersMessages : buildExtractTermsMessages;
+      const sortedValid = [...validChapters].sort((a, b) => a.order - b.order);
+      const fallbackIds = sortedValid.slice(0, 50).map((c) => c.id);
+      const chapterIds = extractLinkedChapterIds.length > 0 ? extractLinkedChapterIds : fallbackIds;
+      const built = builder({
+        chapters: validChapters,
+        workTitle: sourceWork?.title ?? "",
+        chapterIds,
+      });
+
+      setExtractProgress(
+        `已发起扫描：取前 ${built.scannedChapters} 章 / 共 ${validChapters.length} 章，约 ${built.totalChars.toLocaleString()} 字${built.truncated ? "（部分内容已截断）" : ""}…`,
+      );
+
+      const ac = new AbortController();
+      extractAbortRef.current = ac;
+
+      let output = "";
+      let lastTickAt = 0;
+      await generateWithProviderStream({
+        provider: merged.provider,
+        config,
+        messages: built.messages,
+        signal: ac.signal,
+        maxOutputTokens: EXTRACT_STREAM_MAX_OUTPUT_TOKENS,
+        onDelta: (delta) => {
+          output += delta;
+          const now = Date.now();
+          if (now - lastTickAt > 250) {
+            lastTickAt = now;
+            setExtractStreamPercent(extractStreamProgressPercentFromOutput(output));
+            setExtractProgress(`扫描中…已收到 ${output.length.toLocaleString()} 字符`);
+          }
+        },
+      });
+
+      setExtractStreamPercent(100);
+
+      if (importMode === "characters") {
+        const drafts = parseExtractedCharacters(output);
+        setExtractCharacters(drafts);
+        setExtractProgress(`扫描完成：识别 ${drafts.length} 个角色（请勾选要导入的项）`);
+        if (drafts.length === 0) {
+          setExtractLastError("AI 未返回有效角色 JSON。可换 2.5 Pro 重试，或减少扫描章节数。");
+        }
+      } else {
+        const drafts = parseExtractedTerms(output);
+        setExtractTerms(drafts);
+        setExtractProgress(`扫描完成：识别 ${drafts.length} 个词条（请勾选要导入的项）`);
+        if (drafts.length === 0) {
+          setExtractLastError("AI 未返回有效词条 JSON。可换 2.5 Pro 重试，或减少扫描章节数。");
+        }
+      }
+    } catch (err) {
+      if (isFirstAiGateCancelledError(err)) {
+        setExtractProgress("");
+        return;
+      }
+      if (isAbortError(err)) {
+        setExtractLastError("");
+        setExtractProgress("已终止扫描。");
+        return;
+      }
+      const msg = err instanceof Error ? err.message : "AI 扫描失败";
+      setExtractLastError(msg);
+      setExtractProgress("");
+    } finally {
+      extractAbortRef.current = null;
+      setExtractStreamPercent(0);
+      setExtractRunning(false);
+    }
+  }
+
+  function stopAiExtract() {
+    extractAbortRef.current?.abort();
   }
 
   function openBatchDialog() {
@@ -1154,9 +1387,6 @@ ${chapterContext}`;
                             title={g.term}
                           >
                             <span className="study-library-list-item-title">{g.term || "（未命名）"}</span>
-                            <span className="study-library-list-item-meta">
-                              {g.category === "name" ? "人名" : g.category === "dead" ? "已死" : "术语"}
-                            </span>
                           </button>
                         </li>
                       ))
@@ -1173,7 +1403,6 @@ ${chapterContext}`;
                             try {
                               const created = await props.addGlossaryTerm(props.workId, {
                                 term: "新术语",
-                                category: "term",
                                 note: "",
                               });
                               await props.onRefresh();
@@ -1209,7 +1438,7 @@ ${chapterContext}`;
                   ) : (
                     <>
                       <div className="study-library-right-scroll">
-                        <div className="study-library-term-top">
+                        <div className="study-library-term-top study-library-term-top--single">
                           <label className="study-library-field study-library-field--compact">
                             <span>词条名称</span>
                             <input
@@ -1218,23 +1447,6 @@ ${chapterContext}`;
                               onChange={(e) => setTermDraft((p) => ({ ...p, term: e.target.value }))}
                               placeholder="输入词条名"
                             />
-                          </label>
-                          <label className="study-library-field study-library-field--compact">
-                            <span>类别</span>
-                            <select
-                              className="study-library-input"
-                              value={termDraft.category}
-                              onChange={(e) =>
-                                setTermDraft((p) => ({
-                                  ...p,
-                                  category: e.target.value as BibleGlossaryTerm["category"],
-                                }))
-                              }
-                            >
-                              <option value="name">人名</option>
-                              <option value="term">术语</option>
-                              <option value="dead">已死</option>
-                            </select>
                           </label>
                         </div>
                         <label className="study-library-field">
@@ -1293,9 +1505,7 @@ ${chapterContext}`;
                             size="sm"
                             onClick={() =>
                               void copyText(
-                                `# ${termDraft.term || "未命名词条"}\n\n类别：${
-                                  termDraft.category === "name" ? "人名" : termDraft.category === "dead" ? "已死" : "术语"
-                                }\n\n${termDraft.note || "暂无备注"}`,
+                                `# ${termDraft.term || "未命名词条"}\n\n${termDraft.note || "暂无备注"}`,
                                 "已导出词条内容到剪贴板",
                               )
                             }
@@ -1351,89 +1561,276 @@ ${chapterContext}`;
         setImportDialogOpen(v);
       }}
     >
-      <DialogContent className="z-[221] max-h-[min(88dvh,760px)] max-w-3xl overflow-hidden p-0">
-        <DialogHeader className="border-b border-border/50 px-4 py-3">
-          <DialogTitle>他书导入</DialogTitle>
-          <p className="text-xs text-muted-foreground">从其他作品导入人物或词条到当前书斋；同名项会自动跳过。</p>
-        </DialogHeader>
-        <div className="flex min-h-0 flex-col gap-3 p-4">
-          <div className="grid gap-2 sm:grid-cols-2">
-            <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">导入类型</span>
-              <div className="flex gap-2">
+      <DialogContent
+        overlayClassName="nested-app-dialog-overlay"
+        className={cn(
+          "z-[var(--z-modal-nested-content)] flex max-h-[min(85vh,800px)] w-full flex-col gap-0 overflow-hidden border-border bg-[var(--surface)] p-0 shadow-lg",
+          "max-w-[min(1200px,calc(100vw-3rem))] sm:max-w-[min(1200px,calc(100vw-3rem))]",
+        )}
+      >
+        <DialogHeader className="relative border-b border-border/50 px-5 py-3 pr-24">
+          <div className="flex flex-col gap-2.5 lg:flex-row lg:items-center lg:gap-3">
+            <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+              <DialogTitle className="shrink-0 text-base leading-none">他书导入</DialogTitle>
+              <div className="inline-flex h-8 shrink-0 gap-0.5 rounded-lg border border-border/40 bg-background/70 p-0.5 shadow-sm">
                 <Button
                   type="button"
                   size="sm"
-                  variant={importMode === "characters" ? "default" : "outline"}
-                  disabled={importing}
-                  onClick={() => setImportMode("characters")}
+                  variant={importSource === "bible" ? "default" : "ghost"}
+                  className="h-7 rounded-md px-2.5 text-xs sm:h-8 sm:px-3 sm:text-sm"
+                  disabled={importing || extractRunning}
+                  onClick={() => setImportSource("bible")}
                 >
-                  人物
+                  复制已有
                 </Button>
                 <Button
                   type="button"
                   size="sm"
-                  variant={importMode === "terms" ? "default" : "outline"}
-                  disabled={importing}
-                  onClick={() => setImportMode("terms")}
+                  variant={importSource === "ai-extract" ? "default" : "ghost"}
+                  className="h-7 rounded-md px-2.5 text-xs sm:h-8 sm:px-3 sm:text-sm"
+                  disabled={importing || extractRunning}
+                  onClick={() => setImportSource("ai-extract")}
                 >
-                  词条
+                  AI 扫描提取
                 </Button>
               </div>
-            </label>
-            <label className="space-y-1">
-              <span className="text-xs text-muted-foreground">来源作品</span>
-              <select
-                className="study-library-input h-9"
-                value={importSourceWorkId}
-                disabled={importing || importLoadingWorks}
-                onChange={(e) => setImportSourceWorkId(e.target.value)}
-              >
-                {importWorks.length === 0 ? <option value="">暂无可导入作品</option> : null}
-                {importWorks.map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.title || "未命名作品"}
-                  </option>
-                ))}
-              </select>
-            </label>
+            </div>
+            <div className="flex min-h-9 min-w-0 flex-1 items-center gap-1 lg:justify-center lg:px-2">
+              <span className="shrink-0 text-xs text-muted-foreground sm:text-sm">作品来源：</span>
+              {importLoadingWorks ? (
+                <span className="min-w-0 truncate text-sm text-muted-foreground">加载中…</span>
+              ) : importWorks.length === 0 ? (
+                <span className="min-w-0 truncate text-sm text-destructive">暂无可导入作品</span>
+              ) : importWorks.length === 1 ? (
+                <span
+                  className="min-w-0 truncate text-sm font-medium text-foreground"
+                  title={importSourceWorkTitle}
+                >
+                  {importSourceWorkTitle}
+                </span>
+              ) : (
+                <select
+                  aria-label="选择来源作品"
+                  className={cn(
+                    "box-border min-h-9 min-w-0 max-w-full flex-1 rounded-md border border-border/50 bg-muted/15 px-2.5 py-1.5 text-sm font-medium leading-normal text-foreground",
+                    "outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 ring-offset-background",
+                    "sm:max-w-[min(100%,36rem)]",
+                  )}
+                  value={importSourceWorkId}
+                  disabled={importing || importLoadingWorks}
+                  onChange={(e) => setImportSourceWorkId(e.target.value)}
+                >
+                  {importWorks.map((w) => (
+                    <option key={w.id} value={w.id}>
+                      {w.title || "未命名作品"}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
           </div>
-          <input
-            value={importQuery}
-            onChange={(e) => setImportQuery(e.target.value)}
-            disabled={importing}
-            className="study-library-search h-9 w-full rounded-md border border-border/80 bg-background/80 px-3 text-sm"
-            placeholder={importMode === "characters" ? "筛选人物…" : "筛选词条…"}
-          />
-          <div className="min-h-0 flex-1 overflow-auto rounded-md border border-border/60 p-2">
-            {importLoadingRows ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">加载中…</p>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                aria-label="说明"
+                className="absolute right-12 top-3.5 inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <HelpCircle className="h-4 w-4" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" align="end" className="max-w-xs text-xs leading-relaxed">
+              {importSource === "bible"
+                ? "从其他作品已建立的人物 / 词条复制到当前书斋；同名项自动跳过。"
+                : "AI 扫描其他作品的章节正文，自动识别人物或词条；勾选后写入当前书斋（同名跳过）。"}
+            </TooltipContent>
+          </Tooltip>
+        </DialogHeader>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 p-5">
+          <div className="rounded-xl border border-border/50 bg-muted/10 p-4 shadow-sm">
+            <div className="flex flex-col gap-3">
+              {importSource === "ai-extract" ? (
+                <div className="flex flex-wrap items-end gap-x-2 gap-y-2 sm:gap-x-3">
+                  <div className="flex min-w-0 flex-col gap-1">
+                    <span className="text-xs font-medium leading-none text-muted-foreground">导入类型</span>
+                    <div className="flex gap-1.5">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={importMode === "characters" ? "default" : "outline"}
+                        className="h-9 px-4"
+                        disabled={importing}
+                        onClick={() => setImportMode("characters")}
+                      >
+                        人物
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={importMode === "terms" ? "default" : "outline"}
+                        className="h-9 px-4"
+                        disabled={importing}
+                        onClick={() => setImportMode("terms")}
+                      >
+                        词条
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex min-w-0 max-w-[min(100%,22rem)] flex-col gap-1">
+                    <span className="text-xs font-medium leading-none text-muted-foreground">关联章节</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="h-auto min-h-9 w-full justify-start whitespace-normal px-3 py-2 text-left text-sm font-normal leading-snug"
+                      disabled={extractRunning || importing || !importSourceWorkId}
+                      onClick={() => setExtractChapterLinkOpen(true)}
+                    >
+                      {extractLinkButtonLabel}
+                    </Button>
+                  </div>
+                  <div className="min-w-0 flex-1 basis-[min(100%,18rem)] sm:min-w-[12rem] sm:basis-auto">
+                    <div className="flex flex-col gap-1">
+                      <span className="text-xs font-medium leading-none text-muted-foreground">AI 模型</span>
+                      <button
+                        type="button"
+                        disabled={extractRunning || importing}
+                        onClick={() => setExtractModelPickerOpen(true)}
+                        className={cn(
+                          "flex h-9 w-full min-w-0 items-center gap-2 rounded-md border border-border/60 bg-background px-3 text-left text-sm transition-colors",
+                          "hover:border-primary/50 hover:bg-accent/30",
+                          (extractRunning || importing) && "cursor-not-allowed opacity-60",
+                        )}
+                      >
+                        <span className="shrink-0 scale-90">{extractCurrentModel.icon}</span>
+                        <span className="min-w-0 flex-1 truncate">
+                          <span className="font-medium text-foreground">{extractCurrentModel.name}</span>
+                          <span className="ml-1.5 text-xs text-muted-foreground">{extractCurrentModel.subtitle}</span>
+                        </span>
+                        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <span className="invisible select-none text-xs font-medium leading-none" aria-hidden>
+                      导入类型
+                    </span>
+                    <Button
+                      type="button"
+                      variant={extractRunning ? "outline" : "default"}
+                      className="h-9 shrink-0 px-4 sm:px-5"
+                      disabled={
+                        importing || (!extractRunning && (!importSourceWorkId || extractLinkedChapterIds.length === 0))
+                      }
+                      onClick={() => {
+                        if (extractRunning) stopAiExtract();
+                        else void runAiExtract();
+                      }}
+                    >
+                      {extractRunning ? "终止扫描" : "开始扫描"}
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <span className="block text-xs font-medium text-muted-foreground">导入类型</span>
+                  <div className="flex gap-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={importMode === "characters" ? "default" : "outline"}
+                      className="h-9 px-4"
+                      disabled={importing}
+                      onClick={() => setImportMode("characters")}
+                    >
+                      人物
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={importMode === "terms" ? "default" : "outline"}
+                      className="h-9 px-4"
+                      disabled={importing}
+                      onClick={() => setImportMode("terms")}
+                    >
+                      词条
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {importSource === "ai-extract" && (extractProgress || extractLastError) ? (
+                <div className="space-y-1">
+                  {extractProgress ? <p className="text-xs text-muted-foreground">{extractProgress}</p> : null}
+                  {extractLastError ? <p className="text-xs text-destructive">{extractLastError}</p> : null}
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="relative flex min-h-[14rem] flex-1 flex-col overflow-hidden rounded-lg border border-border/60 bg-background/40">
+            {showImportSearchBar ? (
+              <div className="shrink-0 border-b border-border/50 bg-muted/15 px-3 py-2">
+                <input
+                  value={importQuery}
+                  onChange={(e) => setImportQuery(e.target.value)}
+                  disabled={importing}
+                  className="study-library-search h-8 w-full rounded-md border border-border/70 bg-background/90 px-3 text-sm shadow-sm"
+                  placeholder={importMode === "characters" ? "筛选人物…" : "筛选词条…"}
+                />
+              </div>
+            ) : null}
+            <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {importLoadingRows || extractRunning ? (
+              <p className="py-12 text-center text-sm text-muted-foreground">
+                {extractRunning ? (
+                  <span className="font-medium text-foreground">提取进度 {extractStreamPercent}%</span>
+                ) : (
+                  "加载中…"
+                )}
+              </p>
             ) : importRowsDisplayed.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">暂无可导入数据</p>
+              <p className="py-12 text-center text-sm text-muted-foreground">
+                {importSource === "ai-extract"
+                  ? "点击上方「开始扫描」让 AI 识别人物或词条"
+                  : "暂无可导入数据（来源作品的书斋为空）"}
+              </p>
             ) : (
-              <ul className="space-y-1">
+              <ul className="space-y-1.5">
                 {importRowsDisplayed.map((row) => {
                   const id = row.id;
                   const checked = importSelectedIds.has(id);
                   return (
                     <li key={id}>
-                      <label className={cn("flex cursor-pointer items-start gap-2 rounded-md border px-2 py-1.5", checked ? "border-primary/60 bg-primary/5" : "border-border/50")}>
+                      <label
+                        className={cn(
+                          "flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2 transition-colors",
+                          checked
+                            ? "border-primary/60 bg-primary/5"
+                            : "border-border/50 hover:border-border hover:bg-accent/20",
+                        )}
+                      >
                         <input
                           type="checkbox"
+                          className="mt-0.5"
                           checked={checked}
                           disabled={importing}
                           onChange={() => toggleImportRow(id)}
                         />
-                        <span className="min-w-0 flex-1 text-sm">
+                        <span className="min-w-0 flex-1 space-y-0.5 text-sm">
                           {importMode === "characters" ? (
                             <>
-                              <span className="font-medium">{(row as BibleCharacter).name || "（未命名）"}</span>
-                              <span className="text-muted-foreground ml-2 text-xs line-clamp-1">{(row as BibleCharacter).voiceNotes || (row as BibleCharacter).motivation || "—"}</span>
+                              <span className="block font-medium">{(row as BibleCharacter).name || "（未命名）"}</span>
+                              <span className="block text-xs text-muted-foreground line-clamp-2">
+                                {(row as BibleCharacter).motivation ||
+                                  (row as BibleCharacter).voiceNotes ||
+                                  (row as BibleCharacter).relationships ||
+                                  "—"}
+                              </span>
                             </>
                           ) : (
                             <>
-                              <span className="font-medium">{(row as BibleGlossaryTerm).term || "（未命名）"}</span>
-                              <span className="text-muted-foreground ml-2 text-xs line-clamp-1">{(row as BibleGlossaryTerm).note || "—"}</span>
+                              <span className="block font-medium">{(row as BibleGlossaryTerm).term || "（未命名）"}</span>
+                              <span className="block text-xs text-muted-foreground line-clamp-2">
+                                {(row as BibleGlossaryTerm).note || "—"}
+                              </span>
                             </>
                           )}
                         </span>
@@ -1443,20 +1840,23 @@ ${chapterContext}`;
                 })}
               </ul>
             )}
+            </div>
           </div>
-          <div className="flex items-center justify-between gap-2 border-t border-border/40 pt-2">
-            <div className="text-xs text-muted-foreground">已选 {importSelectedIds.size} 条</div>
+          <div className="flex items-center justify-between gap-2 border-t border-border/40 pt-3">
+            <div className="text-xs text-muted-foreground">
+              已选 <span className="font-medium text-foreground">{importSelectedIds.size}</span> / 共 {importRowsDisplayed.length} 条
+            </div>
             <div className="flex gap-2">
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={importing}
+                disabled={importing || importRowsDisplayed.length === 0}
                 onClick={() => setImportSelectedIds(new Set(importRowsDisplayed.map((r) => r.id)))}
               >
                 全选可见
               </Button>
-              <Button type="button" size="sm" variant="outline" disabled={importing} onClick={() => setImportSelectedIds(new Set())}>
+              <Button type="button" size="sm" variant="outline" disabled={importing || importSelectedIds.size === 0} onClick={() => setImportSelectedIds(new Set())}>
                 清空
               </Button>
               <Button type="button" size="sm" disabled={importing || importSelectedIds.size === 0} onClick={() => void runImportSelected()}>
@@ -1467,6 +1867,27 @@ ${chapterContext}`;
         </div>
       </DialogContent>
     </Dialog>
+    <StudyImportChapterLinkDialog
+      open={extractChapterLinkOpen && importDialogOpen}
+      onOpenChange={setExtractChapterLinkOpen}
+      chapters={extractSourceChapters}
+      volumes={extractSourceVolumes}
+      selectedIds={extractLinkedChapterIds}
+      onConfirm={setExtractLinkedChapterIds}
+      disabled={extractRunning || importing}
+    />
+    <AIModelSelector
+      open={extractModelPickerOpen && importDialogOpen}
+      onOpenChange={setExtractModelPickerOpen}
+      selectedModelId={extractModelId}
+      onSelectModel={(id) => {
+        setExtractModelId(id);
+        setExtractModelPickerOpen(false);
+      }}
+      title="选择扫描模型"
+      overlayClassName="z-[222]"
+      contentClassName="z-[223]"
+    />
     <Dialog
       open={batchDialogOpen}
       onOpenChange={(v) => {
@@ -1474,7 +1895,10 @@ ${chapterContext}`;
         setBatchDialogOpen(v);
       }}
     >
-      <DialogContent className="z-[221] max-h-[min(84dvh,680px)] max-w-lg overflow-hidden p-0">
+      <DialogContent
+        overlayClassName="nested-app-dialog-overlay"
+        className="z-[var(--z-modal-nested-content)] max-h-[min(84dvh,680px)] max-w-lg overflow-hidden p-0"
+      >
         <DialogHeader className="border-b border-border/50 px-4 py-3">
           <DialogTitle>批量操作</DialogTitle>
           <p className="text-xs text-muted-foreground">当前作用于「{props.tab === "characters" ? "人物" : "词条"}」：支持多选删除。</p>

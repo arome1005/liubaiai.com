@@ -692,7 +692,7 @@ export function ChatPage() {
         const e = await addBibleWorldEntry(workId, { entryKind: "other", title: content.slice(0, 60), body: content });
         entryId = e.id;
       } else if (type === "glossary") {
-        const e = await addBibleGlossaryTerm(workId, { term: content.slice(0, 40), category: "term", note: content });
+        const e = await addBibleGlossaryTerm(workId, { term: content.slice(0, 40), note: content });
         entryId = e.id;
       } else {
         const e = await addBibleTimelineEvent(workId, { label: content.slice(0, 60), note: content, chapterId: null });

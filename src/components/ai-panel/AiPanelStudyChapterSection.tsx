@@ -101,12 +101,14 @@ export function AiPanelStudyChapterSection(props: {
   );
 
   const termItems = useMemo(
-    () => props.glossaryTerms.map((t) => {
-      const cat = t.category === "name" ? "人名" : t.category === "dead" ? "已死" : "术语";
-      return { id: t.id, label: t.term.trim() || "（未命名）", title: `${t.term}（${cat}）` };
-    }),
+    () =>
+      props.glossaryTerms.map((t) => ({
+        id: t.id,
+        label: t.term.trim() || "（未命名）",
+        title: t.term.trim() || "（未命名）",
+      })),
     [props.glossaryTerms],
-  );
+  )
 
   return (
     <section className="ai-panel-section ai-panel-section--flat" aria-label="本章人物与词条">

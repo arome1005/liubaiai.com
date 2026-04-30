@@ -13,11 +13,7 @@
  */
 import { useCallback, useState } from "react"
 import { BookOpen, Flame, Gem, Hash, MapPin, Plus, Shield, Users, X } from "lucide-react"
-import type {
-  BibleGlossaryTerm,
-  PlanningNodeStructuredMeta,
-  TuiyanPlanningLevel,
-} from "../../db/types"
+import type { PlanningNodeStructuredMeta, TuiyanPlanningLevel } from "../../db/types"
 import { cn } from "../../lib/utils"
 import { STRUCTURED_FIELDS_BY_LEVEL } from "../../util/tuiyan-planning"
 import { CHARACTER_CONFIG } from "../../util/entry-kind-icon"
@@ -35,8 +31,6 @@ type LibraryType = "character" | "glossaryTerm" | "tag" | "conflict" | "textarea
 
 type FieldChipConfig = {
   libraryType: LibraryType
-  /** 词条字段：入库时的默认类别 */
-  defaultCategory?: BibleGlossaryTerm["category"]
   /** 词条字段：chip 图标 */
   icon?: React.ElementType
   /** 词条字段：chip 颜色 class */
@@ -47,12 +41,12 @@ const CHIP_FIELD_CONFIG: Partial<Record<keyof PlanningNodeStructuredMeta, FieldC
   appearedCharacters: { libraryType: "character" },
   coreCharacters:     { libraryType: "character" },
   mainCharacters:     { libraryType: "character" },
-  locations:    { libraryType: "glossaryTerm", defaultCategory: "name",  icon: MapPin, colorClass: "text-sky-400" },
-  keyLocations: { libraryType: "glossaryTerm", defaultCategory: "name",  icon: MapPin, colorClass: "text-sky-400" },
-  mainFactions: { libraryType: "glossaryTerm", defaultCategory: "term",  icon: Shield, colorClass: "text-violet-400" },
-  coreFactions: { libraryType: "glossaryTerm", defaultCategory: "term",  icon: Shield, colorClass: "text-violet-400" },
-  keyItems:          { libraryType: "glossaryTerm", defaultCategory: "term",  icon: Gem,      colorClass: "text-amber-400" },
-  worldSettingTerms: { libraryType: "glossaryTerm", defaultCategory: "term",  icon: BookOpen, colorClass: "text-emerald-400" },
+  locations:    { libraryType: "glossaryTerm", icon: MapPin, colorClass: "text-sky-400" },
+  keyLocations: { libraryType: "glossaryTerm", icon: MapPin, colorClass: "text-sky-400" },
+  mainFactions: { libraryType: "glossaryTerm", icon: Shield, colorClass: "text-violet-400" },
+  coreFactions: { libraryType: "glossaryTerm", icon: Shield, colorClass: "text-violet-400" },
+  keyItems:          { libraryType: "glossaryTerm", icon: Gem,      colorClass: "text-amber-400" },
+  worldSettingTerms: { libraryType: "glossaryTerm", icon: BookOpen, colorClass: "text-emerald-400" },
   tags:          { libraryType: "tag" },
   conflictPoints: { libraryType: "conflict" },
 }
@@ -124,7 +118,6 @@ function ChipField({
         motivation?: string
         gender?: import("../../db/types").BibleCharacter["gender"]
         note?: string
-        category?: BibleGlossaryTerm["category"]
       },
     ) => {
       if (config.libraryType === "character") {
@@ -134,11 +127,7 @@ function ChipField({
           gender: extra.gender,
         })
       } else if (config.libraryType === "glossaryTerm") {
-        await library.createTerm(
-          name,
-          extra.category ?? config.defaultCategory,
-          extra.note,
-        )
+        await library.createTerm(name, extra.note ?? "")
       }
     },
     [config, library],
@@ -205,7 +194,6 @@ function ChipField({
                 chipType="glossaryTerm"
                 fieldIcon={chipFieldIcon}
                 fieldColor={chipFieldColor}
-                defaultCategory={config.defaultCategory}
                 disabled={disabled}
               />
             )
@@ -405,9 +393,6 @@ export function StructuredMetaChips({
   onChange,
   libraryRefreshKey,
 }: StructuredMetaChipsProps) {
-  const fields = STRUCTURED_FIELDS_BY_LEVEL[level]
-  if (!fields.length) return null
-
   const library = useNodeChipLibrary(workId, libraryRefreshKey)
 
   const handleChange = useCallback(
@@ -416,6 +401,9 @@ export function StructuredMetaChips({
     },
     [nodeId, onChange],
   )
+
+  const fields = STRUCTURED_FIELDS_BY_LEVEL[level]
+  if (!fields.length) return null
 
   const renderField = (key: keyof PlanningNodeStructuredMeta, label: string) => {
     const value = (meta?.[key] as string | undefined) ?? ""

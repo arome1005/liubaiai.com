@@ -5,6 +5,7 @@ export const AI_PROVIDER_TO_MODEL_ID: Record<AiProviderId, string> = {
   openai: "jianshan",
   anthropic: "tingyu",
   gemini: "guanyun",
+  vertex: "vertex_gcp",
   doubao: "liaoyuan",
   zhipu: "zhipu",
   kimi: "kimi",

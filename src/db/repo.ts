@@ -462,17 +462,12 @@ export async function upsertBibleWorldEntriesByWork(
 /**
  * 将 AI 抽取的词条批量 upsert 到书斋词条库（BibleGlossaryTerm）。
  * 匹配规则：normalize(term) 相同 → 仅在 note 为空时补充 note，不覆盖用户已填内容。
- * entryKind 含"地点/地名/人名/城市/地方"时 category 设为 "name"，其余为 "term"。
+ * 新建词条统一 category 为 term；类别相关说明由用户在备注中维护。
  */
 export async function upsertBibleGlossaryTermsByWork(
   workId: string,
   items: TuiyanExtractedTerm[],
 ): Promise<{ added: number; updated: number }> {
-  const NAME_KINDS = ["地点", "地名", "人名", "城市", "地方"];
-  function toCategory(entryKind: string): BibleGlossaryTerm["category"] {
-    return NAME_KINDS.some((k) => entryKind.includes(k)) ? "name" : "term";
-  }
-
   const store = getWritingStore();
   const existing = await store.listBibleGlossaryTerms(workId);
   const byKey = new Map(existing.map((t) => [normalizeKey(t.term), t]));
@@ -491,9 +486,8 @@ export async function upsertBibleGlossaryTermsByWork(
     } else {
       const newTerm = await store.addBibleGlossaryTerm(workId, {
         term: item.title,
-        category: toCategory(item.entryKind),
         note: item.body ?? "",
-      });
+      })
       byKey.set(key, newTerm);
       added++;
     }

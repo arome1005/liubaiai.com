@@ -3,7 +3,7 @@
  * 匹配、创建与更新能力，避免每个 chip 字段各自重复请求数据库。
  *
  * 词条库对应书斋侧边栏的"词条"标签（BibleGlossaryTerm），
- * 字段：term（词条名称）/ category（类别）/ note（备注）。
+ * 字段：term（词条名称）/ note（备注）；入库默认 category 为 term。
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import type { BibleCharacter, BibleGlossaryTerm } from "../db/types"
@@ -28,9 +28,7 @@ export type CharacterPatch = Partial<
   Pick<BibleCharacter, "name" | "voiceNotes" | "motivation" | "relationships" | "taboos" | "gender">
 >
 
-export type TermPatch = Partial<
-  Pick<BibleGlossaryTerm, "term" | "category" | "note">
->
+export type TermPatch = Partial<Pick<BibleGlossaryTerm, "term" | "note">>
 
 export type NodeChipLibrary = {
   characters: BibleCharacter[]
@@ -49,11 +47,7 @@ export type NodeChipLibrary = {
     extra?: { voiceNotes?: string; motivation?: string; gender?: BibleCharacter["gender"] },
   ) => Promise<BibleCharacter>
   /** 创建词条并写入本地缓存 */
-  createTerm: (
-    name: string,
-    category?: BibleGlossaryTerm["category"],
-    note?: string,
-  ) => Promise<BibleGlossaryTerm>
+  createTerm: (name: string, note?: string) => Promise<BibleGlossaryTerm>
   /** 更新书斋人物卡（voiceNotes = 角色性格，motivation = 角色信息） */
   updateCharacter: (id: string, patch: CharacterPatch) => Promise<void>
   /** 更新书斋词条 */
@@ -139,13 +133,9 @@ export function useNodeChipLibrary(workId: string | null, refreshKey = 0): NodeC
   )
 
   const createTerm = useCallback(
-    async (
-      name: string,
-      category: BibleGlossaryTerm["category"] = "term",
-      note = "",
-    ): Promise<BibleGlossaryTerm> => {
+    async (name: string, note = ""): Promise<BibleGlossaryTerm> => {
       if (!workId) throw new Error("workId is null")
-      const term = await addBibleGlossaryTerm(workId, { term: name, category, note })
+      const term = await addBibleGlossaryTerm(workId, { term: name, note })
       termMapRef.current.set(normalizeKey(name), term)
       setGlossaryTerms((prev) => [...prev, term])
       return term

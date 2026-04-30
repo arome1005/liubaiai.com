@@ -1,41 +1,29 @@
 /**
  * 未入库 chip：trigger 是带虚线边框的"待入库"小药丸；点击弹出创建表单 popover。
- * 根据 chipType 切换两套表单：
- *  - character：性别 + 角色性格 + 角色信息
- *  - glossaryTerm：类别 + 备注
- * 用户填写后点击"确认入库" → onAddToLibrary(extra)。
+ * 词条入库：仅备注（详述写在备注）。
  */
-import { useEffect, useState } from "react";
-import { X } from "lucide-react";
-import type { BibleGlossaryTerm } from "../../../db/types";
-import { cn } from "../../../lib/utils";
-import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
-import {
-  CATEGORY_LABELS,
-  GENDER_LABELS,
-  POPOVER_LABEL,
-  POPOVER_TEXTAREA,
-  type CharGender,
-} from "./shared";
+import { useEffect, useState } from "react"
+import { X } from "lucide-react"
+import { cn } from "../../../lib/utils"
+import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover"
+import { GENDER_LABELS, POPOVER_LABEL, POPOVER_TEXTAREA, type CharGender } from "./shared"
 
 export type UnlinkedChipExtra = {
-  voiceNotes?: string;
-  motivation?: string;
-  gender?: CharGender;
-  note?: string;
-  category?: BibleGlossaryTerm["category"];
-};
+  voiceNotes?: string
+  motivation?: string
+  gender?: CharGender
+  note?: string
+}
 
 export type UnlinkedChipProps = {
-  name: string;
-  onRemove: () => void;
-  disabled: boolean;
-  onAddToLibrary: (extra: UnlinkedChipExtra) => Promise<void>;
-  chipType: "character" | "glossaryTerm";
-  fieldIcon: React.ElementType;
-  fieldColor: string;
-  defaultCategory?: BibleGlossaryTerm["category"];
-};
+  name: string
+  onRemove: () => void
+  disabled: boolean
+  onAddToLibrary: (extra: UnlinkedChipExtra) => Promise<void>
+  chipType: "character" | "glossaryTerm"
+  fieldIcon: React.ElementType
+  fieldColor: string
+}
 
 export function UnlinkedChip({
   name,
@@ -45,45 +33,38 @@ export function UnlinkedChip({
   chipType,
   fieldIcon: FieldIcon,
   fieldColor,
-  defaultCategory,
 }: UnlinkedChipProps) {
-  const [open, setOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
-  // 人物字段
-  const [voiceNotes, setVoiceNotes] = useState("");
-  const [motivation, setMotivation] = useState("");
-  const [gender, setGender] = useState<CharGender>("unknown");
-  // 词条字段
-  const [note, setNote] = useState("");
-  const [category, setCategory] = useState<BibleGlossaryTerm["category"]>(
-    defaultCategory ?? "term",
-  );
+  const [open, setOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [voiceNotes, setVoiceNotes] = useState("")
+  const [motivation, setMotivation] = useState("")
+  const [gender, setGender] = useState<CharGender>("unknown")
+  const [note, setNote] = useState("")
 
   useEffect(() => {
     if (!open) {
-      setVoiceNotes("");
-      setMotivation("");
-      setGender("unknown");
-      setNote("");
-      setCategory(defaultCategory ?? "term");
+      setVoiceNotes("")
+      setMotivation("")
+      setGender("unknown")
+      setNote("")
     }
-  }, [open, defaultCategory]);
+  }, [open])
 
   const handleCreate = async () => {
-    setCreating(true);
+    setCreating(true)
     try {
       if (chipType === "character") {
-        await onAddToLibrary({ voiceNotes, motivation, gender });
+        await onAddToLibrary({ voiceNotes, motivation, gender })
       } else {
-        await onAddToLibrary({ note, category });
+        await onAddToLibrary({ note })
       }
-      setOpen(false);
+      setOpen(false)
     } finally {
-      setCreating(false);
+      setCreating(false)
     }
-  };
+  }
 
-  const typeLabel = chipType === "character" ? "人物" : CATEGORY_LABELS[category];
+  const typeLabel = chipType === "character" ? "人物" : "词条"
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -102,7 +83,10 @@ export function UnlinkedChip({
               role="button"
               aria-label="移除"
               className="ml-0.5 rounded-full p-0.5 opacity-40 hover:opacity-80"
-              onClick={(e) => { e.stopPropagation(); onRemove(); }}
+              onClick={(e) => {
+                e.stopPropagation()
+                onRemove()
+              }}
             >
               <X className="h-2.5 w-2.5" />
             </span>
@@ -110,7 +94,10 @@ export function UnlinkedChip({
         </span>
       </PopoverTrigger>
       <PopoverContent
-        className={cn("rounded-xl border-border/40 bg-popover/95 p-3 text-xs shadow-xl backdrop-blur", chipType === "character" ? "w-72" : "w-64")}
+        className={cn(
+          "rounded-xl border-border/40 bg-popover/95 p-3 text-xs shadow-xl backdrop-blur",
+          chipType === "character" ? "w-72" : "w-64",
+        )}
         align="start"
       >
         <div className="mb-3 flex items-center gap-1.5">
@@ -167,30 +154,16 @@ export function UnlinkedChip({
             </div>
           </>
         ) : (
-          <>
-            <div className="mb-2">
-              <p className={POPOVER_LABEL}>类别</p>
-              <select
-                className="w-full rounded-md border border-border/35 bg-background/70 px-2.5 py-1.5 text-xs shadow-inner outline-none transition focus:border-primary/45 focus:ring-2 focus:ring-primary/15"
-                value={category}
-                onChange={(e) => setCategory(e.target.value as BibleGlossaryTerm["category"])}
-              >
-                <option value="name">人名·地名</option>
-                <option value="term">术语</option>
-                <option value="dead">死亡角色</option>
-              </select>
-            </div>
-            <div className="mb-3">
-              <p className={POPOVER_LABEL}>备注（可选）</p>
-              <textarea
-                className={POPOVER_TEXTAREA}
-                rows={3}
-                placeholder="释义、设定约束、与剧情相关的注意事项…"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-              />
-            </div>
-          </>
+          <div className="mb-3">
+            <p className={POPOVER_LABEL}>备注（可选）</p>
+            <textarea
+              className={POPOVER_TEXTAREA}
+              rows={4}
+              placeholder="释义、设定约束、与剧情相关的注意事项…"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+          </div>
         )}
 
         <button
@@ -203,5 +176,5 @@ export function UnlinkedChip({
         </button>
       </PopoverContent>
     </Popover>
-  );
+  )
 }

@@ -2,6 +2,8 @@ export type AiProviderId =
   | "openai"
   | "anthropic"
   | "gemini"
+  /** Vertex：经自建后端代理到 GCP（Bearer + Supabase；请求体与 Gemini 相同） */
+  | "vertex"
   | "ollama"
   /** Apple MLX 本地服务（OpenAI 兼容 /chat/completions，Base URL 以实际部署为准） */
   | "mlx"
@@ -40,6 +42,9 @@ export type AiProviderConfig = {
   embeddingModel?: string;
   /** API key（本机 localStorage；桌面版可换更安全存储） */
   apiKey?: string;
+  /** Vertex：GCP 项目与区域（与后端 .env 一致，仅作本地备忘/说明；实际路由由服务器决定） */
+  vertexProject?: string;
+  vertexLocation?: string;
 };
 
 export type AiSettings = {
@@ -47,6 +52,7 @@ export type AiSettings = {
   openai: AiProviderConfig;
   anthropic: AiProviderConfig;
   gemini: AiProviderConfig;
+  vertex: AiProviderConfig;
   ollama: AiProviderConfig;
   mlx: AiProviderConfig;
   doubao: AiProviderConfig;

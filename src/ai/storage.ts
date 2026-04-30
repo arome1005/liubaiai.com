@@ -10,6 +10,7 @@ const CLOUD_TEMPERATURE_PROVIDER_IDS: AiProviderId[] = [
   "openai",
   "anthropic",
   "gemini",
+  "vertex",
   "doubao",
   "zhipu",
   "kimi",
@@ -56,6 +57,13 @@ export function defaultAiSettings(): AiSettings {
     openai: { id: "openai", label: "OpenAI", model: "gpt-4.1-mini", embeddingModel: "text-embedding-3-small", baseUrl: "https://api.openai.com/v1" },
     anthropic: { id: "anthropic", label: "Claude", model: "claude-3-5-sonnet-latest", baseUrl: "https://api.anthropic.com" },
     gemini: { id: "gemini", label: "Gemini", model: "gemini-2.0-flash", baseUrl: "https://generativelanguage.googleapis.com" },
+    vertex: {
+      id: "vertex",
+      label: "Vertex AI（GCP 赠金）",
+      model: "gemini-2.5-pro",
+      vertexProject: "",
+      vertexLocation: "us-central1",
+    },
     ollama: { id: "ollama", label: "Ollama", model: "llama3.1:8b", baseUrl: "http://localhost:11434" },
     // MLX LM / 兼容服务常见为 OpenAI 式 /v1；端口以本机实际为准
     mlx: { id: "mlx", label: "Apple MLX", model: "default", baseUrl: "http://127.0.0.1:8080/v1" },
@@ -116,6 +124,7 @@ export function loadAiSettings(): AiSettings {
       openai: { ...d.openai, ...(parsed.openai ?? {}) },
       anthropic: { ...d.anthropic, ...(parsed.anthropic ?? {}) },
       gemini: { ...d.gemini, ...(parsed.gemini ?? {}) },
+      vertex: { ...d.vertex, ...(parsed.vertex ?? {}) },
       ollama: { ...d.ollama, ...(parsed.ollama ?? {}) },
       mlx: { ...d.mlx, ...(parsed.mlx ?? {}) },
       doubao: { ...d.doubao, ...(parsed.doubao ?? {}) },
@@ -220,6 +229,7 @@ export function getBackendConfig(): BackendModelConfig {
     openai: { baseUrl: s.openai.baseUrl, apiKey: s.openai.apiKey },
     anthropic: { baseUrl: s.anthropic.baseUrl, apiKey: s.anthropic.apiKey },
     gemini: { baseUrl: s.gemini.baseUrl, apiKey: s.gemini.apiKey },
+    vertex: { baseUrl: s.vertex.baseUrl, apiKey: s.vertex.apiKey },
     doubao: { baseUrl: s.doubao.baseUrl, apiKey: s.doubao.apiKey },
     zhipu: { baseUrl: s.zhipu.baseUrl, apiKey: s.zhipu.apiKey },
     kimi: { baseUrl: s.kimi.baseUrl, apiKey: s.kimi.apiKey },
@@ -238,6 +248,8 @@ export function getProviderConfig(s: AiSettings, id: AiProviderId): AiProviderCo
       return s.anthropic;
     case "gemini":
       return s.gemini;
+    case "vertex":
+      return s.vertex;
     case "doubao":
       return s.doubao;
     case "zhipu":

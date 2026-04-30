@@ -1391,7 +1391,7 @@ export function BiblePage() {
               size="sm"
               onClick={() =>
                 void (async () => {
-                  await addBibleGlossaryTerm(workId, { term: "新术语", category: "term", note: "" });
+                  await addBibleGlossaryTerm(workId, { term: "新术语", note: "" });
                   await refresh();
                 })()
               }
@@ -1480,18 +1480,6 @@ export function BiblePage() {
                       void updateBibleGlossaryTerm(g.id, { term: e.target.value }).then(refresh)
                     }
                   />
-                  <select
-                    value={g.category}
-                    onChange={(e) =>
-                      void updateBibleGlossaryTerm(g.id, {
-                        category: e.target.value as BibleGlossaryTerm["category"],
-                      }).then(refresh)
-                    }
-                  >
-                    <option value="name">人名</option>
-                    <option value="term">术语</option>
-                    <option value="dead">已死</option>
-                  </select>
                   <Button
                     type="button"
                     variant="destructive" size="sm"

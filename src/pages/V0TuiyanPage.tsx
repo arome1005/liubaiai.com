@@ -34,14 +34,7 @@ import {
   PLANNING_LEVEL_LABEL,
   STRUCTURED_FIELDS_BY_LEVEL,
   planningNodeTitleFallback,
-  DEFAULT_PLANNING_SCALE,
-  type PlanningScale,
 } from "../util/tuiyan-planning"
-import {
-  type PlanningThickness,
-  DEFAULT_PLANNING_THICKNESS,
-  normalizePlanningThickness,
-} from "../util/tuiyan-planning-thickness"
 import { useNavigate } from "react-router-dom"
 import { isFirstAiGateCancelledError } from "../ai/client"
 import { generateLogicThreeBranches, LogicBranchPredictError } from "../ai/logic-branch-predict"
@@ -56,6 +49,7 @@ import { useTuiyanReferenceStrategyWithGuards } from "../hooks/useTuiyanReferenc
 import { useTuiyanReferenceActions } from "../hooks/useTuiyanReferenceActions"
 import { useTuiyanReferenceConfig } from "../hooks/useTuiyanReferenceConfig"
 import { useTuiyanWenCeActions } from "../hooks/useTuiyanWenCeActions"
+import { useTuiyanPlanningPreferences } from "../hooks/useTuiyanPlanningPreferences"
 import { useToast } from "../components/ui/use-toast"
 import { workStyleCardToWritingSlice } from "../util/work-style-card-to-slice"
 import { loadAiSettings, saveAiSettings } from "../ai/storage"
@@ -245,31 +239,8 @@ export default function V0TuiyanPage() {
   const { genProgress, makeOnChunk, completeProgress, resetProgress } = useTuiyanGenProgress()
   const [planningIdeaDialogOpen, setPlanningIdeaDialogOpen] = useState(false)
   const [planningPushDialogOpen, setPlanningPushDialogOpen] = useState(false)
-  const [planningScale, setPlanningScale] = useState<PlanningScale>(() => {
-    try {
-      const saved = localStorage.getItem("liubai:tuiyan:planningScale:v1")
-      if (saved) return { ...DEFAULT_PLANNING_SCALE, ...(JSON.parse(saved) as PlanningScale) }
-    } catch { /* ignore */ }
-    return DEFAULT_PLANNING_SCALE
-  })
-  const handlePlanningScaleChange = useCallback((s: PlanningScale) => {
-    setPlanningScale(s)
-    localStorage.setItem("liubai:tuiyan:planningScale:v1", JSON.stringify(s))
-  }, [])
-  const [planningThickness, setPlanningThickness] = useState<PlanningThickness>(() => {
-    try {
-      const saved = localStorage.getItem("liubai:tuiyan:planningThickness:v1")
-      if (saved) return normalizePlanningThickness(JSON.parse(saved) as Partial<PlanningThickness>)
-    } catch {
-      /* ignore */
-    }
-    return DEFAULT_PLANNING_THICKNESS
-  })
-  const handlePlanningThicknessChange = useCallback((p: PlanningThickness) => {
-    const n = normalizePlanningThickness(p)
-    setPlanningThickness(n)
-    localStorage.setItem("liubai:tuiyan:planningThickness:v1", JSON.stringify(n))
-  }, [])
+  const { planningScale, onPlanningScaleChange, planningThickness, onPlanningThicknessChange } =
+    useTuiyanPlanningPreferences()
   const [pushOverwriteConfirmOpen, setPushOverwriteConfirmOpen] = useState(false)
   const [pendingKnowledgeOpts, setPendingKnowledgeOpts] = useState<KnowledgePushOptions | null>(null)
   const [planningDeleteTarget, setPlanningDeleteTarget] = useState<PlanningDeleteTarget>(null)
@@ -1408,9 +1379,9 @@ export default function V0TuiyanPage() {
                   if (planningActiveVolume) void generatePlanningLevel("chapter_outline", planningActiveVolume)
                 },
                 planningScale,
-                onPlanningScaleChange: handlePlanningScaleChange,
+                onPlanningScaleChange,
                 planningThickness,
-                onPlanningThicknessChange: handlePlanningThicknessChange,
+                onPlanningThicknessChange,
                 planningOutlineTargetVolumesByNodeId,
                 onPlanningOutlineTargetVolumesChange: handleOutlineTargetVolumesChange,
                 planningVolumeTargetChaptersByNodeId,

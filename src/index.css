@@ -117,6 +117,12 @@
   --z-masthead: 50;
   --z-modal-app-overlay: 200;
   --z-modal-app-content: 201;
+  /* 叠在应用级弹窗之上（书斋内「他书导入」「批量操作」等） */
+  --z-modal-nested-overlay: 220;
+  --z-modal-nested-content: 221;
+  /* 叠在「他书导入」之上（关联章节等三级弹窗） */
+  --z-modal-nested-2-overlay: 230;
+  --z-modal-nested-2-content: 231;
   --z-command-backdrop: 10090;
   --z-command-content: 10091;
   --z-blocking-layer: 10100;
@@ -6205,6 +6211,10 @@ select {
   align-items: end;
 }
 
+.study-library-term-top--single {
+  grid-template-columns: 1fr;
+}
+
 .study-library-mentions {
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -6553,6 +6563,20 @@ select {
   background: rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(15px);
   -webkit-backdrop-filter: blur(15px);
+}
+
+.nested-app-dialog-overlay[data-slot="dialog-overlay"] {
+  z-index: var(--z-modal-nested-overlay);
+  background: rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.nested-app-dialog-2-overlay[data-slot="dialog-overlay"] {
+  z-index: var(--z-modal-nested-2-overlay);
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 .modal-card {
