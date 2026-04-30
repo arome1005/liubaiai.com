@@ -23,6 +23,13 @@ export type UnlinkedChipProps = {
   chipType: "character" | "glossaryTerm"
   fieldIcon: React.ElementType
   fieldColor: string
+  /** AI 生成 chip 时附带的详细信息，打开 popover 时预填到表单。
+   *  人物 chip 用 prefillGender/prefillVoiceNotes/prefillMotivation；
+   *  词条 chip 用 prefillNote。 */
+  prefillGender?: CharGender
+  prefillVoiceNotes?: string
+  prefillMotivation?: string
+  prefillNote?: string
 }
 
 export function UnlinkedChip({
@@ -33,22 +40,26 @@ export function UnlinkedChip({
   chipType,
   fieldIcon: FieldIcon,
   fieldColor,
+  prefillGender,
+  prefillVoiceNotes,
+  prefillMotivation,
+  prefillNote,
 }: UnlinkedChipProps) {
   const [open, setOpen] = useState(false)
   const [creating, setCreating] = useState(false)
-  const [voiceNotes, setVoiceNotes] = useState("")
-  const [motivation, setMotivation] = useState("")
-  const [gender, setGender] = useState<CharGender>("unknown")
-  const [note, setNote] = useState("")
+  const [voiceNotes, setVoiceNotes] = useState(prefillVoiceNotes ?? "")
+  const [motivation, setMotivation] = useState(prefillMotivation ?? "")
+  const [gender, setGender] = useState<CharGender>(prefillGender ?? "unknown")
+  const [note, setNote] = useState(prefillNote ?? "")
 
   useEffect(() => {
     if (!open) {
-      setVoiceNotes("")
-      setMotivation("")
-      setGender("unknown")
-      setNote("")
+      setVoiceNotes(prefillVoiceNotes ?? "")
+      setMotivation(prefillMotivation ?? "")
+      setGender(prefillGender ?? "unknown")
+      setNote(prefillNote ?? "")
     }
-  }, [open])
+  }, [open, prefillVoiceNotes, prefillMotivation, prefillGender, prefillNote])
 
   const handleCreate = async () => {
     setCreating(true)

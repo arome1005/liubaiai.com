@@ -23,7 +23,53 @@ import { LinkedCharacterChip } from "./chips/LinkedCharacterChip"
 import { LinkedTermChip } from "./chips/LinkedTermChip"
 import { UnlinkedChip } from "./chips/UnlinkedChip"
 import { AddChipInput } from "./chips/AddChipInput"
-import { parseChips, serializeChips } from "./chips/shared"
+import { parseChips, serializeChips, type CharGender } from "./chips/shared"
+
+/** 单个 chip 的预填信息（来自 AI 生成的 *Detail JSON 块）。 */
+type ChipPrefill = {
+  gender?: CharGender
+  voiceNotes?: string
+  motivation?: string
+  note?: string
+}
+
+/** 把人物详细对象的 role/motivation/arcInVolume 三段拼成单一"角色信息"文本。 */
+function combineCharacterMotivation(
+  role: string | undefined,
+  motivation: string | undefined,
+  arcInVolume: string | undefined,
+): string | undefined {
+  const parts: string[] = []
+  if (role) parts.push(`身份：${role}`)
+  if (motivation) parts.push(motivation)
+  if (arcInVolume) parts.push(`本卷弧光：${arcInVolume}`)
+  return parts.length ? parts.join("\n") : undefined
+}
+
+/** 根据字段 key 从 meta.*Detail 抽 name → 预填信息 的映射。 */
+function buildChipPrefillMap(
+  meta: PlanningNodeStructuredMeta | undefined,
+  key: keyof PlanningNodeStructuredMeta,
+): Map<string, ChipPrefill> {
+  const map = new Map<string, ChipPrefill>()
+  if (!meta) return map
+  if (key === "mainCharacters" && meta.mainCharactersDetail) {
+    for (const e of meta.mainCharactersDetail) {
+      map.set(e.name, {
+        gender: e.gender,
+        voiceNotes: e.voiceNotes,
+        motivation: combineCharacterMotivation(e.role, e.motivation, e.arcInVolume),
+      })
+    }
+  } else if (key === "coreFactions" && meta.coreFactionsDetail) {
+    for (const e of meta.coreFactionsDetail) map.set(e.name, { note: e.note })
+  } else if (key === "keyLocations" && meta.keyLocationsDetail) {
+    for (const e of meta.keyLocationsDetail) map.set(e.name, { note: e.note })
+  } else if (key === "keyItems" && meta.keyItemsDetail) {
+    for (const e of meta.keyItemsDetail) map.set(e.name, { note: e.effect })
+  }
+  return map
+}
 
 // ── 字段配置 ──────────────────────────────────────────────────────────────────
 
@@ -75,6 +121,7 @@ function ChipField({
   sectionIcon: SectionIcon,
   sectionColor,
   placeholder,
+  prefillMap,
 }: {
   value: string
   onChange: (v: string) => void
@@ -85,6 +132,8 @@ function ChipField({
   sectionIcon: React.ElementType
   sectionColor: string
   placeholder?: string
+  /** name → AI 生成时附带的详细信息（用于 UnlinkedChip popover 预填） */
+  prefillMap?: Map<string, ChipPrefill>
 }) {
   const [adding, setAdding] = useState(false)
   const chips = parseChips(value)
@@ -149,6 +198,10 @@ function ChipField({
       </div>
       <div className="flex flex-wrap gap-1.5">
         {chips.map((name, idx) => {
+          // chip 显示形式可能是 "方源（主角，本卷苏醒）"，但 detail.name 是干净的 "方源"。
+          // 先按完整名查；查不到再 strip 掉括号说明再查一次。
+          const stripped = name.replace(/[（(].*$/, "").trim()
+          const prefill = prefillMap?.get(name) ?? prefillMap?.get(stripped)
           if (config.libraryType === "character") {
             const char = library.findCharacter(name)
             return char ? (
@@ -170,6 +223,9 @@ function ChipField({
                 fieldIcon={chipFieldIcon}
                 fieldColor={chipFieldColor}
                 disabled={disabled}
+                prefillGender={prefill?.gender}
+                prefillVoiceNotes={prefill?.voiceNotes}
+                prefillMotivation={prefill?.motivation}
               />
             )
           } else {
@@ -195,6 +251,7 @@ function ChipField({
                 fieldIcon={chipFieldIcon}
                 fieldColor={chipFieldColor}
                 disabled={disabled}
+                prefillNote={prefill?.note}
               />
             )
           }
@@ -437,12 +494,14 @@ export function StructuredMetaChips({
       const sectionColor = isChar
         ? CHARACTER_CONFIG.colorClass
         : (cfg.colorClass ?? "text-muted-foreground")
+      const prefillMap = buildChipPrefillMap(meta, key)
       return (
         <ChipField
           key={key}
           value={value}
           onChange={(v) => handleChange(key, v)}
           disabled={disabled}
+          prefillMap={prefillMap}
           library={library}
           config={cfg}
           label={label}

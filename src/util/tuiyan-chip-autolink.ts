@@ -67,12 +67,37 @@ export async function autoLinkChipsFromNodes(
 
   for (const { summary, structuredMeta, level, nodeId } of items) {
     // ── 人物字段 ────────────────────────────────────────────────────────────
-    const charFields = [
+    // 优先：卷纲 mainCharactersDetail（AI 生成的结构化对象，含 role/voiceNotes/motivation/arcInVolume）
+    const hasMainDetail =
+      Array.isArray(structuredMeta.mainCharactersDetail) &&
+      structuredMeta.mainCharactersDetail.length > 0
+    if (hasMainDetail) {
+      for (const e of structuredMeta.mainCharactersDetail!) {
+        if (!e?.name || charMap.has(e.name)) continue
+        const motivationParts: string[] = []
+        if (e.role) motivationParts.push(`身份：${e.role}`)
+        if (e.motivation) motivationParts.push(e.motivation)
+        if (e.arcInVolume) motivationParts.push(`本卷弧光：${e.arcInVolume}`)
+        const motivation = motivationParts.join("\n") || extractContextForName(summary, e.name)
+        charMap.set(e.name, {
+          name: e.name,
+          motivation,
+          voiceNotes: e.voiceNotes ?? "",
+          relationships: "",
+          taboos: "",
+          sourceLevel: level,
+          sourceNodeId: nodeId,
+        })
+      }
+    }
+    // 兼容路径：appearedCharacters/coreCharacters 走文本字段；
+    // mainCharacters 仅在没有 mainCharactersDetail 时回落（避免 detail 给的"方源"和文本切碎产生的"方源（..."重复入库）
+    const charTextFields: Array<string | undefined> = [
       structuredMeta.appearedCharacters,
       structuredMeta.coreCharacters,
-      structuredMeta.mainCharacters,
     ]
-    for (const field of charFields) {
+    if (!hasMainDetail) charTextFields.push(structuredMeta.mainCharacters)
+    for (const field of charTextFields) {
       for (const name of parseNames(field)) {
         if (!charMap.has(name)) {
           charMap.set(name, {
@@ -89,7 +114,23 @@ export async function autoLinkChipsFromNodes(
     }
 
     // ── 地点字段 ───────────────────────────────────────────────────────────────
-    const locationFields = [structuredMeta.locations, structuredMeta.keyLocations]
+    const hasLocationsDetail =
+      Array.isArray(structuredMeta.keyLocationsDetail) &&
+      structuredMeta.keyLocationsDetail.length > 0
+    if (hasLocationsDetail) {
+      for (const e of structuredMeta.keyLocationsDetail!) {
+        if (!e?.name || termMap.has(e.name)) continue
+        termMap.set(e.name, {
+          entryKind: "地点",
+          title: e.name,
+          body: e.note ?? extractContextForName(summary, e.name),
+          sourceLevel: level,
+          sourceNodeId: nodeId,
+        })
+      }
+    }
+    const locationFields: Array<string | undefined> = [structuredMeta.locations]
+    if (!hasLocationsDetail) locationFields.push(structuredMeta.keyLocations)
     for (const field of locationFields) {
       for (const title of parseNames(field)) {
         if (!termMap.has(title)) {
@@ -105,7 +146,23 @@ export async function autoLinkChipsFromNodes(
     }
 
     // ── 势力字段 ───────────────────────────────────────────────────────────────
-    const factionFields = [structuredMeta.mainFactions, structuredMeta.coreFactions]
+    const hasFactionsDetail =
+      Array.isArray(structuredMeta.coreFactionsDetail) &&
+      structuredMeta.coreFactionsDetail.length > 0
+    if (hasFactionsDetail) {
+      for (const e of structuredMeta.coreFactionsDetail!) {
+        if (!e?.name || termMap.has(e.name)) continue
+        termMap.set(e.name, {
+          entryKind: "势力",
+          title: e.name,
+          body: e.note ?? extractContextForName(summary, e.name),
+          sourceLevel: level,
+          sourceNodeId: nodeId,
+        })
+      }
+    }
+    const factionFields: Array<string | undefined> = [structuredMeta.mainFactions]
+    if (!hasFactionsDetail) factionFields.push(structuredMeta.coreFactions)
     for (const field of factionFields) {
       for (const title of parseNames(field)) {
         if (!termMap.has(title)) {
@@ -121,15 +178,32 @@ export async function autoLinkChipsFromNodes(
     }
 
     // ── 道具/法宝字段 ───────────────────────────────────────────────────────────
-    for (const title of parseNames(structuredMeta.keyItems)) {
-      if (!termMap.has(title)) {
-        termMap.set(title, {
+    const hasItemsDetail =
+      Array.isArray(structuredMeta.keyItemsDetail) &&
+      structuredMeta.keyItemsDetail.length > 0
+    if (hasItemsDetail) {
+      for (const e of structuredMeta.keyItemsDetail!) {
+        if (!e?.name || termMap.has(e.name)) continue
+        termMap.set(e.name, {
           entryKind: "法宝",
-          title,
-          body: extractContextForName(summary, title),
+          title: e.name,
+          body: e.effect ?? extractContextForName(summary, e.name),
           sourceLevel: level,
           sourceNodeId: nodeId,
         })
+      }
+    }
+    if (!hasItemsDetail) {
+      for (const title of parseNames(structuredMeta.keyItems)) {
+        if (!termMap.has(title)) {
+          termMap.set(title, {
+            entryKind: "法宝",
+            title,
+            body: extractContextForName(summary, title),
+            sourceLevel: level,
+            sourceNodeId: nodeId,
+          })
+        }
       }
     }
 

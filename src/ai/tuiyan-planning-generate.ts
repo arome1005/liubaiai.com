@@ -1,13 +1,14 @@
 import type { PlanningNodeStructuredMeta, TuiyanImitationMode } from "../db/types";
-import { countCharsWithPunct } from "../util/tuiyan-planning";
+import { countCharsWithPunct, type PlanningScale } from "../util/tuiyan-planning";
 import {
   type PlanningThickness,
   normalizePlanningThickness,
+  PLANNING_OUTLINE_MIN_PER_ITEM_WITH_PUNCT,
 } from "../util/tuiyan-planning-thickness";
 import { logTuiyanReferenceTouchpoint } from "../util/tuiyan-reference-dev-log";
 import { mergeTuiyanPlanningSystemWithReferenceHardRules } from "./tuiyan-reference-planning-system";
 import { generateWithProviderStream } from "./client";
-import { isLocalAiProvider } from "./local-provider";
+import { isLocalAiProvider, requiresClientSavedApiKey } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 
@@ -88,7 +89,23 @@ const LEVEL_STRUCTURED_FIELDS: Record<TuiyanPlanningListLevel, string> = {
 核心势力：（**仅列有名号的势力/组织/族群**，多者用「、」分隔。✓ 示例：真龙界原始龙族、仙古十凶族群、王家。✗ 不要写"展现同盟氛围"等关系或描述句）
 关键地点：（**仅列有名号的具体场所**，多者用「、」分隔；附属说明放入「（…）」。✓ 示例：化龙池（修炼场）、真龙族宝库禁地。✗ 不要写抽象空间或方位泛指）
 关键道具：（**仅列具体物件、功法名或机遇事件名**，多者用「、」分隔；说明放入「（…）」。✓ 示例：青铜石棺（封印之所）、太初龙凰种、元神剑诀秘典、混沌焱。✗ 不要写"奠定根基""被吸收""凝聚父子之情"等效果或感受）
-本卷钩子：`,
+本卷钩子：
+结构化数据JSON：（**在以上文本字段全部填好后**，再附加一个 JSON 对象，给 chip 卡片预填详细信息。schema 见下；JSON 必须能直接 JSON.parse，禁止内部使用单引号、禁止注释。name 必须与上方文本字段中的实体名一致。）
+{
+  "mainCharactersDetail": [
+    {"name": "方源", "role": "主角", "gender": "male", "voiceNotes": "性格描述（≤150字）", "motivation": "动机/背景（≤300字）", "arcInVolume": "本卷弧光（≤80字）"}
+  ],
+  "coreFactionsDetail": [
+    {"name": "势力名", "note": "性质/立场（≤80字）"}
+  ],
+  "keyLocationsDetail": [
+    {"name": "地点名", "note": "用途/特色（≤80字）"}
+  ],
+  "keyItemsDetail": [
+    {"name": "物件名", "type": "item", "effect": "作用/出处（≤120字）"}
+  ]
+}
+（type 仅限 "item"/"technique"/"opportunity"；gender 仅限 "male"/"female"/"unknown"；可选字段缺失则省略整个 key，不要给 null/空字符串。）`,
   chapter_outline: `冲突点：
 登场人物：（**仅列有名字的具体人物**，多人用「、」分隔；单人本章状态放入「（…）」。✓ 示例：方源（突破筑基）、翱沧（旁观）。✗ 不要写事件名或抽象概念）
 涉及地点：（**仅列有名号的具体场所**，多者用「、」分隔。✗ 不要泛指方位）
@@ -111,22 +128,25 @@ function listSystemPrompt(
           ? "卷纲"
           : "章节细纲";
   const outlineListCount = Math.max(1, count);
-  const outlinePerItem = Math.max(200, Math.floor(thickness.outlineTotalWithPunct / outlineListCount));
+  const outlinePerItem = Math.max(
+    PLANNING_OUTLINE_MIN_PER_ITEM_WITH_PUNCT,
+    Math.floor(thickness.outlineTotalWithPunct / outlineListCount),
+  );
   const levelRules =
     level === "master_outline"
       ? `
 - 总纲必须像作品的"灵魂定海神针"，重点写清：核心创意(Logline)、世界观/力量体系、主线起承转合、卖点与风格、不可违背的排他性规则。
 - 总纲不需要拆到具体章节，但必须能约束后续大纲、卷纲和章纲，避免后续推演跑偏。
-- 【字数要求】摘要正文去掉标点符号后，有效字数必须不低于 ${thickness.masterOutlineMinNoPunct} 字，不足则继续扩写，禁止截断。`
+- 【字数要求】标题、摘要与下方各结构化字段**合计**含标点必须不低于 ${thickness.masterOutlineMinWithPunct} 字，不足则继续扩写，禁止截断。`
       : level === "outline"
         ? `
 - 一级大纲必须服从总纲，把故事拆成可执行的阶段/大剧情，写清阶段目标、人物弧光、关键里程碑与伏笔回收方向。
-- 【字数要求】每条一级大纲的摘要含标点不低于 ${outlinePerItem} 字，${count} 条**合计**含标点不低于 ${thickness.outlineTotalWithPunct} 字，不足必须继续扩写。`
+- 【字数要求】每条一级大纲的标题、摘要与结构化字段**合计**含标点不低于 ${outlinePerItem} 字，${count} 条**合计**含标点不低于 ${thickness.outlineTotalWithPunct} 字，不足必须继续扩写。`
         : level === "volume"
           ? `
 - 卷纲必须服从总纲与一级大纲，写清本卷地图/势力、小BOSS、关键道具或能力、节奏高潮与卷尾钩子。
 - 标题必须使用"第N卷：卷名"的形式，N 与候选序号一致。
-- 【字数要求】本卷摘要含标点必须不低于 ${thickness.volumeWithPunct} 字，需充分展开剧情地图、人物行动线与节奏设计，不足必须继续扩写。`
+- 【字数要求】本卷标题、摘要与下方各结构化字段**合计**含标点必须不低于 ${thickness.volumeWithPunct} 字，需充分展开剧情地图、人物行动线与节奏设计，不足必须继续扩写。`
           : `
 - 章节细纲必须服从上层所有约束，写清单章目标、冲突推进、场景拆解、爽点/虐点、结尾钩子。
 - 标题必须使用"第N章：章名"的形式，N 与候选序号一致。
@@ -155,8 +175,79 @@ ${structuredFields}
 
 // ── 解析结构化字段块 ─────────────────────────────────────────────────────────
 
+/**
+ * 从节点 block 中抠出 `结构化数据JSON：{...}` 那段（如果有）。
+ * 返回去掉 JSON 段后的剩余文本（让后续字段切分不会把 JSON 当作 volumeHook 的内容吃进去）
+ * 以及解析出的 detail 对象。
+ */
+function splitOutDetailJsonBlock(block: string): {
+  textBlock: string;
+  detail: Partial<PlanningNodeStructuredMeta>;
+} {
+  const marker = "结构化数据JSON：";
+  const markerIdx = block.indexOf(marker);
+  if (markerIdx === -1) return { textBlock: block, detail: {} };
+  const after = block.slice(markerIdx + marker.length);
+  const startBrace = after.indexOf("{");
+  if (startBrace === -1) return { textBlock: block, detail: {} };
+
+  // 字符串感知地找到匹配的右大括号
+  let depth = 0;
+  let endBrace = -1;
+  let inString = false;
+  let escape = false;
+  for (let i = startBrace; i < after.length; i++) {
+    const ch = after[i];
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (ch === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) { endBrace = i; break; }
+    }
+  }
+  if (endBrace === -1) return { textBlock: block, detail: {} };
+
+  const jsonText = after.slice(startBrace, endBrace + 1);
+  const textBlock = block.slice(0, markerIdx) + after.slice(endBrace + 1);
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(jsonText) as Record<string, unknown>;
+  } catch {
+    return { textBlock, detail: {} };
+  }
+
+  const detail: Partial<PlanningNodeStructuredMeta> = {};
+  if (Array.isArray(parsed.mainCharactersDetail)) {
+    detail.mainCharactersDetail = (parsed.mainCharactersDetail as unknown[]).filter(
+      (e): e is { name: string } => !!e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string",
+    ) as PlanningNodeStructuredMeta["mainCharactersDetail"];
+  }
+  if (Array.isArray(parsed.coreFactionsDetail)) {
+    detail.coreFactionsDetail = (parsed.coreFactionsDetail as unknown[]).filter(
+      (e): e is { name: string } => !!e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string",
+    ) as PlanningNodeStructuredMeta["coreFactionsDetail"];
+  }
+  if (Array.isArray(parsed.keyLocationsDetail)) {
+    detail.keyLocationsDetail = (parsed.keyLocationsDetail as unknown[]).filter(
+      (e): e is { name: string } => !!e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string",
+    ) as PlanningNodeStructuredMeta["keyLocationsDetail"];
+  }
+  if (Array.isArray(parsed.keyItemsDetail)) {
+    detail.keyItemsDetail = (parsed.keyItemsDetail as unknown[]).filter(
+      (e): e is { name: string } => !!e && typeof e === "object" && typeof (e as { name?: unknown }).name === "string",
+    ) as PlanningNodeStructuredMeta["keyItemsDetail"];
+  }
+
+  return { textBlock, detail };
+}
+
 function parseStructuredFields(block: string): PlanningNodeStructuredMeta {
-  const result: PlanningNodeStructuredMeta = {};
+  const { textBlock, detail } = splitOutDetailJsonBlock(block);
+  const result: PlanningNodeStructuredMeta = { ...detail };
   // 构造字段名正则（按最长优先排序避免前缀匹配干扰）
   const fieldNames = Object.keys(FIELD_NAME_MAP).sort((a, b) => b.length - a.length);
   const fieldPattern = new RegExp(
@@ -167,7 +258,7 @@ function parseStructuredFields(block: string): PlanningNodeStructuredMeta {
   let match: RegExpExecArray | null;
   const positions: Array<{ name: string; key: keyof PlanningNodeStructuredMeta; start: number }> = [];
 
-  while ((match = fieldPattern.exec(block)) !== null) {
+  while ((match = fieldPattern.exec(textBlock)) !== null) {
     const name = match[1];
     const key = FIELD_NAME_MAP[name];
     if (key) positions.push({ name, key, start: match.index + match[0].length });
@@ -175,8 +266,8 @@ function parseStructuredFields(block: string): PlanningNodeStructuredMeta {
 
   for (let i = 0; i < positions.length; i++) {
     const { key, start } = positions[i];
-    const end = i + 1 < positions.length ? positions[i + 1].start - positions[i + 1].name.length - 1 : block.length;
-    const value = block.slice(start, end).trim();
+    const end = i + 1 < positions.length ? positions[i + 1].start - positions[i + 1].name.length - 1 : textBlock.length;
+    const value = textBlock.slice(start, end).trim();
     if (value) (result as Record<string, string>)[key] = value;
   }
 
@@ -234,6 +325,8 @@ export async function generateTuiyanPlanningList(args: {
   workId?: string | null;
   /** 与 `normalizePlanningThickness` 对齐；缺省为产品默认（与现 PLANNING_MIN_CHARS 一致 + 章细纲/详细项） */
   planningThickness?: Partial<PlanningThickness>;
+  /** 一级大纲合计下限依赖「一级大纲条数」；不传则用默认规模 */
+  planningScale?: PlanningScale;
 }): Promise<{
   items: Array<{ title: string; summary: string; structuredMeta: PlanningNodeStructuredMeta }>;
   rawText: string;
@@ -241,10 +334,10 @@ export async function generateTuiyanPlanningList(args: {
   const settings = args.settings ?? loadAiSettings();
   assertCanSend(settings);
   const cfg = getProviderConfig(settings, settings.provider);
-  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
+  if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
     throw new TuiyanPlanningGenerateError("请先在设置中填写当前模型的 API Key。");
   }
-  const t = normalizePlanningThickness(args.planningThickness);
+  const t = normalizePlanningThickness(args.planningThickness, args.planningScale);
   const count = Math.max(1, Math.min(PARSE_MAX_ITEMS, Math.floor(args.desiredCount)));
   const userInput = args.userInput.trim();
   logTuiyanReferenceTouchpoint(`planning_list:${args.level}`, userInput);
@@ -347,6 +440,7 @@ export async function generateTuiyanPlanningDetail(args: {
   onChunk?: (accumulatedChars: number) => void;
   workId?: string | null;
   planningThickness?: Partial<PlanningThickness>;
+  planningScale?: PlanningScale;
 }): Promise<{
   text: string;
   structuredMeta: DetailStructuredMeta;
@@ -354,10 +448,10 @@ export async function generateTuiyanPlanningDetail(args: {
   const settings = args.settings ?? loadAiSettings();
   assertCanSend(settings);
   const cfg = getProviderConfig(settings, settings.provider);
-  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
+  if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
     throw new TuiyanPlanningGenerateError("请先在设置中填写当前模型的 API Key。");
   }
-  const t = normalizePlanningThickness(args.planningThickness);
+  const t = normalizePlanningThickness(args.planningThickness, args.planningScale);
   const minDetail = t.detailMinTotalWithPunct;
   const userInput = args.userInput.trim();
   logTuiyanReferenceTouchpoint("planning_detail:chapter_detail", userInput);
