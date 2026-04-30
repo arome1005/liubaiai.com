@@ -101,15 +101,15 @@ export function clampPlanningOutlineItemCount(n: number): number {
   return Math.max(PLANNING_OUTLINE_ITEM_MIN, Math.min(PLANNING_OUTLINE_ITEM_MAX, r))
 }
 
-// ── 字数要求（固定规则） ───────────────────────────────────────────────────────
+// ── 字数要求（产品默认下限，与高级设置可配置范围一致；均可在 UI 中调高） ───────
 
 export const PLANNING_MIN_CHARS = {
-  /** 构思→总纲：不含标点 >= 1000 字 */
-  masterOutlineNoPunct: 1000,
-  /** 总纲→一级大纲（三条合计）：含标点 >= 2000 字 */
-  outlineTotalWithPunct: 2000,
-  /** 每卷卷纲：含标点 >= 1500 字 */
-  volumeWithPunct: 1500,
+  /** 总纲：标题+摘要+结构化字段合计，含标点 */
+  masterOutlineWithPunct: 500,
+  /** 一级大纲合计默认：与「600×条数」对齐时常用；实际下限随规模条数变化 */
+  outlineTotalWithPunct: 1800,
+  /** 每卷卷纲，含标点 */
+  volumeWithPunct: 800,
 } as const
 
 /**

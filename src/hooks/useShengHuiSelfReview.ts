@@ -1,6 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { generateWithProvider, isFirstAiGateCancelledError } from "../ai/client";
-import { isLocalAiProvider } from "../ai/local-provider";
+import { isLocalAiProvider, requiresClientSavedApiKey } from "../ai/local-provider";
 import { getProviderConfig } from "../ai/storage";
 import { buildShengHuiSelfReviewMessages, SHENG_HUI_SELF_REVIEW_TASK } from "../ai/sheng-hui-self-review";
 import { addTodayApproxTokens } from "../ai/daily-approx-tokens";
@@ -51,7 +51,7 @@ export function useShengHuiSelfReview(args: {
         setSelfReviewError("成稿复盘需上云正文，请在隐私设置中允许章节正文上云。");
         return;
       }
-      if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
+      if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
         setSelfReviewError("请先在设置中填写当前模型的 API Key。");
         return;
       }

@@ -1,5 +1,5 @@
 import { generateWithProvider } from "./client";
-import { isLocalAiProvider } from "./local-provider";
+import { isLocalAiProvider, requiresClientSavedApiKey } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 import { approxTotalTokensForMessages } from "../util/ai-injection-confirm";
@@ -145,7 +145,7 @@ export async function generateInspirationFiveExpansions(args: {
     settings,
   });
   const cfg = getProviderConfig(settings, settings.provider);
-  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
+  if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
     throw new InspirationExpandError("请先在设置中填写当前模型的 API Key。");
   }
   const r = await generateWithProvider({

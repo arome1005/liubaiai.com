@@ -1,6 +1,6 @@
 import { clampContextText, formatWorkStyleAndTagProfileBlock, takeTailText, type WritingWorkStyleSlice } from "./assemble-context";
 import { generateWithProviderStream } from "./client";
-import { isLocalAiProvider } from "./local-provider";
+import { isLocalAiProvider, requiresClientSavedApiKey } from "./local-provider";
 import { getProviderConfig, getProviderTemperature, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 import { approxRoughTokenCount } from "./approx-tokens";
@@ -603,7 +603,7 @@ export async function generateShengHuiProseStreamFromMessages(args: {
     includeBodyContent: false,
   });
   const cfg = getProviderConfig(settings, settings.provider);
-  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
+  if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
     throw new ShengHuiGenerateError("请先在设置中填写当前模型的 API Key。");
   }
   const r = await generateWithProviderStream({
@@ -676,7 +676,7 @@ export async function generateShengHuiProseStream(args: {
   });
 
   const cfg = getProviderConfig(settings, settings.provider);
-  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
+  if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
     throw new ShengHuiGenerateError("请先在设置中填写当前模型的 API Key。");
   }
 

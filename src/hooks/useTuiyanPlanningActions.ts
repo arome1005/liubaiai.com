@@ -34,7 +34,6 @@ import type { TuiyanGenProgressControls } from "./useTuiyanGenProgress"
 import type { AutoLinkItem } from "../util/tuiyan-chip-autolink"
 import {
   clampPlanningOutlineItemCount,
-  countCharsNoPunct,
   countCharsWithPunct,
   listPlanningChildren,
   PLANNING_LEVEL_TO_SLOT,
@@ -205,6 +204,7 @@ export function useTuiyanPlanningActions({
             onChunk,
             workId,
             planningThickness,
+            planningScale,
           })
           const it0 = items[0]!
           const masterText = serializePlanningNodeForCount(
@@ -212,10 +212,10 @@ export function useTuiyanPlanningActions({
             it0.summary,
             it0.structuredMeta as Record<string, string | undefined>,
           )
-          const masterCharCount = countCharsNoPunct(masterText)
-          if (masterCharCount < planningThickness.masterOutlineMinNoPunct) {
+          const masterCharCount = countCharsWithPunct(masterText)
+          if (masterCharCount < planningThickness.masterOutlineMinWithPunct) {
             throw new TuiyanPlanningGenerateError(
-              `总纲字数（${masterCharCount}字，不含标点）不足 ${planningThickness.masterOutlineMinNoPunct} 字，请重试或在「高级设置」中调低下限。`,
+              `总纲字数（${masterCharCount}字，含标点）不足 ${planningThickness.masterOutlineMinWithPunct} 字，请重试或在「高级设置」中调低下限。`,
             )
           }
           const nodes: TuiyanPlanningNode[] = items.slice(0, 1).map((it, idx) => ({
@@ -292,6 +292,7 @@ export function useTuiyanPlanningActions({
             onChunk,
             workId,
             planningThickness,
+            planningScale,
           })
           const outlineCombinedText = items
             .map((it) =>
@@ -387,6 +388,7 @@ export function useTuiyanPlanningActions({
             onChunk,
             workId,
             planningThickness,
+            planningScale,
           })
           const volItem = items[0]!
           const volText = serializePlanningNodeForCount(
@@ -456,6 +458,7 @@ export function useTuiyanPlanningActions({
             onChunk,
             workId,
             planningThickness,
+            planningScale,
           })
           for (let i = 0; i < items.length; i++) {
             const it = items[i]!
@@ -528,6 +531,7 @@ export function useTuiyanPlanningActions({
           onChunk,
           workId,
           planningThickness,
+          planningScale,
         })
         const existing = listPlanningChildren(planningTree, parentNode.id, "chapter_detail")[0]
         const detailNode: TuiyanPlanningNode =
@@ -669,6 +673,7 @@ export function useTuiyanPlanningActions({
         onChunk,
         workId,
         planningThickness,
+        planningScale,
       })
       const volItem = items[0]!
       const volText = serializePlanningNodeForCount(

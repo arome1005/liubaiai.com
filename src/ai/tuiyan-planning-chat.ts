@@ -6,7 +6,7 @@ import type { TuiyanImitationMode } from "../db/types";
 import { logTuiyanReferenceTouchpoint } from "../util/tuiyan-reference-dev-log";
 import { generateWithProvider } from "./client";
 import { mergeAdvisorSystemWithReferenceHardRules } from "./tuiyan-reference-planning-system";
-import { isLocalAiProvider } from "./local-provider";
+import { isLocalAiProvider, requiresClientSavedApiKey } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 
@@ -56,7 +56,7 @@ export async function generatePlanningAdvisorReply(args: {
   const settings = args.settings ?? loadAiSettings();
   assertCanSend(settings);
   const cfg = getProviderConfig(settings, settings.provider);
-  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
+  if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
     throw new TuiyanPlanningChatError("请先在设置中填写当前模型的 API Key。");
   }
 

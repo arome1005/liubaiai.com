@@ -101,7 +101,7 @@ export function TuiyanPlanningMoreOpsPanel({
             <Button
               size="sm"
               variant="outline"
-              className="col-span-2 h-8 text-xs"
+              className="h-8 text-xs"
               type="button"
               disabled={!planningActiveVolume || planningBusyLevel !== null}
               onClick={onGenerateChapterOutlinesForActiveVolume}

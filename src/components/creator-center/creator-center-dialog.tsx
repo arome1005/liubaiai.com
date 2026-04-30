@@ -150,6 +150,7 @@ export function CreatorCenterDialog(props: CreatorCenterDialogProps) {
               creatorTodayTokens={creatorTodayTokens}
               creatorLifetimeTokens={creatorLifetimeTokens}
               onRefreshUsage={onRefreshUsage}
+              usageAccountLoggedIn={Boolean(authUser)}
             />
           </div>
         ) : (

@@ -9,6 +9,8 @@ import type { UsageStats } from "../../../util/usage-types";
 interface UsageHeroCardsProps {
   stats: UsageStats;
   isOwnerMode?: boolean;
+  /** 已登录：终身累计随账号同步；未登录则仍为本机-only */
+  usageAccountLoggedIn?: boolean;
 }
 
 function formatNumber(n: number): string {
@@ -27,7 +29,7 @@ function getStatusColor(percentage: number, isOverBudget: boolean) {
   return "text-foreground";
 }
 
-export function UsageHeroCards({ stats, isOwnerMode = false }: UsageHeroCardsProps) {
+export function UsageHeroCards({ stats, isOwnerMode = false, usageAccountLoggedIn = false }: UsageHeroCardsProps) {
   const { dailyBudget, sessionBudget, lifetimeTotal } = stats;
 
   return (
@@ -180,7 +182,9 @@ export function UsageHeroCards({ stats, isOwnerMode = false }: UsageHeroCardsPro
           <div className="flex items-start justify-between">
             <div className="space-y-1">
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">终身累计</p>
-              <p className="text-[10px] text-muted-foreground/70">本机 · 不上传</p>
+              <p className="text-[10px] text-muted-foreground/70">
+                {usageAccountLoggedIn ? "登录账号 · 跨设备同步" : "未登录 · 仅本机"}
+              </p>
             </div>
             <div className="rounded-lg bg-chart-3/10 p-2">
               <HardDrive className="size-4 text-chart-3" />
@@ -200,7 +204,7 @@ export function UsageHeroCards({ stats, isOwnerMode = false }: UsageHeroCardsPro
               </div>
               <div className="flex items-center gap-1.5">
                 <div className="size-1.5 rounded-full bg-muted-foreground/30" />
-                <span className="text-xs text-muted-foreground/70">仅本机</span>
+                <span className="text-xs text-muted-foreground/70">{usageAccountLoggedIn ? "云端合并" : "仅本机"}</span>
               </div>
             </div>
           </div>

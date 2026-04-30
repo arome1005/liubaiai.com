@@ -16,14 +16,19 @@ export function useTuiyanPlanningPreferences() {
   const onPlanningScaleChange = useCallback((s: PlanningScale) => {
     setPlanningScale(s)
     writePlanningScaleToStorage(s)
+    setPlanningThickness((prev) => {
+      const n = normalizePlanningThickness(prev, s)
+      writePlanningThicknessToStorage(n)
+      return n
+    })
   }, [])
 
   const [planningThickness, setPlanningThickness] = useState<PlanningThickness>(readPlanningThicknessFromStorage)
   const onPlanningThicknessChange = useCallback((p: PlanningThickness) => {
-    const n = normalizePlanningThickness(p)
+    const n = normalizePlanningThickness(p, planningScale)
     setPlanningThickness(n)
     writePlanningThicknessToStorage(n)
-  }, [])
+  }, [planningScale])
 
   return { planningScale, onPlanningScaleChange, planningThickness, onPlanningThicknessChange }
 }

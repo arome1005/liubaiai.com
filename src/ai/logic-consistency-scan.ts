@@ -1,5 +1,5 @@
 import { generateWithProvider } from "./client";
-import { isLocalAiProvider } from "./local-provider";
+import { isLocalAiProvider, requiresClientSavedApiKey } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 
@@ -110,7 +110,7 @@ export async function generateLogicConsistencyFindings(args: {
   const settings = args.settings ?? loadAiSettings();
   assertCanSendLogicScan(settings);
   const cfg = getProviderConfig(settings, settings.provider);
-  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
+  if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
     throw new LogicConsistencyScanError("请先在设置中填写当前模型的 API Key。");
   }
 

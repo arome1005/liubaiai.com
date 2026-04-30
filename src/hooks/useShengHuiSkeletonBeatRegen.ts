@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { addTodayApproxTokens } from "../ai/daily-approx-tokens";
 import { isFirstAiGateCancelledError } from "../ai/client";
-import { isLocalAiProvider } from "../ai/local-provider";
+import { isLocalAiProvider, requiresClientSavedApiKey } from "../ai/local-provider";
 import { getProviderConfig } from "../ai/storage";
 import {
   buildShengHuiSkeletonRegenerateOneBeatMessages,
@@ -94,7 +94,7 @@ export function useShengHuiSkeletonBeatRegen(args: Args) {
           return;
         }
         const cfg = getProviderConfig(settings, settings.provider);
-        if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
+        if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
           setError("请先在设置中填写当前模型的 API Key。");
           return;
         }

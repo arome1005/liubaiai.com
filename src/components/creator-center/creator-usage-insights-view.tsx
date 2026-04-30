@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Activity } from "lucide-react";
 import type { AiProviderId, PerspectiveMode, TimeRange } from "../../util/usage-types";
 import { useAiUsageInsights } from "../../hooks/useAiUsageInsights";
+import { useAuthUserState } from "../../hooks/useAuthUserState";
 import { UsageTopBar } from "./usage/usage-top-bar";
 import { UsageHeroCards } from "./usage/usage-hero-cards";
 import { UsageSankeyChart } from "./usage/usage-sankey-chart";
@@ -12,8 +13,9 @@ import { UsageTimelineChart } from "./usage/usage-timeline-chart";
 import { UsageTableCard } from "./usage/usage-table-card";
 import { UsageCaliberAccordion } from "./usage/usage-caliber-accordion";
 
-/** AI 用量洞察：数据来自本机 IndexedDB 事件表（`record-ai-usage` + `client` 写入） */
+/** AI 用量洞察：事件来自 IndexedDB；登录用户与云端双向同步（见 `ai-usage-cloud`） */
 export function CreatorUsageInsightsView() {
+  const { authUser } = useAuthUserState();
   const [work, setWork] = useState("all");
   const [timeRange, setTimeRange] = useState<TimeRange>("today");
   const [provider, setProvider] = useState<AiProviderId>("all");
@@ -123,7 +125,7 @@ export function CreatorUsageInsightsView() {
             </div>
           </header>
 
-          <UsageHeroCards stats={stats} isOwnerMode={isOwnerMode} />
+          <UsageHeroCards stats={stats} isOwnerMode={isOwnerMode} usageAccountLoggedIn={Boolean(authUser?.id)} />
 
           {/* 弹窗内宽约 72rem：两栏与视口断点易错位，此处固定单列更易读 */}
           <div className="grid grid-cols-1 gap-4">
@@ -139,14 +141,24 @@ export function CreatorUsageInsightsView() {
 
           <UsageTableCard records={records} />
 
-          <UsageCaliberAccordion />
+          <UsageCaliberAccordion usageAccountLoggedIn={Boolean(authUser?.id)} />
 
           <footer className="border-t border-border/30 pt-4 sm:pt-5">
             <div className="flex flex-col items-center gap-2 text-center">
               <div className="flex flex-wrap items-center justify-center gap-4 text-xs text-muted-foreground/70">
-                <span>数据仅存储在本机</span>
-                <span className="size-1 rounded-full bg-muted-foreground/30" />
-                <span>不上传服务器</span>
+                {authUser?.id ? (
+                  <>
+                    <span>登录后用量记录与账号同步</span>
+                    <span className="size-1 rounded-full bg-muted-foreground/30" />
+                    <span>换设备登录同一邮箱可见</span>
+                  </>
+                ) : (
+                  <>
+                    <span>未登录时数据仅在本机</span>
+                    <span className="size-1 rounded-full bg-muted-foreground/30" />
+                    <span>登录后可跨设备同步</span>
+                  </>
+                )}
                 <span className="size-1 rounded-full bg-muted-foreground/30" />
                 <span>以厂商账单为准</span>
               </div>

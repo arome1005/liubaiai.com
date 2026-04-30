@@ -1,5 +1,6 @@
-import { useEffect, useId, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { cn } from "../../lib/utils"
+import type { PlanningScale } from "../../util/tuiyan-planning"
 import { clampPlanningThicknessField, type PlanningThicknessKey } from "../../util/tuiyan-planning-thickness"
 import { Input } from "../ui/input"
 
@@ -10,17 +11,18 @@ export type TuiyanPlanningThicknessDraftInputProps = {
   min: number
   max: number
   highlighted: boolean
-  /** 弹窗关闭时放弃未提交的草稿 */
   dialogOpen: boolean
   onCommit: (key: PlanningThicknessKey, n: number) => void
-  /** 外层容器已 divide-y 时用扁平行，无独立圆角卡片 */
   variant?: "card" | "row"
-  /** 行高与字号略减，用于高级设置列表 */
   compact?: boolean
+  planningScale?: PlanningScale
+  /** 父级点击「保存」时递增，用于在不失焦的情况下提交当前草稿 */
+  flushSignal?: number
 }
 
 /**
- * 各层最低字数：编辑中用字符串草稿，失焦/Enter 再钳位并提交，避免 onChange 立刻 normalize 导致无法键入 600、无法清空等。
+ * 各层最低字数：编辑中用字符串草稿，失焦/Enter 再钳位并提交，避免 onChange 立刻 normalize 导致无法键入多位数等。
+ * 关闭弹窗或点「保存」时也会提交未失焦的草稿，避免只关窗导致未写入。
  */
 export function TuiyanPlanningThicknessDraftInput({
   tKey,
@@ -33,32 +35,53 @@ export function TuiyanPlanningThicknessDraftInput({
   onCommit,
   variant = "card",
   compact = false,
+  planningScale,
+  flushSignal = 0,
 }: TuiyanPlanningThicknessDraftInputProps) {
   const autoId = useId()
   const id = `tthick-${tKey}-${autoId}`
 
   const [draft, setDraft] = useState<string | null>(null)
+  const prevDialogOpenRef = useRef(dialogOpen)
 
+  const commitDraftString = useCallback(
+    (raw: string) => {
+      const t = raw.trim()
+      if (t === "") {
+        setDraft(null)
+        return
+      }
+      const n = Number(t)
+      if (!Number.isFinite(n)) {
+        setDraft(null)
+        return
+      }
+      onCommit(tKey, clampPlanningThicknessField(tKey, n, planningScale))
+      setDraft(null)
+    },
+    [onCommit, tKey, planningScale],
+  )
+
+  /** 弹窗由开→关：提交当前输入框内未 blur 的草稿 */
+  useLayoutEffect(() => {
+    if (prevDialogOpenRef.current && !dialogOpen && draft !== null) {
+      commitDraftString(draft)
+    }
+    prevDialogOpenRef.current = dialogOpen
+  }, [dialogOpen, draft, commitDraftString])
+
+  /** 父级「保存」：强制提交本行 */
   useEffect(() => {
-    if (!dialogOpen) setDraft(null)
-  }, [dialogOpen])
+    if (flushSignal === 0) return
+    if (draft !== null) {
+      commitDraftString(draft)
+    }
+  }, [flushSignal, draft, commitDraftString])
 
   const display = draft !== null ? draft : String(committed)
 
-  /** 从 input 当前值提交，避免 blur 时 React state 尚未提交导致读到旧 draft */
   const commitFromInputValue = (raw: string) => {
-    const t = raw.trim()
-    if (t === "") {
-      setDraft(null)
-      return
-    }
-    const n = Number(t)
-    if (!Number.isFinite(n)) {
-      setDraft(null)
-      return
-    }
-    onCommit(tKey, clampPlanningThicknessField(tKey, n))
-    setDraft(null)
+    commitDraftString(raw)
   }
 
   const isRow = variant === "row"

@@ -1,6 +1,6 @@
 /**
  * AI 用量事件：独立 Dexie 库，避免与主写作库 `SCHEMA_VERSION` 迁移绑定。
- * 仅本机，不上传。
+ * 未登录时仅本机；登录后由 `ai-usage-cloud` 与账号同步。
  */
 import Dexie, { type Table } from "dexie";
 
@@ -56,6 +56,18 @@ function db(): AiUsageDexie {
 export async function putAiUsageEvent(row: AiUsageEventRow): Promise<void> {
   const d = db();
   await d.events.put(row);
+  const n = await d.events.count();
+  if (n <= MAX_EVENTS) return;
+  const extra = n - MAX_EVENTS;
+  const old = await d.events.orderBy("ts").limit(extra).primaryKeys();
+  await d.events.bulkDelete(old);
+}
+
+/** 合并云端下载的记录（按 id upsert，超出上限时删最旧） */
+export async function mergeAiUsageEventsFromRemote(rows: AiUsageEventRow[]): Promise<void> {
+  if (rows.length === 0) return;
+  const d = db();
+  await d.events.bulkPut(rows);
   const n = await d.events.count();
   if (n <= MAX_EVENTS) return;
   const extra = n - MAX_EVENTS;

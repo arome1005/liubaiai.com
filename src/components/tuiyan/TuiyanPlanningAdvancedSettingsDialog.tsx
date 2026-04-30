@@ -1,9 +1,10 @@
-import { useCallback, useMemo } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { Layers } from "lucide-react"
 import {
   type PlanningThickness,
   type PlanningThicknessKey,
   PLANNING_THICKNESS_LIMITS,
+  planningOutlineTotalMinWithPunct,
   planningNextThicknessKey,
   normalizePlanningThickness,
 } from "../../util/tuiyan-planning-thickness"
@@ -18,12 +19,9 @@ import {
   PLANNING_SCALE_VOLUME_MAX,
   PLANNING_SCALE_VOLUME_MIN,
   clampPlanningOutlineItemCount,
-  clampPlanningOutlineVolumeTarget,
-  clampPlanningVolumeChapterTarget,
-  resolveOutlineTargetVolumeCount,
-  resolveVolumeTargetChapterCount,
   type PlanningScale,
 } from "../../util/tuiyan-planning"
+import { Button } from "../ui/button"
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog"
 import { TuiyanPlanningAdvancedSettingsHelp } from "./TuiyanPlanningAdvancedSettingsHelp"
 import { TuiyanPlanningThicknessDraftInput } from "./TuiyanPlanningThicknessDraftInput"
@@ -32,68 +30,50 @@ export type TuiyanPlanningAdvancedSettingsDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
   planningSelectedNode: TuiyanPlanningNode | null
-  planningActiveOutline: TuiyanPlanningNode | null
   planningScale: PlanningScale
   onPlanningScaleChange: (s: PlanningScale) => void
   planningThickness: PlanningThickness
   onPlanningThicknessChange: (t: PlanningThickness) => void
-  planningOutlineTargetVolumesByNodeId: Record<string, number>
-  onPlanningOutlineTargetVolumesChange: (outlineId: string, value: number) => void
-  planningVolumeTargetChaptersByNodeId: Record<string, number>
-  onPlanningVolumeTargetChaptersChange: (volumeId: string, value: number) => void
 }
 
 export function TuiyanPlanningAdvancedSettingsDialog({
   open,
   onOpenChange,
   planningSelectedNode,
-  planningActiveOutline,
   planningScale,
   onPlanningScaleChange,
   planningThickness,
   onPlanningThicknessChange,
-  planningOutlineTargetVolumesByNodeId,
-  onPlanningOutlineTargetVolumesChange,
-  planningVolumeTargetChaptersByNodeId,
-  onPlanningVolumeTargetChaptersChange,
 }: TuiyanPlanningAdvancedSettingsDialogProps) {
+  /** 递增后传给各字数行，触发未失焦草稿写入本地 */
+  const [thicknessFlushSignal, setThicknessFlushSignal] = useState(0)
+
   const nextThicknessKey = useMemo(
     () => planningNextThicknessKey(planningSelectedNode),
     [planningSelectedNode],
   )
   const commitThickness = useCallback(
     (key: PlanningThicknessKey, n: number) => {
-      onPlanningThicknessChange(normalizePlanningThickness({ ...planningThickness, [key]: n }))
+      onPlanningThicknessChange(normalizePlanningThickness({ ...planningThickness, [key]: n }, planningScale))
     },
-    [onPlanningThicknessChange, planningThickness],
+    [onPlanningThicknessChange, planningThickness, planningScale],
   )
 
-  const volumeForChapterTarget = planningSelectedNode?.level === "volume" ? planningSelectedNode : null
-  const resolvedOutlineVolTarget = planningActiveOutline
-    ? resolveOutlineTargetVolumeCount(
-        planningActiveOutline.id,
-        planningOutlineTargetVolumesByNodeId,
-        planningScale.volumeCount,
-      )
-    : planningScale.volumeCount
-  const resolvedVolChapterTarget = volumeForChapterTarget
-    ? resolveVolumeTargetChapterCount(
-        volumeForChapterTarget.id,
-        planningVolumeTargetChaptersByNodeId,
-        planningScale.chaptersPerVolume,
-      )
-    : planningScale.chaptersPerVolume
+  const saveAndClose = () => {
+    setThicknessFlushSignal((s) => s + 1)
+    onOpenChange(false)
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        className="max-h-[min(92vh,760px)] gap-0 overflow-y-auto border-border/40 bg-background p-0 shadow-xl sm:max-w-md"
+        className="flex max-h-[min(92vh,760px)] flex-col gap-0 overflow-hidden border-border/40 bg-background p-0 shadow-xl sm:max-w-md"
         showCloseButton={false}
       >
-        <div className="flex items-center justify-between gap-3 border-b border-border/40 px-4 pb-3 pt-4 sm:px-5">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/40 px-4 pb-3 pt-4 sm:px-5">
           <DialogHeader className="min-w-0 flex-1 space-y-0 p-0 text-left">
             <DialogTitle className="text-base font-semibold leading-none tracking-tight">高级设置</DialogTitle>
-            <DialogDescription className="sr-only">推演规划规模、覆盖项与建议生成字数</DialogDescription>
+            <DialogDescription className="sr-only">推演规划规模与建议生成字数</DialogDescription>
           </DialogHeader>
           <div className="flex shrink-0 items-center gap-0.5">
             <TuiyanPlanningAdvancedSettingsHelp />
@@ -121,7 +101,7 @@ export function TuiyanPlanningAdvancedSettingsDialog({
           </div>
         </div>
 
-        <div className="space-y-3 px-4 py-4 sm:px-5">
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-5">
           <section className="rounded-xl border border-border/45 bg-muted/20 p-3">
             <h3 className="mb-2.5 flex items-center gap-1.5 text-[11px] font-semibold text-foreground/90">
               <Layers className="h-3.5 w-3.5 opacity-60" aria-hidden />
@@ -231,46 +211,6 @@ export function TuiyanPlanningAdvancedSettingsDialog({
                 重置
               </button>
             </div>
-
-            <div className="mt-3 border-t border-border/35 pt-3">
-              <h4 className="mb-2 text-[11px] font-semibold text-foreground/85">覆盖</h4>
-              {planningActiveOutline ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="shrink-0 text-[10px] text-muted-foreground">
-                    本大纲 · 卷数 {PLANNING_SCALE_VOLUME_MIN}–{PLANNING_SCALE_VOLUME_MAX}
-                  </label>
-                  <input
-                    type="number"
-                    min={PLANNING_SCALE_VOLUME_MIN}
-                    max={PLANNING_SCALE_VOLUME_MAX}
-                    value={resolvedOutlineVolTarget}
-                    onChange={(e) => {
-                      const n = clampPlanningOutlineVolumeTarget(Number(e.target.value))
-                      onPlanningOutlineTargetVolumesChange(planningActiveOutline.id, n)
-                    }}
-                    className="h-8 w-14 rounded-md border border-border/50 bg-background px-1.5 text-center text-[11px] tabular-nums"
-                  />
-                </div>
-              ) : null}
-              {volumeForChapterTarget ? (
-                <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <label className="shrink-0 text-[10px] text-muted-foreground">
-                    本卷 · 章细纲条数 {PLANNING_SCALE_CHAPTERS_MIN}–{PLANNING_SCALE_CHAPTERS_MAX}
-                  </label>
-                  <input
-                    type="number"
-                    min={PLANNING_SCALE_CHAPTERS_MIN}
-                    max={PLANNING_SCALE_CHAPTERS_MAX}
-                    value={resolvedVolChapterTarget}
-                    onChange={(e) => {
-                      const n = clampPlanningVolumeChapterTarget(Number(e.target.value))
-                      onPlanningVolumeTargetChaptersChange(volumeForChapterTarget.id, n)
-                    }}
-                    className="h-8 w-14 rounded-md border border-border/50 bg-background px-1.5 text-center text-[11px] tabular-nums"
-                  />
-                </div>
-              ) : null}
-            </div>
           </section>
 
           <section className="rounded-xl border border-border/45 bg-muted/20 px-2.5 pb-2 pt-2 sm:px-3">
@@ -280,14 +220,20 @@ export function TuiyanPlanningAdvancedSettingsDialog({
             <div className="overflow-hidden rounded-md border border-border/40 divide-y divide-border/40">
               {(
                 [
-                  { key: "masterOutlineMinNoPunct" as const, name: "总纲" },
+                  { key: "masterOutlineMinWithPunct" as const, name: "总纲" },
                   { key: "outlineTotalWithPunct" as const, name: "" },
                   { key: "volumeWithPunct" as const, name: "每卷卷纲" },
                   { key: "chapterOutlineMinPerNodeWithPunct" as const, name: "章细纲（每条：标题+摘要+结构化项）" },
                   { key: "detailMinTotalWithPunct" as const, name: "详细细纲整段" },
                 ] as const
               ).map((row) => {
-                const lim = PLANNING_THICKNESS_LIMITS[row.key]
+                const lim =
+                  row.key === "outlineTotalWithPunct"
+                    ? {
+                        min: planningOutlineTotalMinWithPunct(planningScale.outlineItemCount),
+                        max: PLANNING_THICKNESS_LIMITS.outlineTotalWithPunct.max,
+                      }
+                    : (PLANNING_THICKNESS_LIMITS[row.key] as { min: number; max: number })
                 return (
                   <TuiyanPlanningThicknessDraftInput
                     key={row.key}
@@ -295,6 +241,8 @@ export function TuiyanPlanningAdvancedSettingsDialog({
                     variant="row"
                     compact
                     dialogOpen={open}
+                    planningScale={planningScale}
+                    flushSignal={thicknessFlushSignal}
                     highlighted={nextThicknessKey === row.key}
                     committed={planningThickness[row.key]}
                     min={lim.min}
@@ -310,6 +258,12 @@ export function TuiyanPlanningAdvancedSettingsDialog({
               })}
             </div>
           </section>
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border/40 bg-background px-4 py-3 sm:px-5">
+          <Button type="button" size="sm" className="text-xs" onClick={saveAndClose}>
+            保存并关闭
+          </Button>
         </div>
       </DialogContent>
     </Dialog>

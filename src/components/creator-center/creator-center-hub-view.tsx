@@ -12,6 +12,8 @@ export type CreatorCenterHubViewProps = {
   creatorTodayTokens: number;
   creatorLifetimeTokens: number;
   onRefreshUsage: () => void;
+  /** 已登录：终身用量可与云端合并展示 */
+  usageAccountLoggedIn?: boolean;
 };
 
 function formatTokenCell(value: number): string {
@@ -28,6 +30,7 @@ export function CreatorCenterHubView(props: CreatorCenterHubViewProps) {
     creatorTodayTokens,
     creatorLifetimeTokens,
     onRefreshUsage,
+    usageAccountLoggedIn = false,
   } = props;
 
   return (
@@ -51,7 +54,9 @@ export function CreatorCenterHubView(props: CreatorCenterHubViewProps) {
                     {creatorEmail ? "会员：未开通" : "游客"}
                   </span>
                 </div>
-                <p className="mt-0.5 text-xs text-muted-foreground">账号 · 本机用量 · 个人提示词</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  {usageAccountLoggedIn ? "账号 · 用量同步 · 个人提示词" : "账号 · 本机用量 · 个人提示词"}
+                </p>
               </div>
             </div>
           </div>
@@ -73,7 +78,11 @@ export function CreatorCenterHubView(props: CreatorCenterHubViewProps) {
               {[
                 { label: "本会话", value: creatorSessionTokens, highlight: false },
                 { label: "今日累计", value: creatorTodayTokens, highlight: true },
-                { label: "本机累计", value: creatorLifetimeTokens, highlight: false },
+                {
+                  label: usageAccountLoggedIn ? "终身累计" : "本机累计",
+                  value: creatorLifetimeTokens,
+                  highlight: false,
+                },
               ].map(({ label, value, highlight }) => (
                 <div
                   key={label}
@@ -93,7 +102,9 @@ export function CreatorCenterHubView(props: CreatorCenterHubViewProps) {
                 </div>
               ))}
             </div>
-            <p className="mt-2 text-[10px] text-muted-foreground/50">粗估本机统计，非厂商计费。</p>
+            <p className="mt-2 text-[10px] text-muted-foreground/50">
+              {usageAccountLoggedIn ? "登录后用量记录随账号同步（粗估），非厂商计费。" : "粗估本机统计，非厂商计费。"}
+            </p>
           </div>
 
           <div className="rounded-xl border border-border/40 bg-background/40 p-4">

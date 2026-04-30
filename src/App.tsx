@@ -32,6 +32,7 @@ import { EditorShell } from "./components/EditorShell";
 import { applyThemePreference, readThemePreference, THEME_KEY } from "./theme";
 import { applyEditorTypographyCssVars, loadEditorTypography } from "./util/editor-typography";
 import { useAuthUserState } from "./hooks/useAuthUserState";
+import { useAiUsageAccountSync } from "./hooks/useAiUsageAccountSync";
 import { AppSplash } from "./components/AppSplash";
 
 const FONT_KEY = "liubai:fontSizePx";
@@ -54,6 +55,7 @@ function RequireAuth(props: { authUser: unknown }) {
 
 export default function App() {
   const { authUser } = useAuthUserState();
+  useAiUsageAccountSync(authUser?.id);
 
   // Global splash: show while auth is resolving, minimum 1.5s display
   const [splashPhase, setSplashPhase] = useState<"show" | "fading" | "done">("show");

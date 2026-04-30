@@ -4,7 +4,8 @@ import { FileText, Calculator, HardDrive, HelpCircle, Lock } from "lucide-react"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../../ui/accordion";
 import { Badge } from "../../ui/badge";
 
-export function UsageCaliberAccordion() {
+export function UsageCaliberAccordion(props: { usageAccountLoggedIn?: boolean }) {
+  const loggedIn = props.usageAccountLoggedIn ?? false;
   return (
     <div className="rounded-xl border border-border/50 bg-card/60 backdrop-blur-sm">
       <div className="border-b border-border/30 px-4 py-3 sm:px-5 sm:py-4">
@@ -104,7 +105,8 @@ export function UsageCaliberAccordion() {
               <li className="flex gap-2">
                 <span className="shrink-0 text-chart-2">•</span>
                 <span>
-                  <strong className="text-foreground">终身累计</strong>：自首次使用起的粗估总量， 仅在本机，可在设置中重置。
+                  <strong className="text-foreground">终身累计</strong>：自首次使用起的粗估总量。
+                  {loggedIn ? " 登录后与账号同步，换设备同一邮箱可见。" : " 未登录时仅存本机，可在设置中重置。"}
                 </span>
               </li>
               <li className="flex gap-2">
@@ -132,12 +134,25 @@ export function UsageCaliberAccordion() {
               <li className="flex gap-2">
                 <span className="shrink-0 text-chart-4">•</span>
                 <span>
-                  所有用量统计<strong className="text-foreground">仅存储在本机浏览器</strong>， 不会上传到任何服务器。
+                  {loggedIn ? (
+                    <>
+                      登录后<strong className="text-foreground">用量摘要事件</strong>会与账号关联存储，便于跨设备查看；
+                      侧栏部分<strong className="text-foreground">今日粗估</strong>仍可能留在本机缓存。
+                    </>
+                  ) : (
+                    <>
+                      未登录时用量统计<strong className="text-foreground">仅在本机浏览器</strong>，用于聚合展示。
+                    </>
+                  )}
                 </span>
               </li>
               <li className="flex gap-2">
                 <span className="shrink-0 text-chart-4">•</span>
-                <span>清除浏览器数据将同时清除用量记录。</span>
+                <span>
+                  {loggedIn
+                    ? "清除本机浏览器数据会删掉本地用量缓存；重新登录后一般会从账号再次合并摘要。"
+                    : "清除浏览器数据将同时清除用量记录。"}
+                </span>
               </li>
               <li className="flex gap-2">
                 <span className="shrink-0 text-chart-4">•</span>

@@ -1,5 +1,5 @@
 import { generateWithProvider } from "./client";
-import { isLocalAiProvider } from "./local-provider";
+import { isLocalAiProvider, requiresClientSavedApiKey } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 
@@ -39,7 +39,7 @@ async function generateChapterSummaryOnce(args: {
 }): Promise<string> {
   assertCanSendChapterSummary(args.settings);
   const cfg = getProviderConfig(args.settings, args.settings.provider);
-  if (!isLocalAiProvider(args.settings.provider) && !cfg.apiKey?.trim()) {
+  if (requiresClientSavedApiKey(args.settings.provider) && !cfg.apiKey?.trim()) {
     throw new ChapterSummaryGenerationError("请先在设置中填写当前模型的 API Key。");
   }
   const body = args.chapterContent.trim();

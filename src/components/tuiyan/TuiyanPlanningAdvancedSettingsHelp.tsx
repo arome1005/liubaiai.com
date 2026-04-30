@@ -40,7 +40,9 @@ export function TuiyanPlanningAdvancedSettingsHelp() {
 
           <section className="space-y-1">
             <p className="font-medium text-foreground/90">建议生成字数</p>
-            <p>与生成与校验一致；改完失焦后写入。可清空再输入，未确认则恢复原值。</p>
+            <p>
+              与生成与校验一致（均含标点）；各层有不可低于的产品下限。改完可点失焦或底部「保存并关闭」；直接点右上角关闭也会在关窗前尽量提交当前正在编辑的字数。
+            </p>
             <p className="font-mono text-[10px] text-muted-foreground/90">{TUIYAN_PLANNING_THICKNESS_LS_KEY}</p>
           </section>
 

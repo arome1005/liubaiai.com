@@ -3,7 +3,7 @@ import { logTuiyanReferenceTouchpoint } from "../util/tuiyan-reference-dev-log";
 import { formatWorkStyleAndTagProfileBlock, type WritingWorkStyleSlice } from "./assemble-context";
 import { mergeTuiyanPlanningSystemWithReferenceHardRules } from "./tuiyan-reference-planning-system";
 import { generateWithProvider } from "./client";
-import { isLocalAiProvider } from "./local-provider";
+import { isLocalAiProvider, requiresClientSavedApiKey } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 
@@ -94,7 +94,7 @@ export async function generateLogicThreeBranches(args: {
   const settings = args.settings ?? loadAiSettings();
   assertCanSendLogicBranch(settings);
   const cfg = getProviderConfig(settings, settings.provider);
-  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
+  if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
     throw new LogicBranchPredictError("请先在设置中填写当前模型的 API Key。");
   }
   const body = args.chapterContent.trim();

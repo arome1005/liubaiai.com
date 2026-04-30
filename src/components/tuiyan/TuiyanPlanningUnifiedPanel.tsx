@@ -255,28 +255,30 @@ export function TuiyanPlanningUnifiedPanel({
             模板高级
           </button>
         </div>
-        <div className="flex min-w-0 items-center gap-1">
-          <div className="min-w-0 flex-1">
-            <PromptPicker
-              selectedId={selectedPromptTemplate?.id}
-              selectedLabel={selectedPromptTemplate?.title ?? null}
-              emptyPlaceholder="请选择您喜欢的提示词风格"
-              triggerVariant="field"
-              onPick={onPickPromptTemplate}
-              filterSlots={PROMPT_PICKER_TUIYAN_SLOTS}
-            />
+        {planningMode === "template" ? (
+          <div className="flex min-w-0 items-center gap-1">
+            <div className="min-w-0 flex-1">
+              <PromptPicker
+                selectedId={selectedPromptTemplate?.id}
+                selectedLabel={selectedPromptTemplate?.title ?? null}
+                emptyPlaceholder="请选择您喜欢的提示词风格"
+                triggerVariant="field"
+                onPick={onPickPromptTemplate}
+                filterSlots={PROMPT_PICKER_TUIYAN_SLOTS}
+              />
+            </div>
+            {selectedPromptTemplate && (
+              <button
+                type="button"
+                className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
+                title="清除提示词选择"
+                onClick={onClearPromptTemplate}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
-          {selectedPromptTemplate && (
-            <button
-              type="button"
-              className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-              title="清除提示词选择"
-              onClick={onClearPromptTemplate}
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
+        ) : null}
       </div>
 
       {showNodeMode && planningSelectedNode ? (
@@ -465,15 +467,10 @@ export function TuiyanPlanningUnifiedPanel({
         open={advancedDialogOpen}
         onOpenChange={setAdvancedDialogOpen}
         planningSelectedNode={planningSelectedNode}
-        planningActiveOutline={planningActiveOutline}
         planningScale={planningScale}
         onPlanningScaleChange={onPlanningScaleChange}
         planningThickness={planningThickness}
         onPlanningThicknessChange={onPlanningThicknessChange}
-        planningOutlineTargetVolumesByNodeId={planningOutlineTargetVolumesByNodeId}
-        onPlanningOutlineTargetVolumesChange={onPlanningOutlineTargetVolumesChange}
-        planningVolumeTargetChaptersByNodeId={planningVolumeTargetChaptersByNodeId}
-        onPlanningVolumeTargetChaptersChange={onPlanningVolumeTargetChaptersChange}
       />
     </div>
   )

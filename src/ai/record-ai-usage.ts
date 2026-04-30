@@ -4,6 +4,7 @@ import type { AiChatMessage, AiProviderId, AiTokenUsage } from "./types";
 import type { AiGenerateResult } from "./types";
 import { approxUsageFromMessagesAndText } from "./token-usage-helpers";
 import { putAiUsageEvent, type AiUsageEventRow } from "../storage/ai-usage-db";
+import { syncAiUsageEventToCloud } from "../storage/ai-usage-cloud";
 
 export type UsageLogForRecord = {
   task: string;
@@ -165,9 +166,11 @@ export function recordAiUsageFromGenerateResult(input: RecordInput): void {
     result.tokenUsage ??
     approxUsageFromMessagesAndText(messages, (result.text ?? "").trim());
   const row = usageToRow(task, workId, provider, model, messages, token, status, bucketOverride);
-  void putAiUsageEvent(row).catch(() => {
-    /* quota / private */
-  });
+  void putAiUsageEvent(row)
+    .then(() => syncAiUsageEventToCloud(row))
+    .catch(() => {
+      /* quota / private */
+    });
   try {
     window.dispatchEvent(new CustomEvent("liubai:ai-usage-log-updated"));
   } catch {
