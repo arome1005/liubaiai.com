@@ -1,7 +1,8 @@
 "use client";
 
 import type { ChangeEvent, RefObject } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { pullAiUsageEventsFromCloudAndMerge } from "../../storage/ai-usage-cloud";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog";
 import {
@@ -34,6 +35,14 @@ function IconMore(props: { className?: string }) {
 }
 
 export type CreatorCenterPanel = "hub" | "usage";
+
+function readAuthUserId(authUser: unknown): string | undefined {
+  if (authUser && typeof authUser === "object" && "id" in authUser) {
+    const id = (authUser as { id?: unknown }).id;
+    if (typeof id === "string" && id.length > 0) return id;
+  }
+  return undefined;
+}
 
 export type CreatorCenterDialogProps = {
   open: boolean;
@@ -73,6 +82,43 @@ export function CreatorCenterDialog(props: CreatorCenterDialogProps) {
   } = props;
 
   const [panel, setPanel] = useState<CreatorCenterPanel>("hub");
+
+  /** 打开创作中心、以及切入「AI 用量洞察」时立刻从云端合并用量事件（多环境/多浏览器对齐） */
+  useEffect(() => {
+    const uid = readAuthUserId(authUser);
+    if (!open || !uid) return;
+    let cancelled = false;
+    void (async () => {
+      await pullAiUsageEventsFromCloudAndMerge();
+      if (cancelled) return;
+      try {
+        window.dispatchEvent(new CustomEvent("liubai:ai-usage-log-updated"));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, authUser]);
+
+  useEffect(() => {
+    const uid = readAuthUserId(authUser);
+    if (!open || !uid || panel !== "usage") return;
+    let cancelled = false;
+    void (async () => {
+      await pullAiUsageEventsFromCloudAndMerge();
+      if (cancelled) return;
+      try {
+        window.dispatchEvent(new CustomEvent("liubai:ai-usage-log-updated"));
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [panel, open, authUser]);
 
   function handleDialogOpenChange(next: boolean) {
     if (!next) {
