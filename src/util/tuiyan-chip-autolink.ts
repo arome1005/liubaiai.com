@@ -67,50 +67,152 @@ export async function autoLinkChipsFromNodes(
 
   for (const { summary, structuredMeta, level, nodeId } of items) {
     // ── 人物字段 ────────────────────────────────────────────────────────────
-    const charFields = [
-      structuredMeta.appearedCharacters,
-      structuredMeta.coreCharacters,
-      structuredMeta.mainCharacters,
+    // 优先：4 层各自的人物 *Detail（含 role/voiceNotes/motivation/arcInVolume）
+    const charDetailArrays = [
+      structuredMeta.coreCharactersDetail,
+      structuredMeta.characterAllocationDetail,
+      structuredMeta.mainCharactersDetail,
+      structuredMeta.appearedCharactersDetail,
     ]
-    for (const field of charFields) {
-      for (const name of parseNames(field)) {
-        if (!charMap.has(name)) {
-          charMap.set(name, {
-            name,
-            motivation: extractContextForName(summary, name),
-            voiceNotes: "",
-            relationships: "",
-            taboos: "",
-            sourceLevel: level,
-            sourceNodeId: nodeId,
-          })
+    let hasAnyCharDetail = false
+    for (const arr of charDetailArrays) {
+      if (!Array.isArray(arr) || arr.length === 0) continue
+      hasAnyCharDetail = true
+      for (const e of arr) {
+        if (!e?.name || charMap.has(e.name)) continue
+        const motivationParts: string[] = []
+        if (e.role) motivationParts.push(`身份：${e.role}`)
+        if (e.motivation) motivationParts.push(e.motivation)
+        if (e.arcInVolume) motivationParts.push(`本卷弧光：${e.arcInVolume}`)
+        const motivation = motivationParts.join("\n") || extractContextForName(summary, e.name)
+        charMap.set(e.name, {
+          name: e.name,
+          motivation,
+          voiceNotes: e.voiceNotes ?? "",
+          relationships: "",
+          taboos: "",
+          sourceLevel: level,
+          sourceNodeId: nodeId,
+        })
+      }
+    }
+    // 兼容路径：仅在本节点完全没有任何人物 detail 时，才回落到文本字段切名字
+    // （避免 detail 给的"方源"和老节点文本切碎产生的"方源（..."重复入库）
+    if (!hasAnyCharDetail) {
+      const charTextFields: Array<string | undefined> = [
+        structuredMeta.appearedCharacters,
+        structuredMeta.coreCharacters,
+        structuredMeta.mainCharacters,
+      ]
+      for (const field of charTextFields) {
+        for (const name of parseNames(field)) {
+          if (!charMap.has(name)) {
+            charMap.set(name, {
+              name,
+              motivation: extractContextForName(summary, name),
+              voiceNotes: "",
+              relationships: "",
+              taboos: "",
+              sourceLevel: level,
+              sourceNodeId: nodeId,
+            })
+          }
         }
       }
     }
 
     // ── 地点字段 ───────────────────────────────────────────────────────────────
-    const locationFields = [structuredMeta.locations, structuredMeta.keyLocations]
-    for (const field of locationFields) {
-      for (const title of parseNames(field)) {
-        if (!termMap.has(title)) {
-          termMap.set(title, {
-            entryKind: "地点",
-            title,
-            body: extractContextForName(summary, title),
-            sourceLevel: level,
-            sourceNodeId: nodeId,
-          })
+    const locationDetailArrays = [
+      structuredMeta.keyLocationsDetail,
+      structuredMeta.locationsDetail,
+    ]
+    let hasAnyLocationDetail = false
+    for (const arr of locationDetailArrays) {
+      if (!Array.isArray(arr) || arr.length === 0) continue
+      hasAnyLocationDetail = true
+      for (const e of arr) {
+        if (!e?.name || termMap.has(e.name)) continue
+        termMap.set(e.name, {
+          entryKind: "地点",
+          title: e.name,
+          body: e.note ?? extractContextForName(summary, e.name),
+          sourceLevel: level,
+          sourceNodeId: nodeId,
+        })
+      }
+    }
+    if (!hasAnyLocationDetail) {
+      for (const field of [structuredMeta.locations, structuredMeta.keyLocations]) {
+        for (const title of parseNames(field)) {
+          if (!termMap.has(title)) {
+            termMap.set(title, {
+              entryKind: "地点",
+              title,
+              body: extractContextForName(summary, title),
+              sourceLevel: level,
+              sourceNodeId: nodeId,
+            })
+          }
         }
       }
     }
 
     // ── 势力字段 ───────────────────────────────────────────────────────────────
-    const factionFields = [structuredMeta.mainFactions, structuredMeta.coreFactions]
-    for (const field of factionFields) {
-      for (const title of parseNames(field)) {
+    const factionDetailArrays = [
+      structuredMeta.coreFactionsDetail,
+      structuredMeta.mainFactionsDetail,
+    ]
+    let hasAnyFactionDetail = false
+    for (const arr of factionDetailArrays) {
+      if (!Array.isArray(arr) || arr.length === 0) continue
+      hasAnyFactionDetail = true
+      for (const e of arr) {
+        if (!e?.name || termMap.has(e.name)) continue
+        termMap.set(e.name, {
+          entryKind: "势力",
+          title: e.name,
+          body: e.note ?? extractContextForName(summary, e.name),
+          sourceLevel: level,
+          sourceNodeId: nodeId,
+        })
+      }
+    }
+    if (!hasAnyFactionDetail) {
+      for (const field of [structuredMeta.mainFactions, structuredMeta.coreFactions]) {
+        for (const title of parseNames(field)) {
+          if (!termMap.has(title)) {
+            termMap.set(title, {
+              entryKind: "势力",
+              title,
+              body: extractContextForName(summary, title),
+              sourceLevel: level,
+              sourceNodeId: nodeId,
+            })
+          }
+        }
+      }
+    }
+
+    // ── 道具/法宝字段 ───────────────────────────────────────────────────────────
+    const hasItemsDetail =
+      Array.isArray(structuredMeta.keyItemsDetail) &&
+      structuredMeta.keyItemsDetail.length > 0
+    if (hasItemsDetail) {
+      for (const e of structuredMeta.keyItemsDetail!) {
+        if (!e?.name || termMap.has(e.name)) continue
+        termMap.set(e.name, {
+          entryKind: "法宝",
+          title: e.name,
+          body: e.effect ?? extractContextForName(summary, e.name),
+          sourceLevel: level,
+          sourceNodeId: nodeId,
+        })
+      }
+    } else {
+      for (const title of parseNames(structuredMeta.keyItems)) {
         if (!termMap.has(title)) {
           termMap.set(title, {
-            entryKind: "势力",
+            entryKind: "法宝",
             title,
             body: extractContextForName(summary, title),
             sourceLevel: level,
@@ -120,29 +222,32 @@ export async function autoLinkChipsFromNodes(
       }
     }
 
-    // ── 道具/法宝字段 ───────────────────────────────────────────────────────────
-    for (const title of parseNames(structuredMeta.keyItems)) {
-      if (!termMap.has(title)) {
-        termMap.set(title, {
-          entryKind: "法宝",
-          title,
-          body: extractContextForName(summary, title),
+    // ── 世界观核心词条（总纲）─────────────────────────────────────────────────
+    const hasWorldTermsDetail =
+      Array.isArray(structuredMeta.worldSettingTermsDetail) &&
+      structuredMeta.worldSettingTermsDetail.length > 0
+    if (hasWorldTermsDetail) {
+      for (const e of structuredMeta.worldSettingTermsDetail!) {
+        if (!e?.name || termMap.has(e.name)) continue
+        termMap.set(e.name, {
+          entryKind: "术语",
+          title: e.name,
+          body: e.note ?? extractContextForName(summary, e.name),
           sourceLevel: level,
           sourceNodeId: nodeId,
         })
       }
-    }
-
-    // ── 世界观核心词条（总纲）─────────────────────────────────────────────────
-    for (const title of parseNames(structuredMeta.worldSettingTerms)) {
-      if (!termMap.has(title)) {
-        termMap.set(title, {
-          entryKind: "术语",
-          title,
-          body: extractContextForName(summary, title),
-          sourceLevel: level,
-          sourceNodeId: nodeId,
-        })
+    } else {
+      for (const title of parseNames(structuredMeta.worldSettingTerms)) {
+        if (!termMap.has(title)) {
+          termMap.set(title, {
+            entryKind: "术语",
+            title,
+            body: extractContextForName(summary, title),
+            sourceLevel: level,
+            sourceNodeId: nodeId,
+          })
+        }
       }
     }
   }

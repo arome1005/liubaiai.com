@@ -549,6 +549,39 @@ export type TuiyanPlanningMeta = {
   templateId?: string | null;
 };
 
+/** 卷纲结构化字段：人物条目（用于 mainCharactersDetail，AI JSON 块产出，给 chip popover 预填） */
+export type StructuredCharacterEntry = {
+  name: string;
+  /** 角色身份（如：主角、父亲、师父） */
+  role?: string;
+  /** AI 推断的性别；用户可在 chip popover 改 */
+  gender?: BibleCharacter["gender"];
+  /** 性格描述（→ chip popover 的"角色性格"字段） */
+  voiceNotes?: string;
+  /** 角色信息/动机/背景（→ chip popover 的"角色信息"字段） */
+  motivation?: string;
+  /** 该角色在本卷的弧光/状态变化 */
+  arcInVolume?: string;
+};
+
+/** 结构化字段：势力条目 */
+export type StructuredFactionEntry = { name: string; note?: string };
+
+/** 结构化字段：地点条目 */
+export type StructuredLocationEntry = { name: string; note?: string };
+
+/** 结构化字段：道具/功法/机遇条目 */
+export type StructuredItemEntry = {
+  name: string;
+  /** 实体类型：物件 / 功法 / 机遇事件 */
+  type?: "item" | "technique" | "opportunity";
+  /** 作用/效果描述（→ 词条 chip popover 的"备注"字段） */
+  effect?: string;
+};
+
+/** 结构化字段：通用术语条目（如总纲世界观核心词条） */
+export type StructuredTermEntry = { name: string; note?: string };
+
 /** 五层规划：每个节点的结构化元数据（不同层级展示不同字段集，AI 生成后用户可修改） */
 export type PlanningNodeStructuredMeta = {
   // 总纲 (master_outline)
@@ -570,6 +603,27 @@ export type PlanningNodeStructuredMeta = {
   keyLocations?: string;
   keyItems?: string;
   volumeHook?: string;
+  /**
+   * 结构化字段的详细对象数组（覆盖 4 层：总纲 / 一级大纲 / 卷纲 / 章纲）。
+   * AI 生成时以 JSON 块附带；与上方字符串字段并存——
+   * 字符串字段是兼容路径（写入书斋 / 备份 / 预览等老消费者继续用，且只放干净名字），
+   * chip popover 优先读 *Detail 做预填，缺失时回落到字符串字段。
+   * 老节点没有这些字段；下次重生成时由 AI 补齐。
+   */
+  // 总纲 (master_outline) detail
+  coreCharactersDetail?: StructuredCharacterEntry[];
+  worldSettingTermsDetail?: StructuredTermEntry[];
+  // 一级大纲 (outline) detail
+  characterAllocationDetail?: StructuredCharacterEntry[];
+  mainFactionsDetail?: StructuredFactionEntry[];
+  // 卷纲 (volume) detail
+  mainCharactersDetail?: StructuredCharacterEntry[];
+  coreFactionsDetail?: StructuredFactionEntry[];
+  keyLocationsDetail?: StructuredLocationEntry[];
+  keyItemsDetail?: StructuredItemEntry[];
+  // 章纲 (chapter_outline) detail
+  appearedCharactersDetail?: StructuredCharacterEntry[];
+  locationsDetail?: StructuredLocationEntry[];
   // 章细纲 (chapter_outline) + 详细细纲 (chapter_detail)
   conflictPoints?: string;
   appearedCharacters?: string;
