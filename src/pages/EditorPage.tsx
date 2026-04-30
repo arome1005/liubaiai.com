@@ -2701,9 +2701,6 @@ export function EditorPage() {
                 {glossaryHits.map((t) => (
                   <li key={t.id}>
                     <span className="sidebar-glossary-term">{t.term}</span>
-                    <span className="muted small">
-                      {t.category === "dead" ? "已死" : t.category === "name" ? "人名" : "术语"}
-                    </span>
                   </li>
                 ))}
               </ul>

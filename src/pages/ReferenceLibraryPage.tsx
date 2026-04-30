@@ -929,8 +929,7 @@ export function ReferenceLibraryPage() {
         // 术语：把 title 当 term，正文进 definition（repo 类型里叫 body）
         await addBibleGlossaryTerm(wid, {
           term: card.title,
-          category: "藏经卡片",
-          definition: body,
+          note: body,
         });
       } else {
         await addBibleWorldEntry(wid, {

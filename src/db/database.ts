@@ -958,6 +958,46 @@ export class LiubaiDB extends Dexie {
     });
     // v33：推演规划字段（TuiyanState 可选字段；无新索引；v34 起 UI 语义扩展为五层）
     this.version(33).stores({});
+    // v34：书斋词条 BibleGlossaryTerm 去掉 category 字段；索引不再含 category
+    this.version(34)
+      .stores({
+        works: "id, updatedAt, bookNo",
+        chapters: "id, workId, order, volumeId",
+        volumes: "id, workId, order",
+        meta: "key",
+        chapterSnapshots: "id, chapterId, createdAt",
+        referenceLibrary: "id, updatedAt, category",
+        referenceChunks: "id, refWorkId, ordinal, [refWorkId+ordinal]",
+        referenceTokenPostings: "id, token, refWorkId, chunkId, [token+refWorkId]",
+        referenceExcerpts: "id, refWorkId, chunkId, createdAt, linkedChapterId, linkedWorkId",
+        referenceTags: "id, name, createdAt",
+        referenceExcerptTags: "id, excerptId, tagId, [excerptId+tagId]",
+        referenceChapterHeads: "id, refWorkId, chunkId, ordinal, startOffset, [refWorkId+ordinal]",
+        bibleCharacters: "id, workId, sortOrder, name, [workId+sortOrder]",
+        bibleWorldEntries: "id, workId, entryKind, sortOrder, [workId+sortOrder]",
+        bibleForeshadowing: "id, workId, status, chapterId, sortOrder, [workId+status]",
+        bibleTimelineEvents: "id, workId, chapterId, sortOrder, [workId+sortOrder]",
+        bibleChapterTemplates: "id, workId, name, [workId+name]",
+        writingPromptTemplates: "id, workId, category, sortOrder, [workId+sortOrder], [workId+category]",
+        writingStyleSamples: "id, workId, sortOrder, [workId+sortOrder]",
+        chapterBible: "id, chapterId, workId, [chapterId+workId]",
+        bibleGlossaryTerms: "id, workId, term, [workId+term]",
+        workStyleCards: "id, workId, updatedAt",
+        inspirationCollections: "id, sortOrder, createdAt",
+        inspirationFragments:
+          "id, workId, collectionId, createdAt, [workId+createdAt], [collectionId+createdAt]",
+        logicPlaceNodes: "id, workId, updatedAt, [workId+updatedAt]",
+        logicPlaceEvents: "id, workId, placeId, updatedAt, [workId+updatedAt], [placeId+updatedAt]",
+        tuiyanStates: "id, workId, updatedAt, [workId+updatedAt]",
+        referenceExtracts: "id, refWorkId, type, createdAt, [refWorkId+type]",
+        globalPromptTemplates: "id, type, status, sortOrder, createdAt, updatedAt, [type+status]",
+      })
+      .upgrade(async (trans) => {
+        const table = trans.table("bibleGlossaryTerms");
+        await table.toCollection().modify((r: Record<string, unknown>) => {
+          delete r.category;
+        });
+      });
   }
 }
 

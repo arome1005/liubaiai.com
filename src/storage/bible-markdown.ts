@@ -75,9 +75,7 @@ export function buildBibleMarkdownExport(opts: {
   if (opts.glossary.length === 0) lines.push("（暂无）", "");
   else {
     for (const g of opts.glossary) {
-      const tag =
-        g.category === "dead" ? "已死" : g.category === "name" ? "人名" : "术语";
-      lines.push(`- **${g.term}**（${tag}）`, g.note ? `  ${g.note}` : "", "");
+      lines.push(`- **${g.term}**`, g.note ? `  ${g.note}` : "", "")
     }
   }
 

@@ -114,6 +114,27 @@ const PERSONAS: Record<AiProviderId, ModelPersona[]> = {
       costStars: 4,
     },
   ],
+  /** 路由经后端代理；当前 GCP 项目仅 2.5 系列可用，3.x preview 需 allowlist */
+  vertex: [
+    {
+      provider: "vertex",
+      modelId: "gemini-2.5-pro",
+      title: "云谷·化境",
+      subtitle: "2.5 Pro（主力）",
+      description: "长文与复杂约束下质量更好；写作主力档。",
+      tags: ["推荐", "2.5"],
+      costStars: 4,
+    },
+    {
+      provider: "vertex",
+      modelId: "gemini-2.5-flash",
+      title: "云谷·入微",
+      subtitle: "2.5 Flash 平衡",
+      description: "更省、更快，适合多轮与高频改写。",
+      tags: ["快"],
+      costStars: 3,
+    },
+  ],
   doubao: [
     {
       provider: "doubao",

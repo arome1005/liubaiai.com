@@ -1,4 +1,5 @@
 import { apiUrl } from "../api/base";
+import { authFetchHeaders } from "../lib/supabase";
 import { clampStreamMaxOutputTokens } from "./writing-body-output-budget";
 import type { AiChatMessage, AiGenerateResult, AiProviderConfig, AiProviderId } from "./types";
 import { finalUsageForGenerate } from "./token-usage-helpers";
@@ -255,6 +256,8 @@ export async function generateWithProvider(args: {
     if (shouldUseRouterProtocol(config)) return generateOpenAI(config, messages, args.temperature, args.signal);
     return generateGemini(config, messages, args.temperature, args.signal);
   }
+  if (provider === "vertex")
+    return generateVertex(config, messages, args.temperature, args.signal);
   return generateGemini(config, messages, args.temperature, args.signal);
 }
 
@@ -303,6 +306,8 @@ export async function generateWithProviderStream(args: {
       return generateOpenAIStream(config, messages, onDelta, args.temperature, args.signal, mOut);
     return generateGeminiStream(config, messages, onDelta, args.temperature, args.signal, mOut);
   }
+  if (provider === "vertex")
+    return generateVertexStream(config, messages, onDelta, args.temperature, args.signal, mOut);
   const r = await generateWithProvider({ provider, config, messages, temperature: args.temperature, signal: args.signal });
   if (r.text) onDelta(r.text);
   return r;
@@ -643,6 +648,111 @@ async function generateGemini(
   const text = geminiGenerateTextFromJson(raw);
   const gU = geminiUsageFromJsonRoot(raw) ?? null;
   return { text, raw, ...finalUsageForGenerate(text, messages, gU) };
+}
+
+function requireVertexModel(cfg: AiProviderConfig): string {
+  const m = (cfg.model ?? "").trim();
+  if (!m) throw new Error("Vertex AI：请先在「高级后端配置」填写 Model（发布商模型 ID）");
+  return m;
+}
+
+async function generateVertex(
+  cfg: AiProviderConfig,
+  messages: AiChatMessage[],
+  temperature = 0.7,
+  signal?: AbortSignal,
+): Promise<AiGenerateResult> {
+  const model = requireVertexModel(cfg);
+  const headers = await authFetchHeaders({ "Content-Type": "application/json" });
+  if (!headers.Authorization) {
+    throw new Error("Vertex AI：请先登录后再调用（需 Supabase 会话以通过后端鉴权）");
+  }
+  const url = apiUrl(`/api/ai/vertex/generate?model=${encodeURIComponent(model)}`);
+  const resp = await fetchOrThrowCorsHint(cfg.label, url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(geminiGenerateJsonBody(messages, temperature)),
+    signal,
+  });
+  if (!resp.ok) {
+    const raw: unknown = await resp.json().catch(() => ({}));
+    throw new Error(`Vertex AI 请求失败：${messageFromApiJsonBody(raw) || String(resp.status)}`);
+  }
+  const raw: unknown = await resp.json();
+  const text = geminiGenerateTextFromJson(raw);
+  const gU = geminiUsageFromJsonRoot(raw) ?? null;
+  return { text, raw, ...finalUsageForGenerate(text, messages, gU) };
+}
+
+async function generateVertexStream(
+  cfg: AiProviderConfig,
+  messages: AiChatMessage[],
+  onDelta: (textDelta: string) => void,
+  temperature = 0.7,
+  signal?: AbortSignal,
+  maxOutputTokens?: number,
+): Promise<AiGenerateResult> {
+  const model = requireVertexModel(cfg);
+  const headers = await authFetchHeaders({ "Content-Type": "application/json" });
+  if (!headers.Authorization) {
+    throw new Error("Vertex AI：请先登录后再调用（需 Supabase 会话以通过后端鉴权）");
+  }
+  const url = apiUrl(`/api/ai/vertex/stream?model=${encodeURIComponent(model)}`);
+  const resp = await fetchOrThrowCorsHint(cfg.label, url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(geminiGenerateJsonBody(messages, temperature, maxOutputTokens)),
+    signal,
+  });
+  if (!resp.ok) {
+    const raw: unknown = await resp.json().catch(() => ({}));
+    throw new Error(`Vertex AI 请求失败：${messageFromApiJsonBody(raw) || String(resp.status)}`);
+  }
+  const reader = resp.body?.getReader();
+  if (!reader) throw new Error("Vertex AI 流式响应不可用");
+  const dec = new TextDecoder("utf-8");
+  let buf = "";
+  let full = "";
+  let lastGU: OpenAiStyleUsage | null = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf = (buf + dec.decode(value, { stream: true })).replace(/\r\n/g, "\n");
+    const parts = buf.split("\n\n");
+    buf = parts.pop() ?? "";
+    for (const block of parts) {
+      const lines = block.split("\n").filter((l) => l.trim().length > 0);
+      const dataLines = lines.filter((l) => l.trimStart().startsWith("data:"));
+      if (dataLines.length === 0) continue;
+      const payload = dataLines
+        .map((l) => l.trim().replace(/^data:\s?/, ""))
+        .join("\n")
+        .trim();
+      if (!payload || payload === "[DONE]") continue;
+      let data: unknown;
+      try {
+        data = JSON.parse(payload);
+      } catch {
+        continue;
+      }
+      if (data && typeof data === "object" && "error" in data) {
+        const msg = messageFromApiJsonBody(data);
+        try {
+          await reader.cancel();
+        } catch {
+          /* ignore */
+        }
+        throw new Error(`Vertex AI 流式失败：${msg || "未知错误"}`);
+      }
+      const gP = geminiUsageFromJsonRoot(data);
+      if (gP) lastGU = gP;
+      geminiEmitStreamDeltas(data, (d) => {
+        full += d;
+        onDelta(d);
+      });
+    }
+  }
+  return { text: full, ...finalUsageForGenerate(full, messages, lastGU) };
 }
 
 async function generateGeminiStream(

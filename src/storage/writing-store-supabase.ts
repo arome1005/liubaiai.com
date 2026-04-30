@@ -1367,20 +1367,18 @@ export class WritingStoreSupabase implements WritingStore {
       id: crypto.randomUUID(),
       workId,
       term: (input.term ?? "").trim() || "术语",
-      category: input.category ?? "term",
       note: input.note ?? "",
       createdAt: t,
       updatedAt: t,
-    };
+    }
     const { error } = await getSupabase().from("bible_glossary_term").insert({
       id: row.id,
       work_id: row.workId,
       term: row.term,
-      category: row.category,
       note: row.note,
       created_at: row.createdAt,
       updated_at: row.updatedAt,
-    } as never);
+    } as never)
     if (error) throw new Error(error.message);
     return row;
   }
@@ -1388,7 +1386,6 @@ export class WritingStoreSupabase implements WritingStore {
   async updateBibleGlossaryTerm(id: string, patch: Partial<Omit<BibleGlossaryTerm, "id" | "workId">>): Promise<void> {
     const row: Json = { updated_at: now() };
     if (patch.term !== undefined) row.term = patch.term;
-    if (patch.category !== undefined) row.category = patch.category;
     if (patch.note !== undefined) row.note = patch.note;
     const { error } = await getSupabase().from("bible_glossary_term").update(row as never).eq("id", id);
     if (error) throw new Error(error.message);

@@ -8,7 +8,6 @@ import {
   Database,
   FileDown,
   Lightbulb,
-  Lock,
   Palette,
   PenTool,
   Save,
@@ -28,18 +27,10 @@ import { listRecentDailyApproxTokens, readTodayApproxTokens } from "../ai/daily-
 import { loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiSettings } from "../ai/types";
 import { BackendModelConfigModal } from "../components/BackendModelConfigModal";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "../components/ui/dialog";
-import { Input } from "../components/ui/input";
+import { BackendAdvancedConfigGateDialog } from "../components/settings/BackendAdvancedConfigGateDialog";
 import { Button } from "../components/ui/button";
-import { BACKEND_ADVANCED_CONFIG_PIN } from "../util/backend-advanced-config-gate";
 import { useAuthUserState } from "../hooks/useAuthUserState";
+import { useBackendAdvancedConfigGate } from "../hooks/useBackendAdvancedConfigGate";
 import { persistThemePreference, readThemePreference, type ThemePreference } from "../theme";
 import {
   BACKUP_NUDGE_INTERVAL_MS,
@@ -204,33 +195,17 @@ export function SettingsPage() {
   const [aiSettings, setAiSettings] = useState<AiSettings>(() => loadAiSettings());
   const [accentColor, setAccentColor] = useState<AccentColorId>(() => readAccentColor());
   const [editorExp, setEditorExp] = useState<EditorExperienceState>(() => loadEditorExperience());
-  const [backendOpen, setBackendOpen] = useState(false);
-  const [backendGateOpen, setBackendGateOpen] = useState(false);
-  const [backendGatePin, setBackendGatePin] = useState("");
-  const [backendGateError, setBackendGateError] = useState<string | null>(null);
-
-  const requestOpenBackend = useCallback(() => {
-    setBackendGatePin("");
-    setBackendGateError(null);
-    setBackendGateOpen(true);
-  }, []);
-
-  const closeBackendGate = useCallback(() => {
-    setBackendGateOpen(false);
-    setBackendGatePin("");
-    setBackendGateError(null);
-  }, []);
-
-  const confirmBackendGate = useCallback(() => {
-    if (backendGatePin.trim() === BACKEND_ADVANCED_CONFIG_PIN) {
-      setBackendGateOpen(false);
-      setBackendGatePin("");
-      setBackendGateError(null);
-      setBackendOpen(true);
-    } else {
-      setBackendGateError("密码不正确。");
-    }
-  }, [backendGatePin]);
+  const {
+    backendOpen,
+    setBackendOpen,
+    requestOpenBackend,
+    closeBackendGate,
+    confirmBackendGate,
+    backendGateOpen,
+    backendGatePin,
+    onBackendGatePinInput,
+    backendGateError,
+  } = useBackendAdvancedConfigGate();
   const [fictionAck, setFictionAck] = useState(() => readFictionCreationAcknowledged());
   const [backupReminderOn, setBackupReminderOn] = useState(() => readBackupReminderEnabled());
   const [lastBackupExportMs, setLastBackupExportMs] = useState<number | null>(() => readLastBackupExportMs());
@@ -601,49 +576,14 @@ export function SettingsPage() {
         </div>
       </div>
 
-      <Dialog open={backendGateOpen} onOpenChange={(o) => (o ? setBackendGateOpen(true) : closeBackendGate())}>
-        <DialogContent className="sm:max-w-sm" showCloseButton onOpenAutoFocus={(e) => e.preventDefault()}>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base">
-              <Lock className="h-4 w-4 text-muted-foreground" aria-hidden />
-              高级后端配置
-            </DialogTitle>
-            <DialogDescription className="text-left text-sm text-muted-foreground">
-              请输入密码以打开「高级后端配置」弹窗。
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <Input
-              type="password"
-              autoComplete="off"
-              placeholder="密码"
-              value={backendGatePin}
-              onChange={(e) => {
-                setBackendGatePin(e.target.value);
-                setBackendGateError(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  confirmBackendGate();
-                }
-              }}
-              className="font-mono"
-            />
-            {backendGateError ? (
-              <p className="text-xs text-destructive">{backendGateError}</p>
-            ) : null}
-          </div>
-          <DialogFooter className="gap-2 sm:gap-0">
-            <Button type="button" variant="outline" size="sm" onClick={closeBackendGate}>
-              取消
-            </Button>
-            <Button type="button" size="sm" onClick={confirmBackendGate}>
-              解锁
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <BackendAdvancedConfigGateDialog
+        open={backendGateOpen}
+        onDismiss={closeBackendGate}
+        pin={backendGatePin}
+        onPinInput={onBackendGatePinInput}
+        error={backendGateError}
+        onConfirm={confirmBackendGate}
+      />
 
       <BackendModelConfigModal
         open={backendOpen}

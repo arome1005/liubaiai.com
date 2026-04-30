@@ -185,7 +185,7 @@ export type BookSearchHit = {
 export type BookSearchScope = "full" | "beforeProgress";
 
 export const DB_NAME = "liubai-writing";
-export const SCHEMA_VERSION = 33;
+export const SCHEMA_VERSION = 34;
 
 export type InspirationLink = {
   id: string;
@@ -475,12 +475,11 @@ export type ChapterBible = {
   updatedAt: number;
 };
 
-/** 术语 / 人名 / 已死角色标记（4.6） */
+/** 书斋词条：名称 + 备注（设定说明、是否人名/已故等一律写在备注中） */
 export type BibleGlossaryTerm = {
   id: string;
   workId: string;
   term: string;
-  category: "name" | "term" | "dead";
   note: string;
   createdAt: number;
   updatedAt: number;

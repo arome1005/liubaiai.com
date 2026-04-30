@@ -141,7 +141,7 @@ export function useAiPanelStudySelection(args: UseAiPanelStudySelectionArgs) {
     for (const id of studyPickedGlossaryIds) {
       const g = byId.get(id);
       if (!g || !(g.term ?? "").trim()) continue;
-      out.push({ term: g.term, category: g.category, note: g.note ?? "" });
+      out.push({ term: g.term, note: g.note ?? "" })
     }
     return out;
   }, [glossaryTerms, studyPickedGlossaryIds]);

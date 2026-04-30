@@ -7,7 +7,7 @@ export type ConsistencySeverity = "warn" | "info";
 export type ConsistencyAlert = {
   severity: ConsistencySeverity;
   /** 稳定分类，便于后续接 AI 或过滤 */
-  code: "chapter_forbid" | "style_banned" | "glossary_dead" | "character_taboo";
+  code: "chapter_forbid" | "style_banned" | "character_taboo";
   message: string;
   /** 命中的短语（截断展示） */
   snippet?: string;
@@ -19,7 +19,6 @@ export type BibleConsistencyScanInput = {
   chapterBibleForbid: string;
   /** 作品风格卡 · bannedPhrases */
   styleBannedPhrases: string;
-  glossaryTerms: readonly { term: string; category: "name" | "term" | "dead" }[];
   /** 人物名 + 禁忌自由文本（多行/顿号分隔） */
   characterTaboos: readonly { name: string; taboos: string }[];
 };
@@ -68,21 +67,6 @@ export function runBibleConsistencyScan(input: BibleConsistencyScanInput): Consi
         code: "style_banned",
         message: "全书风格卡「禁用套话」中有条目出现在正文。",
         snippet: phrase.length > 100 ? phrase.slice(0, 100) + "…" : phrase,
-      });
-    }
-  }
-
-  for (const g of input.glossaryTerms) {
-    const t = g.term.trim();
-    if (t.length < 2) continue;
-    if (g.category !== "dead") continue;
-    if (contentHas(content, t)) {
-      alerts.push({
-        severity: "warn",
-        code: "glossary_dead",
-        message:
-          "术语表中该条目标记为「已死」，但本章正文仍出现；若为回忆/他人转述请忽略本提示。",
-        snippet: t.length > 80 ? t.slice(0, 80) + "…" : t,
       });
     }
   }

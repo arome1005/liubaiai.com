@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { apiUrl } from "../api/base";
 import { cn } from "../lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
@@ -31,6 +32,7 @@ import {
   testGeminiModel,
   testOllamaModel,
   testOpenAICompatibleModel,
+  testVertexModel,
 } from "./backend-modal/test-helpers";
 import { PrivacyPanel } from "./backend-modal/PrivacyPanel";
 import { DefaultsPanel } from "./backend-modal/DefaultsPanel";
@@ -71,6 +73,7 @@ export function BackendModelConfigModal(props: {
     openai: loadModelHealth("openai"),
     anthropic: loadModelHealth("anthropic"),
     gemini: loadModelHealth("gemini"),
+    vertex: loadModelHealth("vertex"),
     doubao: loadModelHealth("doubao"),
     zhipu: loadModelHealth("zhipu"),
     kimi: loadModelHealth("kimi"),
@@ -83,6 +86,7 @@ export function BackendModelConfigModal(props: {
     openai: false,
     anthropic: false,
     gemini: false,
+    vertex: false,
     doubao: false,
     zhipu: false,
     kimi: false,
@@ -95,6 +99,7 @@ export function BackendModelConfigModal(props: {
     openai: { running: false, idx: 0, total: 0 },
     anthropic: { running: false, idx: 0, total: 0 },
     gemini: { running: false, idx: 0, total: 0 },
+    vertex: { running: false, idx: 0, total: 0 },
     doubao: { running: false, idx: 0, total: 0 },
     zhipu: { running: false, idx: 0, total: 0 },
     kimi: { running: false, idx: 0, total: 0 },
@@ -107,6 +112,7 @@ export function BackendModelConfigModal(props: {
     openai: false,
     anthropic: false,
     gemini: false,
+    vertex: false,
     doubao: false,
     zhipu: false,
     kimi: false,
@@ -119,6 +125,7 @@ export function BackendModelConfigModal(props: {
     openai: { status: "idle" },
     anthropic: { status: "idle" },
     gemini: { status: "idle" },
+    vertex: { status: "idle" },
     doubao: { status: "idle" },
     zhipu: { status: "idle" },
     kimi: { status: "idle" },
@@ -138,6 +145,7 @@ export function BackendModelConfigModal(props: {
       { id: "openai" as const, label: "见山", navSub: "openai", title: "OpenAI（见山）" },
       { id: "anthropic" as const, label: "听雨", navSub: "anthropic", title: "Claude（听雨）" },
       { id: "gemini" as const, label: "观云", navSub: "gemini", title: "Gemini（观云）" },
+      { id: "vertex" as const, label: "Vertex", navSub: "vertex", title: "Vertex AI（GCP）" },
       { id: "doubao" as const, label: "燎原", navSub: "doubao", title: "豆包（燎原）" },
       { id: "zhipu" as const, label: "智谱", navSub: "zhipu", title: "智谱 GLM" },
       { id: "kimi" as const, label: "Kimi", navSub: "kimi", title: "Kimi（Moonshot）" },
@@ -148,6 +156,15 @@ export function BackendModelConfigModal(props: {
   /** 顺序与 `model-personas` 中观云档位一致：初见（轻）→ 入微 → 化境（强） */
   const geminiPresetModels = useMemo(
     () => ["gemini-3.1-flash-lite-preview", "gemini-3-flash-preview", "gemini-3.1-pro-preview"],
+    [],
+  );
+
+  /** 当前 GCP 项目仅 2.5 系列可调；3.x preview 需向 Google 申请 allowlist */
+  const vertexPresetModels = useMemo(
+    () => [
+      "gemini-2.5-pro",
+      "gemini-2.5-flash",
+    ],
     [],
   );
 
@@ -216,6 +233,8 @@ export function BackendModelConfigModal(props: {
         return xiaomiWritingModels.map((m) => m.id);
       case "gemini":
         return [...geminiPresetModels];
+      case "vertex":
+        return [...vertexPresetModels];
       case "mlx":
         return null;
       default:
@@ -230,6 +249,7 @@ export function BackendModelConfigModal(props: {
     openai:     { icon: Sparkles, bg: "bg-green-500" },
     anthropic:  { icon: Zap,      bg: "bg-amber-500" },
     gemini:     { icon: Cloud,    bg: "bg-blue-500" },
+    vertex:     { icon: Server,   bg: "bg-emerald-600" },
     doubao:     { icon: Flame,    bg: "bg-orange-500" },
     zhipu:      { icon: Globe,    bg: "bg-cyan-500" },
     kimi:       { icon: Globe,    bg: "bg-sky-500" },
@@ -239,10 +259,10 @@ export function BackendModelConfigModal(props: {
 
   function doSave() {
     if (geminiHealthDirty) { saveGeminiModelHealth(geminiHealth); setGeminiHealthDirty(false); }
-    for (const p of ["openai","anthropic","gemini","doubao","zhipu","kimi","xiaomi","ollama","mlx"] as AiProviderId[]) {
+    for (const p of ["openai","anthropic","gemini","vertex","doubao","zhipu","kimi","xiaomi","ollama","mlx"] as AiProviderId[]) {
       if (modelHealthDirty[p]) saveModelHealth(p, modelHealth[p]);
     }
-    setModelHealthDirty({ openai:false,anthropic:false,gemini:false,doubao:false,zhipu:false,kimi:false,xiaomi:false,ollama:false,mlx:false,"claude-code-local":false });
+    setModelHealthDirty({ openai:false,anthropic:false,gemini:false,vertex:false,doubao:false,zhipu:false,kimi:false,xiaomi:false,ollama:false,mlx:false,"claude-code-local":false });
     props.onSave();
   }
 
@@ -358,6 +378,7 @@ export function BackendModelConfigModal(props: {
                 const s = testState[id];
                 const keyShown = showKey[id];
                 const isGemini = id === "gemini";
+                const isVertex = id === "vertex";
                 const batch = modelBatch[id];
                 const list =
                   id === "ollama"
@@ -393,12 +414,104 @@ export function BackendModelConfigModal(props: {
                             <div>
                               <h3 className="text-sm font-semibold text-foreground">{providers.find((p) => p.id === id)?.title ?? id}</h3>
                               <p className="mt-0.5 text-xs text-muted-foreground">
-                                {id === "ollama" || id === "mlx" ? "本机模型（默认不需要 API Key）" : "云端模型（需 API Key；可能遇到 CORS）"}
+                                {id === "ollama" || id === "mlx"
+                                  ? "本机模型（默认不需要 API Key）"
+                                  : id === "vertex"
+                                    ? "经本站后端代理到 Google Vertex；需登录；密钥由服务器持有，不在此填写"
+                                    : "云端模型（需 API Key；可能遇到 CORS）"}
                               </p>
                             </div>
                           )}
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
+                          {isVertex ? (
+                            <>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              disabled={testState.vertex.status === "testing" || modelBatch.vertex.running}
+                              onClick={() => {
+                                setTestState((prev) => ({ ...prev, vertex: { status: "testing" } }));
+                                void (async () => {
+                                  try {
+                                    const r = await fetch(apiUrl("/api/ai/vertex/health"));
+                                    const j = (await r.json().catch(() => ({}))) as {
+                                      ok?: boolean;
+                                      vertex?: { configured?: boolean; error?: string | null };
+                                    };
+                                    if (!r.ok) throw new Error(String(r.status));
+                                    if (!j.vertex?.configured) {
+                                      throw new Error(j.vertex?.error?.trim() || "Vertex 未就绪");
+                                    }
+                                    setTestState((prev) => ({
+                                      ...prev,
+                                      vertex: { status: "ok", message: "后端已配置 Vertex（Service Account 有效）" },
+                                    }));
+                                  } catch (e) {
+                                    const msg = e instanceof Error ? e.message : "检查失败";
+                                    setTestState((prev) => ({ ...prev, vertex: { status: "err", message: msg } }));
+                                  }
+                                })();
+                              }}
+                            >
+                              测试后端健康检查
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="default"
+                              disabled={testState.vertex.status === "testing" || modelBatch.vertex.running}
+                              onClick={() => {
+                                if (vertexPresetModels.length === 0) {
+                                  setTestState((prev) => ({
+                                    ...prev,
+                                    vertex: { status: "err", message: "无预置模型列表" },
+                                  }));
+                                  return;
+                                }
+                                setTestState((prev) => ({ ...prev, vertex: { status: "testing" } }));
+                                setModelBatch((m) => ({
+                                  ...m,
+                                  vertex: { running: true, idx: 0, total: vertexPresetModels.length },
+                                }));
+                                void (async () => {
+                                  for (let i = 0; i < vertexPresetModels.length; i++) {
+                                    const mod = vertexPresetModels[i]!;
+                                    setModelBatch((mb) => ({
+                                      ...mb,
+                                      vertex: { running: true, idx: i + 1, total: vertexPresetModels.length },
+                                    }));
+                                    try {
+                                      await testVertexModel({ model: mod });
+                                      setModelHealth((h) => ({
+                                        ...h,
+                                        vertex: { ...h.vertex, [mod]: { verdict: "ok", testedAt: Date.now() } },
+                                      }));
+                                    } catch {
+                                      setModelHealth((h) => ({
+                                        ...h,
+                                        vertex: { ...h.vertex, [mod]: { verdict: "err", testedAt: Date.now() } },
+                                      }));
+                                    } finally {
+                                      setModelHealthDirty((d) => ({ ...d, vertex: true }));
+                                    }
+                                  }
+                                  setModelBatch((mb) => ({
+                                    ...mb,
+                                    vertex: { running: false, idx: 0, total: 0 },
+                                  }));
+                                  setTestState((prev) => ({
+                                    ...prev,
+                                    vertex: { status: "ok", message: "已测试全部预置模型（见下表）" },
+                                  }));
+                                })();
+                              }}
+                            >
+                              一键测试全部版本
+                            </Button>
+                            </>
+                          ) : (
                           <Button
                           type="button" size="sm" variant="outline"
                           disabled={s.status === "testing" || (isGemini && geminiBatch.running) || (!isGemini && batch.running)}
@@ -515,15 +628,29 @@ export function BackendModelConfigModal(props: {
                         >
                           一键测试全部版本
                           </Button>
+                          )}
                           {isGemini && geminiBatch.running ? <span className="text-xs text-muted-foreground">测试中… {geminiBatch.idx}/{geminiBatch.total}</span> : null}
-                          {!isGemini && batch.running ? <span className="text-xs text-muted-foreground">测试中… {batch.idx}/{batch.total}</span> : null}
-                          {s.status === "ok" && !isGemini ? <TestBadge status="ok" message="连接成功" /> : null}
-                          {s.status === "err" ? <TestBadge status="err" message={s.message} /> : null}
-                          {s.status === "testing" && !isGemini ? <TestBadge status="testing" /> : null}
+                          {isVertex && modelBatch.vertex.running ? (
+                            <span className="text-xs text-muted-foreground">
+                              各模型探测中… {modelBatch.vertex.idx}/{modelBatch.vertex.total}
+                            </span>
+                          ) : null}
+                          {!isGemini && !isVertex && batch.running ? <span className="text-xs text-muted-foreground">测试中… {batch.idx}/{batch.total}</span> : null}
+                          {s.status === "ok" && !isGemini && !isVertex ? <TestBadge status="ok" message="连接成功" /> : null}
+                          {s.status === "err" && !isVertex ? <TestBadge status="err" message={s.message} /> : null}
+                          {s.status === "testing" && !isGemini && !isVertex ? <TestBadge status="testing" /> : null}
+                          {isVertex && testState.vertex.status !== "idle" ? (
+                            <TestBadge
+                              status={testState.vertex.status === "testing" ? "testing" : testState.vertex.status}
+                              message={"message" in testState.vertex ? testState.vertex.message : undefined}
+                            />
+                          ) : null}
                         </div>
                       </div>
 
                     <div className="space-y-4">
+                      {id !== "vertex" ? (
+                        <>
                       <BField label="Base URL">
                         <input className="w-full rounded-lg border border-border/40 bg-background/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
                           value={cfg.baseUrl ?? ""}
@@ -541,6 +668,8 @@ export function BackendModelConfigModal(props: {
                           }
                         />
                       </BField>
+                        </>
+                      ) : null}
 
                       {id === "gemini" || id === "anthropic" ? (
                         <BField label="接入方式"
@@ -575,6 +704,7 @@ export function BackendModelConfigModal(props: {
                         </BField>
                       ) : null}
 
+                      {id !== "vertex" ? (
                       <BField label="API Key">
                         <div className="flex items-center gap-1.5">
                           <input className="min-w-0 flex-1 rounded-lg border border-border/40 bg-background/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-40"
@@ -586,7 +716,111 @@ export function BackendModelConfigModal(props: {
                           {id !== "ollama" ? <EyeToggle shown={keyShown} onToggle={() => setShowKey((m) => ({ ...m, [id]: !m[id] }))} /> : null}
                         </div>
                       </BField>
+                      ) : null}
 
+                      {id === "vertex" ? (
+                        <div className="space-y-3">
+                          <p className="text-[11px] leading-relaxed text-muted-foreground/80">
+                            鉴权由服务器完成（VPS 持有 Service Account），无需在此填密钥。Project 与区域须与部署时
+                            <span className="px-0.5 font-mono text-[10px]">GOOGLE_VERTEX_PROJECT</span> /{" "}
+                            <span className="px-0.5 font-mono text-[10px]">GOOGLE_VERTEX_LOCATION</span>
+                            一致，便于排障；实际 API 路由由服务器决定。
+                          </p>
+                          <BField label="GCP Project" hint="例：liubaiai-com，须与后端 .env 一致">
+                            <input
+                              className="w-full rounded-lg border border-border/40 bg-background/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+                              value={cfg.vertexProject ?? ""}
+                              onChange={(e) =>
+                                onChange(patchProviderConfig(settings, "vertex", { vertexProject: e.target.value.trim() }))
+                              }
+                              placeholder="liubaiai-com"
+                            />
+                          </BField>
+                          <BField label="区域（Location）" hint="常用 us-central1">
+                            <input
+                              className="w-full rounded-lg border border-border/40 bg-background/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+                              value={cfg.vertexLocation ?? "us-central1"}
+                              onChange={(e) =>
+                                onChange(
+                                  patchProviderConfig(settings, "vertex", { vertexLocation: e.target.value.trim() || "us-central1" }),
+                                )
+                              }
+                              placeholder="us-central1"
+                            />
+                          </BField>
+                          <BField
+                            label="Model（发布商）"
+                            hint="与 Vertex 上 Publisher=google 的模型名一致；写作推荐 gemini-2.5-pro"
+                          >
+                            <div className="space-y-2">
+                              <select
+                                className="w-full rounded-lg border border-border/40 bg-background/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+                                value={vertexPresetModels.includes(cfg.model) ? cfg.model : ""}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v) onChange(patchProviderConfig(settings, "vertex", { model: v }));
+                                }}
+                              >
+                                <option value="">选择常用模型…</option>
+                                {vertexPresetModels.map((m) => (
+                                  <option key={m} value={m}>
+                                    {m}
+                                  </option>
+                                ))}
+                              </select>
+                              <input
+                                className="w-full rounded-lg border border-border/40 bg-background/50 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-primary/50"
+                                value={cfg.model}
+                                onChange={(e) => onChange(patchProviderConfig(settings, "vertex", { model: e.target.value }))}
+                                placeholder="例如 gemini-2.5-pro"
+                              />
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2 pt-1">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={testState.vertex.status === "testing" || modelBatch.vertex.running}
+                                onClick={() => {
+                                  const m = (cfg.model ?? "").trim();
+                                  if (!m) {
+                                    setTestState((prev) => ({
+                                      ...prev,
+                                      vertex: { status: "err", message: "请先在下方填写 Model" },
+                                    }));
+                                    return;
+                                  }
+                                  setTestState((prev) => ({ ...prev, vertex: { status: "testing" } }));
+                                  void (async () => {
+                                    try {
+                                      await testVertexModel({ model: m });
+                                      setModelHealth((h) => ({
+                                        ...h,
+                                        vertex: { ...h.vertex, [m]: { verdict: "ok", testedAt: Date.now() } },
+                                      }));
+                                      setModelHealthDirty((d) => ({ ...d, vertex: true }));
+                                      setTestState((prev) => ({
+                                        ...prev,
+                                        vertex: { status: "ok", message: "当前 Model 在 Vertex 上可调用" },
+                                      }));
+                                    } catch (e) {
+                                      setModelHealth((h) => ({
+                                        ...h,
+                                        vertex: { ...h.vertex, [m]: { verdict: "err", testedAt: Date.now() } },
+                                      }));
+                                      setModelHealthDirty((d) => ({ ...d, vertex: true }));
+                                      const msg = e instanceof Error ? e.message : "失败";
+                                      setTestState((prev) => ({ ...prev, vertex: { status: "err", message: msg } }));
+                                    }
+                                  })();
+                                }}
+                              >
+                                仅测当前填写的 Model
+                              </Button>
+                            </div>
+                          </BField>
+                        </div>
+                      ) : (
                       <BField label="Model">
                         {id === "gemini" ? (
                           <div className="space-y-3">
@@ -730,12 +964,24 @@ export function BackendModelConfigModal(props: {
                           })()
                         ) : null}
                       </BField>
+                      )}
                     </div>
                     </BCard>
 
                     {/* 推荐模型卡片（Gemini / 云端） */}
-                    {(id === "gemini" || id === "openai" || id === "anthropic" || id === "doubao" || id === "kimi") && (() => {
-                      const presets = id === "gemini" ? geminiPresetModels : id === "openai" ? openaiPresetModels : id === "anthropic" ? anthropicPresetModels : id === "doubao" ? doubaoPresetModels : kimiPresetModels;
+                    {(id === "gemini" || id === "openai" || id === "anthropic" || id === "doubao" || id === "kimi" || id === "vertex") && (() => {
+                      const presets =
+                        id === "gemini"
+                          ? geminiPresetModels
+                          : id === "openai"
+                            ? openaiPresetModels
+                            : id === "anthropic"
+                              ? anthropicPresetModels
+                              : id === "doubao"
+                                ? doubaoPresetModels
+                                : id === "vertex"
+                                  ? vertexPresetModels
+                                  : kimiPresetModels;
                       const personas = listCatalogPersonas(id, presets);
                       if (!personas.length) return null;
                       return (
@@ -768,6 +1014,12 @@ export function BackendModelConfigModal(props: {
                     {/* 健康表 */}
                     {id === "gemini" ? (
                       <HealthTable models={geminiPresetModels} health={geminiHealth} dirty={geminiHealthDirty} />
+                    ) : id === "vertex" ? (
+                      <HealthTable
+                        models={vertexPresetModels}
+                        health={modelHealth.vertex}
+                        dirty={modelHealthDirty.vertex}
+                      />
                     ) : list.length > 0 ? (
                       <HealthTable models={list} health={modelHealth[id] ?? {}} dirty={modelHealthDirty[id]} />
                     ) : null}

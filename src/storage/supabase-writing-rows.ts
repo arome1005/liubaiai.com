@@ -304,11 +304,10 @@ export function parseGlossaryRow(r: Json): BibleGlossaryTerm {
     id: r.id as string,
     workId: r.work_id as string,
     term: r.term as string,
-    category: r.category as BibleGlossaryTerm["category"],
     note: (r.note as string) ?? "",
     createdAt: Number(r.created_at),
     updatedAt: Number(r.updated_at),
-  };
+  }
 }
 
 export function parseWritingPromptTemplateRow(r: Json): WritingPromptTemplate {
@@ -545,11 +544,10 @@ export function mergeWritingRowsToInserts(uid: string, m: MergeRemapResult): {
     id: c.id,
     work_id: c.workId,
     term: c.term,
-    category: c.category,
     note: c.note,
     created_at: c.createdAt,
     updated_at: c.updatedAt,
-  }));
+  }))
   const styleCards = m.newStyleCards.map((s) => ({
     id: crypto.randomUUID(),
     work_id: s.workId,

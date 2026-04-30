@@ -34,7 +34,7 @@ export function getAiUsageSessionKey(): string {
 export function providerBucketFromProviderId(p: AiProviderId): AiUsageEventRow["providerBucket"] {
   if (p === "openai" || p === "doubao" || p === "zhipu" || p === "kimi" || p === "xiaomi") return "openai";
   if (p === "anthropic" || p === "claude-code-local") return "anthropic";
-  if (p === "gemini") return "gemini";
+  if (p === "gemini" || p === "vertex") return "gemini";
   if (p === "ollama" || p === "mlx") return "local";
   return "router";
 }

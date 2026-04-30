@@ -80,7 +80,7 @@ export function TuiyanPostPlanningKnowledgeDialog({
               icon={BookOpen}
               colorClass="text-emerald-400"
               title="词条卡"
-              desc="类别、简短释义"
+              desc="简短释义（备注）"
             />
             <FeatureRow
               icon={Library}

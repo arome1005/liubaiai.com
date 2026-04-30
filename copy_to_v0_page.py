@@ -1,8 +1,9 @@
 import os
 import re
 
-src_file = '/Users/arome/Desktop/留白写作/v0UI设计参考v-2.0/components/modules/tuiyan-module.tsx'
-dst_file = '/Users/arome/Desktop/留白写作/src/pages/V0TuiyanPage.tsx'
+_repo = os.path.dirname(os.path.abspath(__file__))
+src_file = os.path.join(_repo, "design", "v0-ui-reference", "components", "modules", "tuiyan-module.tsx")
+dst_file = os.path.join(_repo, "src", "pages", "V0TuiyanPage.tsx")
 
 with open(src_file, 'r', encoding='utf-8') as f:
     content = f.read()

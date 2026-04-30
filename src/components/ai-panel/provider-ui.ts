@@ -7,6 +7,7 @@ export function providerLogoImgSrc(p: AiProviderId): string | null {
     case "anthropic":
       return "/logos/claude.png";
     case "gemini":
+    case "vertex":
       return "/logos/gemini.png";
     case "ollama":
     case "mlx":
@@ -31,6 +32,7 @@ export function providerLogoFallbackText(p: AiProviderId): string {
     case "anthropic":
       return "雨";
     case "gemini":
+    case "vertex":
       return "云";
     case "doubao":
       return "豆";
@@ -89,6 +91,16 @@ export const PROVIDER_UI: Record<AiProviderId, ProviderUiCard> = {
       "创意如云，变幻万千。拥有惊人的上下文联想能力，最擅长在陷入瓶颈时为你提供打破常规的\"神来之笔\"，让剧情走向峰回路转。",
     meters: { prose: 4, follow: 3, cost: 2 },
     note: "云海辽阔，长文推理可能需要稍作等待，建议在开启\"高思考预算\"时保持耐心。",
+  },
+  vertex: {
+    label: "Vertex",
+    subtitle: "云谷 · 后端代管",
+    tip: "Vertex AI（GCP 赠金）",
+    quote: '"金石在炉，不假外铄。"',
+    core:
+      "经本站后端代理到 Google Cloud Vertex 上的 Gemini 系模型（默认 2.5 Pro），密钥留在服务器；适合使用 GCP 赠金与项目配额。",
+    meters: { prose: 5, follow: 3, cost: 3, costText: "GCP" },
+    note: "需登录；默认推荐 gemini-2.5-pro。Project/区域须与部署一致。与「观云（直连）」可并存。",
   },
   ollama: {
     label: "潜龙",

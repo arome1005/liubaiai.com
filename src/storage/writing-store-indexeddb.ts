@@ -33,6 +33,18 @@ import type {
 } from "../db/types";
 import { SNAPSHOT_CAP_PER_CHAPTER, SNAPSHOT_MAX_AGE_MS } from "../db/types";
 import { annotateReferenceParts } from "./chapter-detector";
+
+/** 旧备份可能含已移除字段；入库前收敛为当前 BibleGlossaryTerm 形状 */
+function normalizeGlossaryTermImport(r: BibleGlossaryTerm & { category?: unknown }): BibleGlossaryTerm {
+  return {
+    id: r.id,
+    workId: r.workId,
+    term: r.term,
+    note: r.note ?? "",
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  };
+}
 import { splitTextIntoReferenceChunks } from "./reference-chunks";
 import {
   buildPostingRowsForChunk,
@@ -1449,11 +1461,10 @@ export class WritingStoreIndexedDB implements WritingStore {
       id: crypto.randomUUID(),
       workId,
       term: (input.term ?? "").trim() || "术语",
-      category: input.category ?? "term",
       note: input.note ?? "",
       createdAt: t,
       updatedAt: t,
-    };
+    }
     await db.bibleGlossaryTerms.add(row);
     return row;
   }
@@ -2055,7 +2066,9 @@ export class WritingStoreIndexedDB implements WritingStore {
         if (bibleTimelineEvents.length) await db.bibleTimelineEvents.bulkAdd(bibleTimelineEvents);
         if (bibleChapterTemplates.length) await db.bibleChapterTemplates.bulkAdd(bibleChapterTemplates);
         if (chapterBible.length) await db.chapterBible.bulkAdd(chapterBible);
-        if (bibleGlossaryTerms.length) await db.bibleGlossaryTerms.bulkAdd(bibleGlossaryTerms);
+        if (bibleGlossaryTerms.length) {
+          await db.bibleGlossaryTerms.bulkAdd(bibleGlossaryTerms.map(normalizeGlossaryTermImport));
+        }
         if (workStyleCards.length) {
           await db.workStyleCards.bulkAdd(
             workStyleCards.map((r) => ({
@@ -2375,7 +2388,9 @@ export class WritingStoreIndexedDB implements WritingStore {
         if (m.newBibleTime.length) await db.bibleTimelineEvents.bulkAdd(m.newBibleTime);
         if (m.newBibleTpl.length) await db.bibleChapterTemplates.bulkAdd(m.newBibleTpl);
         if (m.newChapterBible.length) await db.chapterBible.bulkAdd(m.newChapterBible);
-        if (m.newBibleGloss.length) await db.bibleGlossaryTerms.bulkAdd(m.newBibleGloss);
+        if (m.newBibleGloss.length) {
+          await db.bibleGlossaryTerms.bulkAdd(m.newBibleGloss.map(normalizeGlossaryTermImport));
+        }
         if (m.newStyleCards.length) await db.workStyleCards.bulkAdd(m.newStyleCards);
         if (m.newInspirationCollections.length) await db.inspirationCollections.bulkAdd(m.newInspirationCollections);
         if (m.newInspirationFragments.length) await db.inspirationFragments.bulkAdd(m.newInspirationFragments);

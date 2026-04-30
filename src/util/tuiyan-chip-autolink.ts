@@ -88,7 +88,7 @@ export async function autoLinkChipsFromNodes(
       }
     }
 
-    // ── 地点字段 → category "name" ──────────────────────────────────────────
+    // ── 地点字段 ───────────────────────────────────────────────────────────────
     const locationFields = [structuredMeta.locations, structuredMeta.keyLocations]
     for (const field of locationFields) {
       for (const title of parseNames(field)) {
@@ -104,7 +104,7 @@ export async function autoLinkChipsFromNodes(
       }
     }
 
-    // ── 势力字段 → category "term" ──────────────────────────────────────────
+    // ── 势力字段 ───────────────────────────────────────────────────────────────
     const factionFields = [structuredMeta.mainFactions, structuredMeta.coreFactions]
     for (const field of factionFields) {
       for (const title of parseNames(field)) {
@@ -120,7 +120,7 @@ export async function autoLinkChipsFromNodes(
       }
     }
 
-    // ── 道具/法宝字段 → category "term" ────────────────────────────────────
+    // ── 道具/法宝字段 ───────────────────────────────────────────────────────────
     for (const title of parseNames(structuredMeta.keyItems)) {
       if (!termMap.has(title)) {
         termMap.set(title, {
@@ -133,7 +133,7 @@ export async function autoLinkChipsFromNodes(
       }
     }
 
-    // ── 世界观核心词条（总纲）→ category "term" ─────────────────────────────
+    // ── 世界观核心词条（总纲）─────────────────────────────────────────────────
     for (const title of parseNames(structuredMeta.worldSettingTerms)) {
       if (!termMap.has(title)) {
         termMap.set(title, {

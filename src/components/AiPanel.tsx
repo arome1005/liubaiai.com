@@ -550,10 +550,9 @@ export const AiPanel = memo(function AiPanelBase(props: {
   const glossarySlices = useMemo((): WritingGlossaryTermSlice[] => {
     return props.glossaryTerms.map((g) => ({
       term: g.term,
-      category: g.category,
       note: g.note ?? "",
-    }));
-  }, [props.glossaryTerms]);
+    }))
+  }, [props.glossaryTerms])
 
 
   const styleSampleCountForSummary = useMemo(
@@ -1339,14 +1338,9 @@ export const AiPanel = memo(function AiPanelBase(props: {
                   {glossaryHitsInDraft.map((t) => (
                     <li key={t.id} className="rr-list-item">
                       <span style={{ fontWeight: 700 }}>{t.term}</span>
-                      <span className="muted small">
-                        {t.category === "dead"
-                          ? " · 已死（请确认没有复活/误用）"
-                          : t.category === "name"
-                            ? " · 人名"
-                            : " · 术语"}
-                        {t.note.trim() ? ` · ${t.note}` : ""}
-                      </span>
+                      {t.note.trim() ? (
+                        <span className="muted small">{` · ${t.note}`}</span>
+                      ) : null}
                     </li>
                   ))}
                 </ul>
