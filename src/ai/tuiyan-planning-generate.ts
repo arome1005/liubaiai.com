@@ -3,12 +3,11 @@ import { countCharsWithPunct, type PlanningScale } from "../util/tuiyan-planning
 import {
   type PlanningThickness,
   normalizePlanningThickness,
-  PLANNING_OUTLINE_MIN_PER_ITEM_WITH_PUNCT,
 } from "../util/tuiyan-planning-thickness";
 import { logTuiyanReferenceTouchpoint } from "../util/tuiyan-reference-dev-log";
 import { mergeTuiyanPlanningSystemWithReferenceHardRules } from "./tuiyan-reference-planning-system";
 import { generateWithProviderStream } from "./client";
-import { isLocalAiProvider, requiresClientSavedApiKey } from "./local-provider";
+import { isLocalAiProvider } from "./local-provider";
 import { getProviderConfig, loadAiSettings } from "./storage";
 import type { AiChatMessage, AiSettings } from "./types";
 
@@ -165,16 +164,13 @@ function listSystemPrompt(
           ? "卷纲"
           : "章节细纲";
   const outlineListCount = Math.max(1, count);
-  const outlinePerItem = Math.max(
-    PLANNING_OUTLINE_MIN_PER_ITEM_WITH_PUNCT,
-    Math.floor(thickness.outlineTotalWithPunct / outlineListCount),
-  );
+  const outlinePerItem = Math.max(200, Math.floor(thickness.outlineTotalWithPunct / outlineListCount));
   const levelRules =
     level === "master_outline"
       ? `
 - 总纲必须像作品的"灵魂定海神针"，重点写清：核心创意(Logline)、世界观/力量体系、主线起承转合、卖点与风格、不可违背的排他性规则。
 - 总纲不需要拆到具体章节，但必须能约束后续大纲、卷纲和章纲，避免后续推演跑偏。
-- 【字数要求】标题、摘要与下方各结构化字段**合计**含标点必须不低于 ${thickness.masterOutlineMinWithPunct} 字，不足则继续扩写，禁止截断。`
+- 【字数要求】摘要正文去掉标点符号后，有效字数必须不低于 ${thickness.masterOutlineMinNoPunct} 字，不足则继续扩写，禁止截断。`
       : level === "outline"
         ? `
 - 一级大纲必须服从总纲，把故事拆成可执行的阶段/大剧情，写清阶段目标、人物弧光、关键里程碑与伏笔回收方向。
@@ -391,10 +387,10 @@ export async function generateTuiyanPlanningList(args: {
   const settings = args.settings ?? loadAiSettings();
   assertCanSend(settings);
   const cfg = getProviderConfig(settings, settings.provider);
-  if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
+  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
     throw new TuiyanPlanningGenerateError("请先在设置中填写当前模型的 API Key。");
   }
-  const t = normalizePlanningThickness(args.planningThickness, args.planningScale);
+  const t = normalizePlanningThickness(args.planningThickness);
   const count = Math.max(1, Math.min(PARSE_MAX_ITEMS, Math.floor(args.desiredCount)));
   const userInput = args.userInput.trim();
   logTuiyanReferenceTouchpoint(`planning_list:${args.level}`, userInput);
@@ -505,10 +501,10 @@ export async function generateTuiyanPlanningDetail(args: {
   const settings = args.settings ?? loadAiSettings();
   assertCanSend(settings);
   const cfg = getProviderConfig(settings, settings.provider);
-  if (requiresClientSavedApiKey(settings.provider) && !cfg.apiKey?.trim()) {
+  if (!isLocalAiProvider(settings.provider) && !cfg.apiKey?.trim()) {
     throw new TuiyanPlanningGenerateError("请先在设置中填写当前模型的 API Key。");
   }
-  const t = normalizePlanningThickness(args.planningThickness, args.planningScale);
+  const t = normalizePlanningThickness(args.planningThickness);
   const minDetail = t.detailMinTotalWithPunct;
   const userInput = args.userInput.trim();
   logTuiyanReferenceTouchpoint("planning_detail:chapter_detail", userInput);
