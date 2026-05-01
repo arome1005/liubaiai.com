@@ -1,13 +1,14 @@
 import type { Dispatch, SetStateAction } from "react";
+import { useId } from "react";
 import type { Chapter } from "../../db/types";
 import { CHAPTER_BIBLE_FIELD_LABELS, type ChapterBibleFieldKey } from "../../ai/assemble-context";
-import { WORK_BIBLE_SECTION_HEADERS } from "../../ai/work-bible-sections";
+import { Info } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
-/** 不含「注入本书锦囊」（该项仍在全局 `AiSettings` / AI 侧栏） */
+/** 不含「注入本书锦囊」（该项仍在全局 `AiSettings` / 设定折叠标题上方） */
 export function AiPanelInjectDefaultsSection(props: {
-  /** `plain`：仅表单区，由外层 `<details>` 提供折叠标题（设定 Tab 手风琴） */
+  /** `plain`：仅表单区，由外层 `<details>` / 折叠卡片提供标题 */
   wrap?: "details" | "plain";
-  includeBible: boolean;
   includeLinkedExcerpts: boolean;
   onIncludeLinkedExcerptsChange: (v: boolean) => void;
   includeRecentSummaries: boolean;
@@ -19,142 +20,137 @@ export function AiPanelInjectDefaultsSection(props: {
   setNeighborSummaryIncludeById: Dispatch<SetStateAction<Record<string, boolean>>>;
   chapterBibleInjectMask: Record<ChapterBibleFieldKey, boolean>;
   setChapterBibleInjectMask: Dispatch<SetStateAction<Record<ChapterBibleFieldKey, boolean>>>;
-  workBibleSectionMask: Record<string, boolean>;
-  setWorkBibleSectionMask: Dispatch<SetStateAction<Record<string, boolean>>>;
-  currentContextMode: "full" | "summary" | "selection" | "none";
-  onCurrentContextModeChange: (v: "full" | "summary" | "selection" | "none") => void;
   chapter: Chapter | null;
 }) {
   const p = props;
   const wrap = p.wrap ?? "details";
-  const fields = (
-    <>
-      <p className="muted small" style={{ marginBottom: 10, lineHeight: 1.55 }}>
-        此处配置本书默认的注入项（摘录/邻章/板块/字段/当前章等）。
-      </p>
-      <label className="ai-panel-check row row--check">
-        <input
-          name="includeLinkedExcerpts"
-          type="checkbox"
-          checked={p.includeLinkedExcerpts}
-          onChange={(e) => p.onIncludeLinkedExcerptsChange(e.target.checked)}
-        />
-        <span>注入本章关联摘录</span>
-      </label>
-      <div className="ai-panel-row">
-        <label className="ai-panel-check row row--check" style={{ margin: 0 }}>
+  const uid = useId();
+
+  const body = (
+    <div className="ai-inject-layout">
+      <section className="ai-inject-block" aria-labelledby={`${uid}-snippet`}>
+        <span className="flex items-center gap-1">
+          <h4 id={`${uid}-snippet`} className="ai-inject-block__title">摘录与邻章概要</h4>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <span tabIndex={0} className="inline-flex cursor-help items-center text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors outline-none [&:focus-visible]:ring-2 [&:focus-visible]:ring-ring" aria-label="摘录与邻章概要说明">
+                <Info className="size-3" aria-hidden />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[min(92vw,18rem)] text-xs leading-relaxed">
+              控制「本章关联摘录」与「最近几章概要」是否进入上下文。
+            </TooltipContent>
+          </Tooltip>
+        </span>
+
+        <label className="ai-panel-check row row--check ai-inject-row">
           <input
-            name="includeRecentSummaries"
+            name="includeLinkedExcerpts"
             type="checkbox"
-            checked={p.includeRecentSummaries}
-            onChange={(e) => p.onIncludeRecentSummariesChange(e.target.checked)}
+            checked={p.includeLinkedExcerpts}
+            onChange={(e) => p.onIncludeLinkedExcerptsChange(e.target.checked)}
           />
-          <span>注入最近章节概要</span>
+          <span>注入本章关联摘录</span>
         </label>
-        <input
-          type="number"
-          name="recentN"
-          min={0}
-          max={12}
-          value={p.recentN}
-          onChange={(e) => p.onRecentNChange(Number(e.target.value) || 0)}
-          style={{ width: 72 }}
-          title="最近 N 章"
-        />
-      </div>
-      {p.includeRecentSummaries && p.neighborSummaryPoolChapters.length > 0 ? (
-        <div className="ai-panel-subchecks" style={{ marginTop: 8 }}>
-          <div className="muted small" style={{ marginBottom: 6 }}>
-            邻章概要包含章节（仅包含有概要的章；未勾选的章不会注入）
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 160, overflowY: "auto" }}>
-            {p.neighborSummaryPoolChapters.map((c) => (
-              <label key={c.id} className="ai-panel-check row row--check" style={{ margin: 0 }}>
-                <input
-                  type="checkbox"
-                  checked={p.neighborSummaryIncludeById[c.id] !== false}
-                  onChange={(e) =>
-                    p.setNeighborSummaryIncludeById((prev) => ({ ...prev, [c.id]: e.target.checked }))
-                  }
-                />
-                <span className="small">{c.title}</span>
-              </label>
-            ))}
-          </div>
+
+        <div className="ai-inject-row ai-inject-row--split">
+          <label className="ai-panel-check row row--check" style={{ margin: 0 }}>
+            <input
+              name="includeRecentSummaries"
+              type="checkbox"
+              checked={p.includeRecentSummaries}
+              onChange={(e) => p.onIncludeRecentSummariesChange(e.target.checked)}
+            />
+            <span>注入最近章节概要</span>
+          </label>
+          <label className="ai-inject-n-label">
+            <span className="muted small">最近 N 章</span>
+            <input
+              type="number"
+              name="recentN"
+              min={0}
+              max={12}
+              value={p.recentN}
+              onChange={(e) => p.onRecentNChange(Number(e.target.value) || 0)}
+              className="ai-inject-n-input"
+              title="最近 N 章"
+            />
+          </label>
         </div>
-      ) : p.includeRecentSummaries && p.chapter ? (
-        <p className="muted small" style={{ marginTop: 6 }}>
-          邻章概要：当前窗口内无已填概要的章节（可先为前几章生成概要）。
-        </p>
-      ) : null}
-      <div className="ai-panel-subchecks" style={{ marginTop: 10 }}>
-        <div className="muted small" style={{ marginBottom: 6 }}>
-          本章锦囊字段（user 上下文）— 未勾选的字段不会注入
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 6, flexWrap: "wrap" as const }}>
+
+        {p.includeRecentSummaries && p.neighborSummaryPoolChapters.length > 0 ? (
+          <div className="ai-inject-subbox">
+            <span className="flex items-center gap-1">
+              <div className="ai-inject-subbox__cap muted small">邻章池</div>
+              <Tooltip delayDuration={300}>
+                <TooltipTrigger asChild>
+                  <span tabIndex={0} className="inline-flex cursor-help items-center text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors outline-none [&:focus-visible]:ring-2 [&:focus-visible]:ring-ring" aria-label="邻章池说明">
+                    <Info className="size-[0.65rem]" aria-hidden />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[16rem] text-xs leading-relaxed">
+                  仅勾选的章节概要会注入上下文。
+                </TooltipContent>
+              </Tooltip>
+            </span>
+            <div className="ai-inject-scroll-list">
+              {p.neighborSummaryPoolChapters.map((c) => (
+                <label key={c.id} className="ai-panel-check row row--check ai-inject-check-compact" style={{ margin: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={p.neighborSummaryIncludeById[c.id] !== false}
+                    onChange={(e) =>
+                      p.setNeighborSummaryIncludeById((prev) => ({ ...prev, [c.id]: e.target.checked }))
+                    }
+                  />
+                  <span className="small">{c.title}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : p.includeRecentSummaries && p.chapter ? (
+          <p className="ai-inject-empty-hint muted small">当前窗口内尚无已填概要的章节；可先为前几章写好概要。</p>
+        ) : null}
+      </section>
+
+      <section className="ai-inject-block" aria-labelledby={`${uid}-chapter`}>
+        <span className="flex items-center gap-1">
+          <h4 id={`${uid}-chapter`} className="ai-inject-block__title">本章锦囊字段</h4>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <span tabIndex={0} className="inline-flex cursor-help items-center text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors outline-none [&:focus-visible]:ring-2 [&:focus-visible]:ring-ring" aria-label="本章锦囊字段说明">
+                <Info className="size-3" aria-hidden />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[min(92vw,18rem)] text-xs leading-relaxed">
+              对应本章 user 上下文字段；未勾选则不注入。
+            </TooltipContent>
+          </Tooltip>
+        </span>
+        <div className="ai-inject-grid ai-inject-grid--2">
           {(Object.keys(CHAPTER_BIBLE_FIELD_LABELS) as ChapterBibleFieldKey[]).map((k) => (
-            <label key={k} className="ai-panel-check row row--check" style={{ margin: 0 }}>
+            <label key={k} className="ai-panel-check row row--check ai-inject-check-compact" style={{ margin: 0 }}>
               <input
                 type="checkbox"
                 checked={p.chapterBibleInjectMask[k] !== false}
-                onChange={(e) =>
-                  p.setChapterBibleInjectMask((prev) => ({ ...prev, [k]: e.target.checked }))
-                }
+                onChange={(e) => p.setChapterBibleInjectMask((prev) => ({ ...prev, [k]: e.target.checked }))}
               />
               <span className="small">{CHAPTER_BIBLE_FIELD_LABELS[k]}</span>
             </label>
           ))}
         </div>
-      </div>
-      {p.includeBible ? (
-        <div className="ai-panel-subchecks" style={{ marginTop: 10 }}>
-          <div className="muted small" style={{ marginBottom: 6 }}>
-            本书锦囊（全书导出 Markdown）板块 — 未勾选的板块不会注入
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 200, overflowY: "auto" }}>
-            {WORK_BIBLE_SECTION_HEADERS.map((h) => (
-              <label key={h} className="ai-panel-check row row--check" style={{ margin: 0 }}>
-                <input
-                  type="checkbox"
-                  checked={p.workBibleSectionMask[h] !== false}
-                  onChange={(e) =>
-                    p.setWorkBibleSectionMask((prev) => ({ ...prev, [h]: e.target.checked }))
-                  }
-                />
-                <span className="small">{h}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <p className="muted small" style={{ marginTop: 10 }}>
-          当前未启用「注入本书锦囊」时，板块勾选在生成时不会生效；可在 AI Tab 打开锦囊注入后再来此调整板块。
-        </p>
-      )}
-      <div className="ai-panel-row" style={{ marginTop: 10 }}>
-        <label className="small muted">当前章注入（默认）</label>
-        <select
-          name="currentContextMode"
-          value={p.currentContextMode}
-          onChange={(e) => p.onCurrentContextModeChange(e.target.value as "full" | "summary" | "selection" | "none")}
-        >
-          <option value="full">全文</option>
-          <option value="summary">概要</option>
-          <option value="selection">选区</option>
-          <option value="none">不注入</option>
-        </select>
-      </div>
-    </>
+      </section>
+    </div>
   );
 
   if (wrap === "plain") {
-    return <div className="ai-panel-box ai-panel-box--plain-fields">{fields}</div>;
+    return <div className="ai-panel-box ai-panel-box--plain-fields ai-inject-sectioned">{body}</div>;
   }
 
   return (
     <details className="ai-panel-box" aria-labelledby="ai-panel-inject-defaults-summary">
       <summary id="ai-panel-inject-defaults-summary">上下文注入 · 本书默认</summary>
-      {fields}
+      {body}
     </details>
   );
 }

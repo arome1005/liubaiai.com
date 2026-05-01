@@ -54,6 +54,7 @@ import { AiPanelModelPickerDialog } from "./ai-panel/AiPanelModelPickerDialog";
 import { PROVIDER_UI, providerLogoImgSrc } from "./ai-panel/provider-ui";
 import { OutlineGenerationDialog } from "./ai-panel/OutlineGenerationDialog";
 import { AiPanelHistoryDialog } from "./ai-panel/AiPanelHistoryDialog";
+import { AiPanelRunModeSection } from "./ai-panel/AiPanelRunModeSection";
 import { LINKED_CHAPTERS_UPDATED_EVENT, loadLinkedChapters } from "../util/linked-chapters-storage";
 import {
   CHAPTER_OUTLINE_PASTE_UPDATED_EVENT,
@@ -1004,6 +1005,8 @@ export const AiPanel = memo(function AiPanelBase(props: {
       )}
 
       <div className="ai-panel-body-stack">
+        <AiPanelRunModeSection mode={props.writingSkillMode} onModeChange={props.onWritingSkillModeChange} />
+
         <section className="ai-panel-section ai-panel-section--flat" aria-label="AI 模型选择">
           <div className="flex items-center justify-between gap-2 px-0.5 py-1">
             <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground/70 tracking-wider">

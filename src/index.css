@@ -10557,3 +10557,127 @@ select {
 :root.liubai-compact .masthead {
   --masthead-h: 2.5rem;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   写作设定侧栏 — 锚点分组 / Radix 折叠卡片（WritingSettingsRightPanel）
+   ═══════════════════════════════════════════════════════════════ */
+
+.writing-settings-right-panel .ws-group-label {
+  margin: 0 0 0.15rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--muted-foreground) 92%, transparent);
+}
+
+.app-shell--editor-xy .app-right .writing-settings-right-panel .ws-disclosure-content .ai-panel-box.ai-panel-box--plain-fields {
+  border: none !important;
+  background: transparent !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  box-shadow: none !important;
+}
+
+.app-shell--editor-xy .app-right .writing-settings-right-panel .ws-nested-details {
+  margin-top: 0 !important;
+}
+
+/* 设定 Tab：顶栏与分组之间不要叠加大间隙（与通用 rr-panel 1.25rem gap 区分） */
+.app-shell--editor-xy .app-right .writing-settings-right-panel.rr-panel {
+  gap: 0.6rem !important;
+}
+
+/* AiPanelInjectDefaultsSection — 分区卡片（摘录 / 本章字段） */
+
+.ai-inject-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ai-inject-block {
+  border-radius: 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background: color-mix(in srgb, var(--muted) 26%, transparent);
+  padding: 0.65rem 0.75rem 0.75rem;
+}
+
+.ai-inject-block__title {
+  margin: 0 0 0.15rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--foreground) 82%, var(--muted-foreground));
+}
+
+.ai-inject-row {
+  margin-top: 0.35rem;
+}
+
+.ai-inject-row--split {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+}
+
+.ai-inject-n-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.ai-inject-n-input {
+  width: 3.25rem;
+  font: inherit;
+  padding: 0.2rem 0.35rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+}
+
+.ai-inject-subbox {
+  margin-top: 0.5rem;
+  padding-top: 0.45rem;
+  border-top: 1px dashed color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.ai-inject-subbox__cap {
+  margin-bottom: 0.35rem;
+}
+
+.ai-inject-scroll-list {
+  max-height: 9rem;
+  overflow-y: auto;
+  padding: 0.25rem 0.2rem 0.1rem;
+  border-radius: 0.35rem;
+  background: color-mix(in srgb, var(--background) 58%, transparent);
+}
+
+.ai-inject-scroll-list--tall {
+  max-height: 11rem;
+}
+
+.ai-inject-grid {
+  display: grid;
+  gap: 0.35rem 0.45rem;
+}
+
+.ai-inject-grid--2 {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 380px) {
+  .ai-inject-grid--2 {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.ai-inject-empty-hint {
+  margin: 0.35rem 0 0;
+  line-height: 1.45;
+}
+

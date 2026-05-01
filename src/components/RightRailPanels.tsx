@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { Info } from "lucide-react";
 import { Link } from "react-router-dom";
 import type { Chapter, ReferenceExcerpt, Work } from "../db/types";
-import { exportBibleMarkdown, isChapterSaveConflictError, updateChapter } from "../db/repo";
+import { exportBibleMarkdown } from "../db/repo";
 import { referenceReaderHref } from "../util/readUtf8TextFile";
 import { workPathSegment } from "../util/work-url";
 import type { AutoSummaryStatus } from "../ai/chapter-summary-auto";
@@ -14,6 +15,7 @@ import {
 } from "../util/linked-chapters-storage";
 import { approxRoughTokenCount } from "../ai/approx-tokens";
 import { cn } from "../lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function KnowledgeBaseRightPanel(props: {
   workId: string;
@@ -115,24 +117,6 @@ export function KnowledgeBaseRightPanel(props: {
     }
   }
 
-  function toggleOne(id: string, mode: "full" | "summary") {
-    const cur = state;
-    if (mode === "summary") {
-      const c = canPick.find((x) => x.id === id);
-      if (!c || !(c.summary ?? "").trim()) return; // 严格：概要必须存在
-    }
-    const full = new Set(cur.fullChapterIds);
-    const sum = new Set(cur.summaryChapterIds);
-    if (mode === "full") {
-      if (full.has(id)) full.delete(id);
-      else full.add(id);
-    } else {
-      if (sum.has(id)) sum.delete(id);
-      else sum.add(id);
-    }
-    saveNext({ fullChapterIds: [...full], summaryChapterIds: [...sum] }, { autoOpenPickerIfOverflow: true });
-  }
-
   function addRecent(n: number, mode: "full" | "summary") {
     const cur = state;
     const picked =
@@ -151,12 +135,27 @@ export function KnowledgeBaseRightPanel(props: {
   return (
     <div className="rr-panel">
       <div className="rr-block">
-        <div className="rr-block-title">关联知识库</div>
+        <div className="mb-2 flex items-center gap-1.5">
+          <div className="rr-block-title" style={{ margin: 0 }}>
+            关联知识库
+          </div>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex shrink-0 cursor-help items-center rounded-sm text-muted-foreground/50 outline-none transition-colors hover:text-muted-foreground/90 focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label="关联知识库说明"
+              >
+                <Info className="size-3.5" aria-hidden />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[min(92vw,18rem)] text-xs leading-relaxed">
+              用「已完成章节」来约束本章生成：可混搭 <strong>全文</strong> 与 <strong>概要</strong>，概要更省 tokens。
+            </TooltipContent>
+          </Tooltip>
+        </div>
         {props.chapter ? (
           <>
-            <div className="muted small" style={{ marginBottom: 8, lineHeight: 1.6 }}>
-              用「已完成章节」来约束本章生成：可混搭 <strong>全文</strong> 与 <strong>概要</strong>，概要更省 tokens。
-            </div>
             {/* 五章内：直接在面板里管理；超过后再进弹窗批量管理 */}
             <div className="rounded-md border border-border/50 bg-background/40 p-2">
               {selectedCount === 0 ? (
@@ -236,9 +235,25 @@ export function KnowledgeBaseRightPanel(props: {
               </button>
             </div>
 
-            <div className="muted small" style={{ marginTop: 10, lineHeight: 1.6 }}>
-              已选：全文 {state.fullChapterIds.length} 章（≈{approxTokens.full.toLocaleString()} tokens） · 概要{" "}
-              {state.summaryChapterIds.length} 章（≈{approxTokens.sum.toLocaleString()} tokens）
+            <div className="mt-2 flex items-center gap-1.5">
+              <Tooltip delayDuration={300}>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-sm text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground/90 focus-visible:ring-2 focus-visible:ring-ring"
+                    aria-label="已选章节与 tokens 概览"
+                  >
+                    <Info className="size-3 shrink-0 opacity-70" aria-hidden />
+                    <span className="tabular-nums">
+                      全文 {state.fullChapterIds.length} · 概要 {state.summaryChapterIds.length}
+                    </span>
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[min(92vw,20rem)] text-xs leading-relaxed">
+                  已选：全文 {state.fullChapterIds.length} 章（≈{approxTokens.full.toLocaleString()} tokens） · 概要{" "}
+                  {state.summaryChapterIds.length} 章（≈{approxTokens.sum.toLocaleString()} tokens）
+                </TooltipContent>
+              </Tooltip>
             </div>
           </>
         ) : (

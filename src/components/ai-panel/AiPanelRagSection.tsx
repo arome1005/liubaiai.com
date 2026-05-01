@@ -1,9 +1,9 @@
 import type { Dispatch, SetStateAction } from "react";
 import { useLayoutEffect, useRef } from "react";
 import type { Chapter, ReferenceSearchHit, Work } from "../../db/types";
-import { exportBibleMarkdown } from "../../db/repo";
 import { referenceReaderHref } from "../../util/readUtf8TextFile";
-import { searchWritingRagMerged, isRuntimeRagHit, type WritingRagSources } from "../../util/work-rag-runtime";
+import { isRuntimeRagHit, type WritingRagSources } from "../../util/work-rag-runtime";
+import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 
 export function AiPanelRagSection(props: {
@@ -69,7 +69,24 @@ export function AiPanelRagSection(props: {
         <span>启用检索注入</span>
       </label>
       <div className="ai-panel-field">
-        <span className="small muted">检索范围</span>
+        <span className="flex items-center gap-1">
+          <span className="small muted">检索范围</span>
+          <Tooltip delayDuration={300}>
+            <TooltipTrigger asChild>
+              <span
+                tabIndex={0}
+                className="inline-flex cursor-help items-center text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors outline-none [&:focus-visible]:ring-2 [&:focus-visible]:ring-ring"
+                aria-label="检索范围说明"
+              >
+                <Info className="size-3" aria-hidden />
+              </span>
+            </TooltipTrigger>
+            <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[min(92vw,18rem)] text-xs leading-relaxed">
+              <p className="mb-1.5">从勾选来源检索片段注入上下文：藏经 · 参考库、本书 · 锦囊导出（分块）、本书 · 正文。</p>
+              <p>启用检索但未勾选任何范围时，不会产生检索片段。</p>
+            </TooltipContent>
+          </Tooltip>
+        </span>
         <label className="ai-panel-check row row--check">
           <input
             type="checkbox"
@@ -77,11 +94,7 @@ export function AiPanelRagSection(props: {
             disabled={!p.ragEnabled}
             onChange={(e) => {
               const checked = e.target.checked;
-              p.setRagWorkSources((s) => {
-                const next = { ...s, referenceLibrary: checked };
-                if (!next.referenceLibrary && !next.workBibleExport && !next.workManuscript) return s;
-                return next;
-              });
+              p.setRagWorkSources((s) => ({ ...s, referenceLibrary: checked }));
             }}
           />
           <span>藏经 · 参考库</span>
@@ -93,11 +106,7 @@ export function AiPanelRagSection(props: {
             disabled={!p.ragEnabled}
             onChange={(e) => {
               const checked = e.target.checked;
-              p.setRagWorkSources((s) => {
-                const next = { ...s, workBibleExport: checked };
-                if (!next.referenceLibrary && !next.workBibleExport && !next.workManuscript) return s;
-                return next;
-              });
+              p.setRagWorkSources((s) => ({ ...s, workBibleExport: checked }));
             }}
           />
           <span>本书 · 锦囊导出（分块）</span>
@@ -109,11 +118,7 @@ export function AiPanelRagSection(props: {
             disabled={!p.ragEnabled}
             onChange={(e) => {
               const checked = e.target.checked;
-              p.setRagWorkSources((s) => {
-                const next = { ...s, workManuscript: checked };
-                if (!next.referenceLibrary && !next.workBibleExport && !next.workManuscript) return s;
-                return next;
-              });
+              p.setRagWorkSources((s) => ({ ...s, workManuscript: checked }));
             }}
           />
           <span>本书 · 正文（不含当前章）</span>
@@ -339,47 +344,4 @@ export function AiPanelRagSection(props: {
       {body}
     </details>
   );
-}
-
-/** 供父组件绑定「检索预览」按钮：保持与原 `AiPanel` 内联逻辑一致 */
-export async function runAiPanelRagPreview(args: {
-  workId: string;
-  work: Work;
-  chapters: Chapter[];
-  activeChapterId: string | null;
-  ragQuery: string;
-  ragK: number;
-  ragWorkSources: WritingRagSources;
-  setRagHits: Dispatch<SetStateAction<ReferenceSearchHit[]>>;
-  setRagLoading: (v: boolean) => void;
-  setError: (msg: string | null) => void;
-}): Promise<void> {
-  const q = args.ragQuery.trim();
-  if (!q) return;
-  args.setRagLoading(true);
-  try {
-    let bibleOverride = "";
-    if (args.ragWorkSources.workBibleExport) {
-      try {
-        bibleOverride = await exportBibleMarkdown(args.workId);
-      } catch {
-        bibleOverride = "";
-      }
-    }
-    const hits = await searchWritingRagMerged({
-      workId: args.workId,
-      query: q,
-      limit: Math.max(1, Math.min(20, args.ragK)),
-      sources: args.ragWorkSources,
-      chapters: args.chapters,
-      progressCursorChapterId: args.work.progressCursor,
-      excludeManuscriptChapterId: args.activeChapterId,
-      bibleMarkdownOverride: bibleOverride.trim() ? bibleOverride : undefined,
-    });
-    args.setRagHits(hits);
-  } catch (e) {
-    args.setError(e instanceof Error ? e.message : "检索失败");
-  } finally {
-    args.setRagLoading(false);
-  }
 }

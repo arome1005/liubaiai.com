@@ -5,12 +5,9 @@ export function AiPanelRunModeSection(props: {
   onModeChange: (m: WritingSkillMode) => void;
 }) {
   return (
-    <section className="ai-panel-section ai-panel-section--flat" aria-labelledby="ai-panel-mode-h">
-      <h3 id="ai-panel-mode-h" className="ai-panel-section-title">
-        运行模式
-      </h3>
+    <section className="ai-panel-section ai-panel-section--flat" aria-label="写作模式">
       <div className="ai-panel-row ai-panel-row--flush">
-        <label className="small muted">模式</label>
+        <label className="small muted">写作模式</label>
         <select name="aiMode" value={props.mode} onChange={(e) => props.onModeChange(e.target.value as WritingSkillMode)}>
           <option value="continue">续写</option>
           <option value="rewrite">改写</option>

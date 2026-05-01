@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Layers, PenLine, Search, Users } from "lucide-react";
 import { AI_SETTINGS_UPDATED_EVENT, loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { Chapter, Work } from "../db/types";
-import { BibleMarkdownPreview } from "./RightRailPanels";
 import { AiPanelInjectDefaultsSection } from "./ai-panel/AiPanelInjectDefaultsSection";
 import { AiPanelRagSection } from "./ai-panel/AiPanelRagSection";
 import { AiPanelStyleCardSection } from "./ai-panel/AiPanelStyleCardSection";
@@ -15,28 +15,16 @@ import type {
   AiPanelWorkWritingVarsPatch,
 } from "./ai-panel/types";
 import { neighborSummaryPoolChaptersForWritingPanel } from "../util/neighbor-summary-pool";
-import type { WritingSkillMode } from "../ai/assemble-context";
-import { AiPanelRunModeSection } from "./ai-panel/AiPanelRunModeSection";
-
-const STYLE_VARS_ACCORDION_KEY = "liubai:writingSettingsStyleVarsAccordion:v1";
-
-function readStyleVarsPrimary(): "style" | "vars" {
-  try {
-    const v = localStorage.getItem(STYLE_VARS_ACCORDION_KEY);
-    if (v === "vars") return "vars";
-  } catch {
-    /* ignore */
-  }
-  return "style";
-}
-
-function persistStyleVarsPrimary(next: "style" | "vars") {
-  try {
-    localStorage.setItem(STYLE_VARS_ACCORDION_KEY, next);
-  } catch {
-    /* ignore */
-  }
-}
+import {
+  summarizeInjectDefaults,
+  summarizeRagDefaults,
+  summarizeWorkStyle,
+  summarizeWritingVars,
+} from "./writing-settings/writing-settings-summaries";
+import { useWritingSettingsSections } from "../hooks/useWritingSettingsSections";
+import { WritingSettingsAnchorNav } from "./writing-settings/WritingSettingsAnchorNav";
+import { WritingSettingsDisclosure } from "./writing-settings/WritingSettingsDisclosure";
+import { WritingSettingsGroupLabel } from "./writing-settings/WritingSettingsGroupLabel";
 
 export function WritingSettingsRightPanel(props: {
   workId: string;
@@ -49,13 +37,12 @@ export function WritingSettingsRightPanel(props: {
   onWorkWritingVarsChange: (patch: AiPanelWorkWritingVarsPatch) => void;
   workRagInjectDefaults: AiPanelWorkRagInjectDefaults;
   onWorkRagInjectDefaultsChange: (patch: AiPanelWorkRagInjectDefaultsPatch) => void;
-  writingSkillMode: WritingSkillMode;
-  onWritingSkillModeChange: (m: WritingSkillMode) => void;
 }) {
   const wv = props.workWritingVars;
   const ri = props.workRagInjectDefaults;
 
-  // React to includeBible changes dispatched by AiPanel's updateSettings (same-tab)
+  const { sectionOpen, setSection, collapseAll, expandAll } = useWritingSettingsSections();
+
   const [includeBibleGlobal, setIncludeBibleGlobal] = useState(() => loadAiSettings().includeBible);
   useEffect(() => {
     const handler = () => setIncludeBibleGlobal(loadAiSettings().includeBible);
@@ -68,72 +55,42 @@ export function WritingSettingsRightPanel(props: {
     [props.chapters, props.chapter, ri.recentN],
   );
 
-  const [styleVarsPrimary, setStyleVarsPrimary] = useState<"style" | "vars">(() => readStyleVarsPrimary());
-
-  // Stable refs for AiPanelRagSection session-only props that are unused in defaultsOnly variant
   const emptyRagExcluded = useRef(new Set<string>()).current;
   const noopSetRagExcluded = useCallback(() => {}, []);
   const noopOnRunPreview = useCallback(() => {}, []);
   const noopOnRagQueryChange = useCallback(() => {}, []);
 
-  const ctxPreviewText = useMemo(() => {
-    const workTitle = props.work.title ?? "";
-    const chapterTitle = props.chapter?.title ?? "";
-    return ["上下文：", `作品：${workTitle || "（未命名）"}`, "", `章节：${chapterTitle || "（未选择章节）"}`].join("\n");
-  }, [props.work.title, props.chapter?.title]);
-
-  const recentPreviewText = useMemo(() => {
-    if (!props.chapter) return "（未选择章节）";
-    if (!ri.includeRecentSummaries) return "（未启用「最近章节概要」注入）";
-    if (neighborPool.length === 0) return "（当前窗口内无已填概要的章节）";
-    const lines: string[] = [];
-    for (const c of neighborPool) {
-      if (ri.neighborSummaryIncludeById[c.id] === false) continue;
-      const s = (c.summary ?? "").trim();
-      if (!s) continue;
-      lines.push(`## ${c.title}`, s, "");
-    }
-    return lines.join("\n").trim() || "（未选中任何概要章节）";
-  }, [props.chapter, ri.includeRecentSummaries, ri.neighborSummaryIncludeById, neighborPool]);
+  const badgeStyle = useMemo(() => summarizeWorkStyle(props.workStyle), [props.workStyle]);
+  const badgeVars = useMemo(() => summarizeWritingVars(wv), [wv]);
+  const badgeRag = useMemo(() => summarizeRagDefaults(ri), [ri]);
+  const badgeInject = useMemo(() => summarizeInjectDefaults(ri, includeBibleGlobal), [ri, includeBibleGlobal]);
 
   return (
     <div className="rr-panel writing-settings-right-panel">
-      <div className="rr-block">
-        <AiPanelRunModeSection mode={props.writingSkillMode} onModeChange={props.onWritingSkillModeChange} />
-      </div>
-      <div className="rr-block">
-        <details
-          className="ai-panel-box"
-          aria-labelledby="ws-acc-style-summary"
-          open={styleVarsPrimary === "style"}
-          onToggle={(e) => {
-            if (e.currentTarget.open) {
-              setStyleVarsPrimary("style");
-              persistStyleVarsPrimary("style");
-            } else {
-              setStyleVarsPrimary("vars");
-              persistStyleVarsPrimary("vars");
-            }
-          }}
+      <WritingSettingsAnchorNav onCollapseAll={collapseAll} onExpandAll={expandAll} />
+
+      <div id="ws-section-style" className="ws-section-group flex scroll-mt-[4.5rem] flex-col gap-2">
+        <WritingSettingsGroupLabel hint="全书级风格卡：叙述视角、调性、禁用词、文风锚点与高级指纹。写作变量：故事背景、角色、关系与技巧预设。">
+          文风与变量
+        </WritingSettingsGroupLabel>
+        <WritingSettingsDisclosure
+          title="全书风格卡 · 本书默认（全书级）"
+          description="叙述视角、调性、禁用词、文风锚点与高级指纹"
+          badge={badgeStyle}
+          icon={<PenLine />}
+          open={sectionOpen.style}
+          onOpenChange={(o) => setSection("style", o)}
         >
-          <summary id="ws-acc-style-summary">全书风格卡 · 本书默认（全书级）</summary>
           <AiPanelStyleCardSection workStyle={props.workStyle} onUpdateWorkStyle={props.onUpdateWorkStyle} wrap="plain" />
-        </details>
-        <details
-          className="ai-panel-box"
-          aria-labelledby="ws-acc-vars-summary"
-          open={styleVarsPrimary === "vars"}
-          onToggle={(e) => {
-            if (e.currentTarget.open) {
-              setStyleVarsPrimary("vars");
-              persistStyleVarsPrimary("vars");
-            } else {
-              setStyleVarsPrimary("style");
-              persistStyleVarsPrimary("style");
-            }
-          }}
+        </WritingSettingsDisclosure>
+        <WritingSettingsDisclosure
+          title="写作变量 · 本书默认"
+          description="故事背景、角色、关系与技巧预设"
+          badge={badgeVars}
+          icon={<Users />}
+          open={sectionOpen.vars}
+          onOpenChange={(o) => setSection("vars", o)}
         >
-          <summary id="ws-acc-vars-summary">写作变量 · 本书默认</summary>
           <AiPanelWritingVarsSection
             wrap="plain"
             storyBackground={wv.storyBackground}
@@ -147,11 +104,21 @@ export function WritingSettingsRightPanel(props: {
             skillText={wv.skillText}
             onSkillTextChange={(v) => props.onWorkWritingVarsChange({ skillText: v })}
           />
-        </details>
+        </WritingSettingsDisclosure>
       </div>
-      <div className="rr-block">
-        <details className="ai-panel-box" aria-labelledby="ws-acc-rag-summary">
-          <summary id="ws-acc-rag-summary">检索增强 · 本书默认（RAG）</summary>
+
+      <div id="ws-section-rag" className="ws-section-group flex scroll-mt-[4.5rem] flex-col gap-2">
+        <WritingSettingsGroupLabel hint="检索增强（RAG）：开关、检索范围与 top-k。上下文注入：本书锦囊、本章摘录与邻章概要、本章锦囊字段等默认是否进入生成上下文。">
+          检索与注入
+        </WritingSettingsGroupLabel>
+        <WritingSettingsDisclosure
+          title="检索增强 · 本书默认（RAG）"
+          description="检索开关、范围与 top-k"
+          badge={badgeRag}
+          icon={<Search />}
+          open={sectionOpen.rag}
+          onOpenChange={(o) => setSection("rag", o)}
+        >
           <AiPanelRagSection
             useDisclosure={false}
             variant="defaultsOnly"
@@ -178,12 +145,16 @@ export function WritingSettingsRightPanel(props: {
             busy={false}
             onRunPreview={noopOnRunPreview}
           />
-        </details>
-      </div>
-      <div className="rr-block">
-        <details className="ai-panel-box" aria-labelledby="ws-acc-inject-summary">
-          <summary id="ws-acc-inject-summary">上下文注入 · 本书默认</summary>
-          <label className="ai-panel-check row row--check" style={{ marginTop: 8 }}>
+        </WritingSettingsDisclosure>
+        <WritingSettingsDisclosure
+          title="上下文注入 · 本书默认"
+          description="锦囊、摘录、邻章概要与本章字段"
+          badge={badgeInject}
+          icon={<Layers />}
+          open={sectionOpen.inject}
+          onOpenChange={(o) => setSection("inject", o)}
+        >
+          <label className="ai-panel-check row row--check" style={{ marginTop: 0 }}>
             <input
               name="includeBibleGlobal"
               type="checkbox"
@@ -203,7 +174,6 @@ export function WritingSettingsRightPanel(props: {
           </label>
           <AiPanelInjectDefaultsSection
             wrap="plain"
-            includeBible={includeBibleGlobal}
             includeLinkedExcerpts={ri.includeLinkedExcerpts}
             onIncludeLinkedExcerptsChange={(v) => props.onWorkRagInjectDefaultsChange({ includeLinkedExcerpts: v })}
             includeRecentSummaries={ri.includeRecentSummaries}
@@ -223,41 +193,9 @@ export function WritingSettingsRightPanel(props: {
                 chapterBibleInjectMask: typeof up === "function" ? up(ri.chapterBibleInjectMask) : up,
               })
             }
-            workBibleSectionMask={ri.workBibleSectionMask}
-            setWorkBibleSectionMask={(up) =>
-              props.onWorkRagInjectDefaultsChange({
-                workBibleSectionMask: typeof up === "function" ? up(ri.workBibleSectionMask) : up,
-              })
-            }
-            currentContextMode={ri.currentContextMode}
-            onCurrentContextModeChange={(v) => props.onWorkRagInjectDefaultsChange({ currentContextMode: v })}
             chapter={props.chapter}
           />
-        </details>
-      </div>
-      <div className="rr-block">
-        <details className="ai-panel-box" aria-labelledby="ws-acc-bible-preview-summary">
-          <summary id="ws-acc-bible-preview-summary">锦囊 Markdown 预览（全书级导出）</summary>
-          <div style={{ display: "flex", flexDirection: "column", minHeight: 0, marginTop: 6 }}>
-            <BibleMarkdownPreview workId={props.workId} linkWork={props.work} />
-          </div>
-        </details>
-      </div>
-
-      <div className="rr-block">
-        <details className="ai-panel-box" aria-labelledby="ws-acc-preview-summary">
-          <summary id="ws-acc-preview-summary">本次注入预览（上下文 / 最近概要）</summary>
-          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
-            <details className="ai-panel-box" style={{ margin: 0 }}>
-              <summary>上下文（作品/章节）</summary>
-              <textarea readOnly value={ctxPreviewText} rows={6} style={{ width: "100%", resize: "vertical", marginTop: 8 }} />
-            </details>
-            <details className="ai-panel-box" style={{ margin: 0 }}>
-              <summary>最近章节概要（N={Math.max(0, Math.min(12, ri.recentN))}）</summary>
-              <textarea readOnly value={recentPreviewText} rows={8} style={{ width: "100%", resize: "vertical", marginTop: 8 }} />
-            </details>
-          </div>
-        </details>
+        </WritingSettingsDisclosure>
       </div>
     </div>
   );

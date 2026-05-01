@@ -1,7 +1,7 @@
 import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
 import type { Chapter, ReferenceSearchHit, Work } from "../../db/types";
 import type { WritingRagSources } from "../../util/work-rag-runtime";
-import { runAiPanelRagPreview } from "./AiPanelRagSection";
+import { runAiPanelRagPreview } from "./runAiPanelRagPreview";
 
 interface UseAiPanelRagSessionArgs {
   workId: string;
@@ -39,7 +39,7 @@ export interface AiPanelRagSession {
  * 写作侧栏「检索增强（本次）」会话状态：
  * - 关键词 / 命中 / 加载中 / 单条排除 集合
  * - 切关键词时自动清空 ragExcluded
- * - 暴露 runRagPreview，与 `AiPanelRagSection` 内联逻辑一致（委托同模块的 `runAiPanelRagPreview`）
+ * - 暴露 runRagPreview，与 `AiPanelRagSection` 内联逻辑一致（委托 `runAiPanelRagPreview`）
  *
  * 不接管「真实请求」内部的 RAG 检索（那条路径在 `useAiPanelContextAssembly` 内，
  * 通过本 hook 暴露的 setRagHits/setRagLoading 写回，UI 仍然实时刷新）。

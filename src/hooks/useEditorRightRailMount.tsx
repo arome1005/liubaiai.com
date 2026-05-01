@@ -169,8 +169,6 @@ export function useEditorRightRailMount(args: UseEditorRightRailMountArgs) {
         onWorkWritingVarsChange={patchWorkAiWritingVars}
         workRagInjectDefaults={workAiRagInjectDefaults}
         onWorkRagInjectDefaultsChange={patchWorkAiRagInjectDefaults}
-        writingSkillMode={writingSkillMode}
-        onWritingSkillModeChange={setWritingSkillMode}
       />,
     );
 

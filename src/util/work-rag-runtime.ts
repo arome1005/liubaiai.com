@@ -19,8 +19,9 @@ export type WritingRagSources = {
   workManuscript: boolean;
 };
 
+/** 默认全关：避免未勾选时仍检索参考库消耗 token；启用 RAG 后按需勾选范围 */
 export const DEFAULT_WRITING_RAG_SOURCES: WritingRagSources = {
-  referenceLibrary: true,
+  referenceLibrary: false,
   workBibleExport: false,
   workManuscript: false,
 };
