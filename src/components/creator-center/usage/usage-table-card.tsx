@@ -15,7 +15,7 @@ interface UsageTableCardProps {
   records: UsageRecord[];
 }
 
-type SortKey = "timestamp" | "inputTokens" | "outputTokens" | "totalTokens";
+type SortKey = "timestamp" | "inputTokens" | "outputTokens" | "reasoningTokens" | "totalTokens";
 type SortOrder = "asc" | "desc";
 
 const PAGE_SIZE = 5;
@@ -71,6 +71,9 @@ export function UsageTableCard({ records }: UsageTableCardProps) {
       if (sortKey === "timestamp") {
         aVal = new Date(a.timestamp).getTime();
         bVal = new Date(b.timestamp).getTime();
+      } else if (sortKey === "reasoningTokens") {
+        aVal = a.reasoningTokens ?? 0;
+        bVal = b.reasoningTokens ?? 0;
       } else {
         aVal = a[sortKey];
         bVal = b[sortKey];
@@ -142,6 +145,9 @@ export function UsageTableCard({ records }: UsageTableCardProps) {
                     <TableHead className="text-right">
                       <UsageTableSortHeader column="outputTokens" label="Out" activeColumn={sortKey} onSort={handleSort} />
                     </TableHead>
+                    <TableHead className="text-right" title="思考/推理 token：思考模型计费但不可见的部分（已计入 Total）">
+                      <UsageTableSortHeader column="reasoningTokens" label="思考" activeColumn={sortKey} onSort={handleSort} />
+                    </TableHead>
                     <TableHead className="text-right">
                       <UsageTableSortHeader column="totalTokens" label="Total" activeColumn={sortKey} onSort={handleSort} />
                     </TableHead>
@@ -170,6 +176,16 @@ export function UsageTableCard({ records }: UsageTableCardProps) {
                       </TableCell>
                       <TableCell className="number-display text-right text-sm">{formatNumber(record.inputTokens)}</TableCell>
                       <TableCell className="number-display text-right text-sm">{formatNumber(record.outputTokens)}</TableCell>
+                      <TableCell
+                        className="number-display text-right text-sm text-muted-foreground"
+                        title={
+                          record.reasoningTokens != null
+                            ? `厂商披露的思考/推理 token（已计入 Total）`
+                            : `本次调用未披露思考 token（非思考模型或厂商未返回该字段）`
+                        }
+                      >
+                        {record.reasoningTokens != null ? formatNumber(record.reasoningTokens) : "—"}
+                      </TableCell>
                       <TableCell className="number-display text-right text-sm font-medium">{formatNumber(record.totalTokens)}</TableCell>
                       <TableCell>
                         <Badge

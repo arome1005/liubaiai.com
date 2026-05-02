@@ -93,8 +93,8 @@ export const PROVIDER_UI: Record<AiProviderId, ProviderUiCard> = {
     note: "云海辽阔，长文推理可能需要稍作等待，建议在开启\"高思考预算\"时保持耐心。",
   },
   vertex: {
-    label: "Vertex",
-    subtitle: "云谷 · 后端代管",
+    label: "云谷",
+    subtitle: "Vertex · 后端代管",
     tip: "Vertex AI（GCP 赠金）",
     quote: '"金石在炉，不假外铄。"',
     core:

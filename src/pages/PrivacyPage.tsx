@@ -16,7 +16,7 @@ export function PrivacyPage() {
         <h2 style={{ marginTop: "1.25rem" }}>1. 我们收集什么数据</h2>
         <p>
           「留白写作」以<strong>浏览器端</strong>为主：作品、章节正文、本书锦囊、概要等内容默认保存在你本机浏览器的
-          <strong>IndexedDB</strong> 中；<strong>参考库（藏经）正文与分块默认仅存本机</strong>。AI 设置与密钥保存在本机浏览器的
+          <strong>IndexedDB</strong> 中；<strong>藏经正文与分块默认仅存本机</strong>。AI 设置与密钥保存在本机浏览器的
           <strong>localStorage</strong> 中。若你使用<strong>账号登录</strong>且应用开启了与 Supabase 等服务的同步（Hybrid），部分写作数据可能同步至你所登录账户对应的云端存储，具体以应用内说明与配置为准。
         </p>
 
@@ -28,7 +28,7 @@ export function PrivacyPage() {
         </p>
         <p>
           你可以在「设置 → AI 隐私与上传范围」中明确选择是否允许使用云端提供方、以及允许上传哪些内容（正文/本书锦囊/摘要/摘录/RAG 检索片段等）。
-          其中「RAG」包括对<strong>参考库（藏经）</strong>的命中片段，以及在侧栏开启时可选的<strong>本书锦囊导出分块</strong>与<strong>本书章节正文分块</strong>（均在本地检索；仅在启用云端 AI 且你允许上传对应范围时，相关片段会随请求发送至所选模型提供方）。
+          其中「RAG」包括对<strong>藏经</strong>的命中片段，以及在侧栏开启时可选的<strong>本书锦囊导出分块</strong>与<strong>本书章节正文分块</strong>（均在本地检索；仅在启用云端 AI 且你允许上传对应范围时，相关片段会随请求发送至所选模型提供方）。
           虚构创作相关提示见「设置 → 虚构创作与 AI」。
         </p>
 

@@ -34,9 +34,6 @@ export type AiPanelWorkRagInjectDefaults = {
   ragWorkSources: WritingRagSources;
   ragK: number;
   includeLinkedExcerpts: boolean;
-  includeRecentSummaries: boolean;
-  recentN: number;
-  neighborSummaryIncludeById: Record<string, boolean>;
   chapterBibleInjectMask: Record<ChapterBibleFieldKey, boolean>;
   workBibleSectionMask: Record<string, boolean>;
   currentContextMode: "full" | "summary" | "selection" | "none";

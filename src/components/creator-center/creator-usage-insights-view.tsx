@@ -12,6 +12,7 @@ import { UsageRatioChart } from "./usage/usage-ratio-chart";
 import { UsageTimelineChart } from "./usage/usage-timeline-chart";
 import { UsageTableCard } from "./usage/usage-table-card";
 import { UsageCaliberAccordion } from "./usage/usage-caliber-accordion";
+import { UsageCostBudgetCard } from "./usage/usage-cost-budget-card";
 
 /** AI 用量洞察：事件来自 IndexedDB；登录用户与云端双向同步（见 `ai-usage-cloud`） */
 export function CreatorUsageInsightsView() {
@@ -50,6 +51,7 @@ export function CreatorUsageInsightsView() {
       "status",
       "inputTokens",
       "outputTokens",
+      "reasoningTokens",
       "totalTokens",
     ];
     const rows = records.map((r) => [
@@ -62,6 +64,7 @@ export function CreatorUsageInsightsView() {
       r.status,
       r.inputTokens,
       r.outputTokens,
+      r.reasoningTokens ?? "",
       r.totalTokens,
     ]);
     const csv = [header, ...rows].map((line) => line.map((v) => esc(v)).join(",")).join("\n");
@@ -126,6 +129,8 @@ export function CreatorUsageInsightsView() {
           </header>
 
           <UsageHeroCards stats={stats} isOwnerMode={isOwnerMode} usageAccountLoggedIn={Boolean(authUser?.id)} />
+
+          <UsageCostBudgetCard />
 
           {/* 弹窗内宽约 72rem：两栏与视口断点易错位，此处固定单列更易读 */}
           <div className="grid grid-cols-1 gap-4">

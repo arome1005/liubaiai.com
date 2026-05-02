@@ -22,6 +22,14 @@ function startOfLocalDay(ts: number): number {
 
 function rowToRecord(e: AiUsageEventRow): UsageRecord {
   const src: UsageSource = e.source === "api" ? "api" : "approx";
+  // 显示侧兜底：DB 里没存 reasoningTokens 时（旧记录或厂商未披露），
+  // 用 total - in - out 的差值推断「思考/隐藏」token，让用户看见钱花在哪。
+  // 仅对 API 口径有意义（粗估口径下 total 本来就 = in + out）。
+  let reasoning = e.reasoningTokens;
+  if (reasoning == null && src === "api") {
+    const gap = e.totalTokens - e.inputTokens - e.outputTokens;
+    if (gap > 0) reasoning = gap;
+  }
   return {
     id: e.id,
     timestamp: new Date(e.ts),
@@ -32,6 +40,7 @@ function rowToRecord(e: AiUsageEventRow): UsageRecord {
     inputTokens: e.inputTokens,
     outputTokens: e.outputTokens,
     totalTokens: e.totalTokens,
+    ...(reasoning != null ? { reasoningTokens: reasoning } : {}),
     source: src,
     status: e.status,
   };

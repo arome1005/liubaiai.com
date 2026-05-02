@@ -3,12 +3,14 @@ import { approxRoughTokenCount } from "./approx-tokens";
 import type { OpenAiStyleUsage } from "../util/parse-api-json";
 
 export function tokenUsageFromOpenAiStyle(u: OpenAiStyleUsage, source: "api" | "approx"): AiTokenUsage {
-  return {
+  const out: AiTokenUsage = {
     inputTokens: u.inputTokens,
     outputTokens: u.outputTokens,
     totalTokens: u.totalTokens,
     source,
   };
+  if (u.reasoningTokens != null) out.reasoningTokens = u.reasoningTokens;
+  return out;
 }
 
 export function approxUsageFromMessagesAndText(
@@ -35,6 +37,7 @@ export function finalUsageForGenerate(
         inputTokens: api.inputTokens,
         outputTokens: api.outputTokens,
         totalTokens: Math.max(api.totalTokens, api.inputTokens + api.outputTokens),
+        reasoningTokens: api.reasoningTokens,
       },
       "api",
     );

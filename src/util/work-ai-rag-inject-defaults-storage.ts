@@ -43,9 +43,6 @@ export function defaultWorkAiRagInjectDefaults(): AiPanelWorkRagInjectDefaults {
     ragWorkSources: { ...DEFAULT_WRITING_RAG_SOURCES },
     ragK: 6,
     includeLinkedExcerpts: true,
-    includeRecentSummaries: true,
-    recentN: 3,
-    neighborSummaryIncludeById: {},
     chapterBibleInjectMask: defaultChapterBibleInjectMask(),
     workBibleSectionMask: defaultWorkBibleSectionMask(),
     currentContextMode: "full",
@@ -57,6 +54,7 @@ export function loadWorkAiRagInjectDefaults(workId: string): AiPanelWorkRagInjec
   try {
     const raw = localStorage.getItem(KEY_PREFIX + workId);
     if (raw) {
+      // 旧 schema 中的 includeRecentSummaries/recentN/neighborSummaryIncludeById 会被静默丢弃（功能已删除）。
       const p = JSON.parse(raw) as Record<string, unknown>;
       return {
         ragEnabled: typeof p.ragEnabled === "boolean" ? p.ragEnabled : base.ragEnabled,
@@ -65,13 +63,6 @@ export function loadWorkAiRagInjectDefaults(workId: string): AiPanelWorkRagInjec
           : base.ragWorkSources,
         ragK: typeof p.ragK === "number" && Number.isFinite(p.ragK) ? Math.max(1, Math.min(20, Math.floor(p.ragK))) : base.ragK,
         includeLinkedExcerpts: typeof p.includeLinkedExcerpts === "boolean" ? p.includeLinkedExcerpts : base.includeLinkedExcerpts,
-        includeRecentSummaries:
-          typeof p.includeRecentSummaries === "boolean" ? p.includeRecentSummaries : base.includeRecentSummaries,
-        recentN: typeof p.recentN === "number" && Number.isFinite(p.recentN) ? Math.max(0, Math.min(12, Math.floor(p.recentN))) : base.recentN,
-        neighborSummaryIncludeById:
-          p.neighborSummaryIncludeById && typeof p.neighborSummaryIncludeById === "object"
-            ? (p.neighborSummaryIncludeById as Record<string, boolean>)
-            : {},
         chapterBibleInjectMask: mergeChapterBibleMask(p.chapterBibleInjectMask),
         workBibleSectionMask: mergeWorkBibleMask(p.workBibleSectionMask),
         currentContextMode:

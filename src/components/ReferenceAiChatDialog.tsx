@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2, Send, Sparkles, Square, X } from "lucide-react";
 import { cn } from "../lib/utils";
-import { Dialog, DialogContent } from "./ui/dialog";
+import { Dialog, DialogContent, DialogTitle } from "./ui/dialog";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { AI_MODELS } from "./ai-model-selector";
@@ -294,13 +294,13 @@ export function ReferenceAiChatDialog(props: {
           {/* 第一行：标题 + 关闭 */}
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <LiubaiLogo className="h-4 w-4 text-foreground" />
-              <span className="text-sm font-semibold text-foreground">
+              <LiubaiLogo className="h-4 w-4 text-foreground" aria-hidden />
+              <DialogTitle className="text-sm font-semibold leading-none text-foreground">
                 藏经 AI
                 {selectedBookTitle?.trim() ? (
                   <span className="ml-1 font-normal text-muted-foreground">· 《{selectedBookTitle.trim()}》</span>
                 ) : null}
-              </span>
+              </DialogTitle>
             </div>
             <button
               type="button"

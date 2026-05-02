@@ -17,7 +17,7 @@ function createDefaultStore(): WritingStore {
   return new WritingStoreIndexedDB();
 }
 
-/** 当前运行环境使用的存储后端（未配 Supabase 时为 IndexedDB；配置齐全时为 Hybrid：写作上云 + 参考库本地）。 */
+/** 当前运行环境使用的存储后端（未配 Supabase 时为 IndexedDB；配置齐全时为 Hybrid：写作上云 + 藏经本地）。 */
 export function getWritingStore(): WritingStore {
   if (!store) {
     store = createDefaultStore();

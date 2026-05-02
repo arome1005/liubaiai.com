@@ -9,7 +9,6 @@ import { resolveWorkIdFromRouteParam } from "../db/repo";
 import { shortcutModifierSymbol } from "../util/keyboardHints";
 import { EditorZenProvider } from "./EditorZenContext";
 import { GlobalCommandPalette } from "./GlobalCommandPalette";
-import { ImperativeDialogProvider } from "./ImperativeDialog";
 import { RightRailContext, type RightRailTab, type RightRailTabId } from "./RightRailContext";
 import { TopbarContext } from "./TopbarContext";
 import { Button } from "./ui/button";
@@ -296,7 +295,6 @@ export function EditorShell() {
 
   return (
     <>
-    <ImperativeDialogProvider>
     <TopbarContext.Provider value={topbarApi}>
       <RightRailContext.Provider value={rightRailApi}>
         <EditorZenProvider value={zenApi}>
@@ -445,7 +443,6 @@ export function EditorShell() {
         </EditorZenProvider>
       </RightRailContext.Provider>
     </TopbarContext.Provider>
-    </ImperativeDialogProvider>
     <EditorWritingSettingsSheet open={writingSettingsOpen} onOpenChange={setWritingSettingsOpen} />
     </>
   );

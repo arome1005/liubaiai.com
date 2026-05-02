@@ -55,6 +55,7 @@ import { PROVIDER_UI, providerLogoImgSrc } from "./ai-panel/provider-ui";
 import { OutlineGenerationDialog } from "./ai-panel/OutlineGenerationDialog";
 import { AiPanelHistoryDialog } from "./ai-panel/AiPanelHistoryDialog";
 import { AiPanelRunModeSection } from "./ai-panel/AiPanelRunModeSection";
+import { AiPanelChapterContextSection } from "./ai-panel/AiPanelChapterContextSection";
 import { LINKED_CHAPTERS_UPDATED_EVENT, loadLinkedChapters } from "../util/linked-chapters-storage";
 import {
   CHAPTER_OUTLINE_PASTE_UPDATED_EVENT,
@@ -93,6 +94,10 @@ export const AiPanel = memo(function AiPanelBase(props: {
   chapter: Chapter | null;
   chapters: Chapter[];
   chapterContent: string;
+  /**
+   * 与 `chapterContent` 并存：若父级为降低重挂载对正文做了防抖，发请求前应由此读取编辑器当前正文。
+   */
+  resolveChapterContentForAi?: () => string;
   chapterBible: {
     goalText: string;
     forbidText: string;
@@ -145,9 +150,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
 
   const ri = props.workRagInjectDefaults;
   const includeLinkedExcerpts = ri.includeLinkedExcerpts;
-  const includeRecentSummaries = ri.includeRecentSummaries;
-  const recentN = ri.recentN;
-  const neighborSummaryIncludeById = ri.neighborSummaryIncludeById;
   const chapterBibleInjectMask = ri.chapterBibleInjectMask;
   const workBibleSectionMask = ri.workBibleSectionMask;
   const currentContextMode = ri.currentContextMode;
@@ -161,12 +163,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
       ragWorkSources: typeof up === "function" ? up(ragWorkSources) : up,
     });
   };
-  const _setNeighborSummaryIncludeByIdUp = (up: SetStateAction<Record<string, boolean>>) => {
-    patchRagInject({
-      neighborSummaryIncludeById: typeof up === "function" ? up(neighborSummaryIncludeById) : up,
-    });
-  };
-  void _setNeighborSummaryIncludeByIdUp;
   const _setChapterBibleInjectMaskUp = (up: SetStateAction<Record<ChapterBibleFieldKey, boolean>>) => {
     patchRagInject({
       chapterBibleInjectMask: typeof up === "function" ? up(chapterBibleInjectMask) : up,
@@ -476,39 +472,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     return out.slice(0, 24);
   }, [draft, props.glossaryTerms]);
 
-  const neighborSummaryPoolChapters = useMemo(() => {
-    if (!props.chapter) return [];
-    const n = Math.max(0, Math.min(12, recentN));
-    if (n <= 0) return [];
-    const curOrder = props.chapter.order;
-    return [...props.chapters]
-      .filter((c) => c.order < curOrder)
-      .sort((a, b) => b.order - a.order)
-      .slice(0, n)
-      .reverse()
-      .filter((c) => (c.summary ?? "").trim());
-  }, [props.chapter, props.chapters, recentN]);
-
-  const neighborSummaryPoolCount = neighborSummaryPoolChapters.length;
-  const neighborSummaryIncludedCount = useMemo(
-    () => neighborSummaryPoolChapters.filter((c) => neighborSummaryIncludeById[c.id] !== false).length,
-    [neighborSummaryPoolChapters, neighborSummaryIncludeById],
-  );
-
-  const recentSummaryText = useMemo(() => {
-    if (!props.chapter) return "";
-    if (!includeRecentSummaries) return "";
-    if (neighborSummaryPoolChapters.length === 0) return "";
-    const lines: string[] = [];
-    for (const c of neighborSummaryPoolChapters) {
-      if (neighborSummaryIncludeById[c.id] === false) continue;
-      const s = (c.summary ?? "").trim();
-      if (!s) continue;
-      lines.push(`## ${c.title}`, s, "");
-    }
-    return lines.join("\n");
-  }, [props.chapter, includeRecentSummaries, neighborSummaryPoolChapters, neighborSummaryIncludeById]);
-
   const linkedChapters = useMemo(() => {
     void linkedChaptersTick;
     if (!props.workId || !props.chapter) return null;
@@ -585,9 +548,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
           : "",
       chapterBibleInjectMask,
       workBibleSectionMask,
-      neighborSummaryIncludedCount,
-      recentSummaryText,
-      includeRecentSummaries,
       linkedChapterSummaryText,
       linkedChapterFullText,
       linkedChapterSummaryCount: linkedChapters?.summaryChapterIds.length ?? 0,
@@ -603,7 +563,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
       currentContextMode,
       userHint: composedUserHint,
       mode: props.writingSkillMode,
-      recentN,
       chapterOutlinePaste,
       styleSamples: props.styleSampleSlices,
       glossaryTerms: glossarySlices,
@@ -628,8 +587,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     settings.includeBible,
     isCloudProvider,
     biblePreview?.text,
-    neighborSummaryIncludedCount,
-    recentSummaryText,
     linkedChapterSummaryText,
     linkedChapterFullText,
     linkedChapters?.summaryChapterIds.length,
@@ -714,8 +671,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
       privacy: settings.privacy,
       includeLinkedExcerpts,
       linkedExcerptCount: props.linkedExcerptsForChapter.length,
-      includeRecentSummaries,
-      recentN,
       currentContextMode,
       skillMode: props.writingSkillMode,
       ragEnabled,
@@ -731,8 +686,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
       studyNpcNoteChars: studyNpcText.trim().length,
       studyGlossaryMode: "chapter_pick",
       studyGlossaryPickCount: studyGlossarySlices.filter((g) => (g.term ?? "").trim()).length,
-      neighborSummaryPoolCount,
-      neighborSummaryIncludedCount,
       chapterBibleInjectMask,
       workBibleSectionMask,
       approxInjectChars,
@@ -750,8 +703,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     providerCfg.model,
     includeLinkedExcerpts,
     props.linkedExcerptsForChapter.length,
-    includeRecentSummaries,
-    recentN,
     currentContextMode,
     props.writingSkillMode,
     ragEnabled,
@@ -769,8 +720,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     studyCharacterSource,
     studyGlossarySlices,
     studyNpcText,
-    neighborSummaryPoolCount,
-    neighborSummaryIncludedCount,
     chapterBibleInjectMask,
     workBibleSectionMask,
   ]);
@@ -795,6 +744,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
     chapter: props.chapter,
     chapters: props.chapters,
     chapterContent: props.chapterContent,
+    resolveChapterContentForAi: props.resolveChapterContentForAi,
     chapterBible: props.chapterBible,
     workStyle: props.workStyle,
     linkedExcerptsForChapter: props.linkedExcerptsForChapter,
@@ -803,9 +753,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
     providerCfg,
     isCloudProvider,
     currentContextMode,
-    includeRecentSummaries,
     includeLinkedExcerpts,
-    recentN,
     chapterBibleInjectMask,
     workBibleSectionMask,
     ragEnabled,
@@ -823,11 +771,9 @@ export const AiPanel = memo(function AiPanelBase(props: {
     characters,
     relations,
     skillPresetText,
-    recentSummaryText,
     linkedChapterSummaryText,
     linkedChapterFullText,
     linkedChapters,
-    neighborSummaryIncludedCount,
     chapterOutlinePaste,
     glossarySlices,
     studyCharacterCardSlices,
@@ -868,7 +814,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
     try {
       if (!input && modeForAssemble === "draw") {
         const v = validateDrawCardRequest({
-          chapterContent: props.chapterContent ?? "",
+          chapterContent: (props.resolveChapterContentForAi?.() ?? props.chapterContent) ?? "",
           chapterSummary: props.chapter?.summary,
           isCloudProvider,
           privacy: settings.privacy,
@@ -1006,6 +952,11 @@ export const AiPanel = memo(function AiPanelBase(props: {
 
       <div className="ai-panel-body-stack">
         <AiPanelRunModeSection mode={props.writingSkillMode} onModeChange={props.onWritingSkillModeChange} />
+        <AiPanelChapterContextSection
+          mode={currentContextMode}
+          onModeChange={(m) => patchRagInject({ currentContextMode: m })}
+          disabled={props.writingSkillMode === "draw"}
+        />
 
         <section className="ai-panel-section ai-panel-section--flat" aria-label="AI 模型选择">
           <div className="flex items-center justify-between gap-2 px-0.5 py-1">
@@ -1209,7 +1160,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
             精简并重试
           </button>
           <span className="muted small" style={{ marginLeft: 8 }}>
-            减半字数上限，并暂时关闭全书锦囊、RAG、邻章概要、关联摘录；全文且本章有概要时改为概要模式。
+            减半字数上限，并暂时关闭全书锦囊、RAG、关联摘录；全文且本章有概要时改为概要模式。
           </span>
         </div>
       ) : null}

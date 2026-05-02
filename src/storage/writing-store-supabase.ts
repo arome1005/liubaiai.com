@@ -100,11 +100,11 @@ async function chunkedInsert(table: string, rows: Json[], size = 250): Promise<v
 }
 
 function refOnly(): never {
-  throw new Error("参考库仅保存在本机 IndexedDB，请使用默认 Hybrid 存储。");
+  throw new Error("藏经仅保存在本机 IndexedDB，请使用默认 Hybrid 存储。");
 }
 
 /**
- * 写作 / 本书锦囊 / 风格卡存 Supabase；不包含参考库表。
+ * 写作 / 本书锦囊 / 风格卡存 Supabase；不包含藏经表。
  * 生产环境请通过 {@link WritingStoreHybrid} 与 IndexedDB 组合使用。
  */
 export class WritingStoreSupabase implements WritingStore {

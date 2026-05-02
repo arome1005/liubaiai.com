@@ -1554,7 +1554,7 @@ export function ChatPage() {
                           <Link
                             to="/reference"
                             className="text-[11px] text-primary hover:underline"
-                            title="打开藏经参考书库"
+                            title="打开藏经"
                           >
                             来源：《{book?.title ?? "未知书目"}》
                           </Link>

@@ -608,7 +608,7 @@ export function EditorChapterSidebar(props: EditorChapterSidebarProps): React.JS
                 {inspirationOpen ? (
                   inspirationList.length === 0 ? (
                     <p className="muted small sidebar-inspiration-empty">
-                      暂无摘录。在「参考库」阅读器中划选保存后，可在此插入正文。
+                      暂无摘录。在「藏经」阅读器中划选保存后，可在此插入正文。
                     </p>
                   ) : (
                     <ul className="sidebar-inspiration-list">
@@ -622,7 +622,7 @@ export function EditorChapterSidebar(props: EditorChapterSidebarProps): React.JS
                           {ex.note ? <p className="small muted">{ex.note}</p> : null}
                           <div className="sidebar-inspiration-actions">
                             <Link className="btn ghost small" to={referenceReaderHref(ex)}>
-                              在参考库打开
+                              在藏经打开
                             </Link>
                             <button
                               type="button"

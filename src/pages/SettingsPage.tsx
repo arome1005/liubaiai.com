@@ -19,11 +19,6 @@ import { snapshotAllChaptersInLibrary } from "../db/repo";
 import { buildBackupZip, parseBackupZip } from "../storage/backup";
 import type { LineEndingMode } from "../util/lineEnding";
 import { readFictionCreationAcknowledged } from "../ai/fiction-ack";
-import {
-  readLifetimeApproxTokens,
-  readSessionApproxTokens,
-} from "../ai/sidepanel-session-tokens";
-import { listRecentDailyApproxTokens, readTodayApproxTokens } from "../ai/daily-approx-tokens";
 import { loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiSettings } from "../ai/types";
 import { BackendModelConfigModal } from "../components/BackendModelConfigModal";
@@ -149,9 +144,9 @@ const SETTINGS_NAV: readonly {
   },
   {
     id: "settings-reference",
-    label: "参考库",
+    label: "藏经",
     hint: "索引维护",
-    description: "参考库索引与自救",
+    description: "藏经索引与自救",
     icon: BookOpen,
   },
   {
@@ -210,7 +205,6 @@ export function SettingsPage() {
   const [backupReminderOn, setBackupReminderOn] = useState(() => readBackupReminderEnabled());
   const [lastBackupExportMs, setLastBackupExportMs] = useState<number | null>(() => readLastBackupExportMs());
   const [activeNav, setActiveNav] = useState<string>(() => navIdFromHash(location.hash));
-  const [sidepanelUsageTick, setSidepanelUsageTick] = useState(0);
   const [liuguangHotkey, setLiuguangHotkey] = useState<HotkeyCombo>(() => readLiuguangQuickCaptureHotkey());
   const [hotkeyMsg, setHotkeyMsg] = useState<string | null>(null);
   const [zenHotkey, setZenHotkey] = useState<HotkeyCombo>(() => readZenToggleHotkey());
@@ -220,33 +214,6 @@ export function SettingsPage() {
     authUser && typeof authUser === "object" && "email" in authUser
       ? (authUser as { email: string }).email
       : null;
-
-  useEffect(() => {
-    const bump = () => setSidepanelUsageTick((n) => n + 1);
-    const id = window.setInterval(bump, 2500);
-    const onVis = () => {
-      if (document.visibilityState === "visible") bump();
-    };
-    window.addEventListener("focus", bump);
-    document.addEventListener("visibilitychange", onVis);
-    return () => {
-      window.clearInterval(id);
-      window.removeEventListener("focus", bump);
-      document.removeEventListener("visibilitychange", onVis);
-    };
-  }, []);
-
-  const sessionApproxDisplay = useMemo(() => readSessionApproxTokens(), [sidepanelUsageTick]);
-  const lifetimeApproxDisplay = useMemo(() => readLifetimeApproxTokens(), [sidepanelUsageTick]);
-  const todayApproxDisplay = useMemo(() => readTodayApproxTokens(), [sidepanelUsageTick]);
-  const recentDailyApprox = useMemo(() => listRecentDailyApproxTokens(7), [sidepanelUsageTick]);
-  const recentDailyMax = useMemo(
-    () => Math.max(1, ...recentDailyApprox.map((d) => d.tokens)),
-    [recentDailyApprox],
-  );
-  const dailyBudget = aiSettings.dailyTokenBudget ?? 0;
-  const dailyBudgetPct =
-    dailyBudget > 0 ? Math.min(999, (todayApproxDisplay / Math.max(1, dailyBudget)) * 100) : 0;
 
   useEffect(() => {
     const h = location.hash.replace(/^#/, "");
@@ -550,14 +517,6 @@ export function SettingsPage() {
                         setAiSettings={setAiSettings}
                         setMsg={setMsg}
                         requestOpenBackend={requestOpenBackend}
-                        setSidepanelUsageTick={setSidepanelUsageTick}
-                        sessionApproxDisplay={sessionApproxDisplay}
-                        todayApproxDisplay={todayApproxDisplay}
-                        lifetimeApproxDisplay={lifetimeApproxDisplay}
-                        recentDailyApprox={recentDailyApprox}
-                        recentDailyMax={recentDailyMax}
-                        dailyBudget={dailyBudget}
-                        dailyBudgetPct={dailyBudgetPct}
                         currentEmail={currentEmail}
                       />
                     );

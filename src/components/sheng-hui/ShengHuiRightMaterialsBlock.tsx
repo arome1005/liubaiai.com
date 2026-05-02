@@ -104,7 +104,7 @@ export function ShengHuiRightMaterialsBlock(props: {
         <div className="h-0.5 shrink-0 rounded-full bg-gradient-to-r from-chart-1/45 to-primary/20" aria-hidden />
         <p className="sheng-hui-eyebrow">藏经风格参考</p>
         <p className="text-[11px] leading-relaxed text-muted-foreground/80">
-          从参考书库检索段落，学习其笔法融入创作——仅吸收风格，不引用原文，不洗稿。
+          从藏经检索段落，学习其笔法融入创作——仅吸收风格，不引用原文，不洗稿。
         </p>
         <div className="flex gap-1.5">
           <input
@@ -159,7 +159,7 @@ export function ShengHuiRightMaterialsBlock(props: {
                       checked={isSelected}
                       onChange={() => onToggleExcerpt(hit.chunkId)}
                     />
-                    <p className="min-w-0 flex-1 truncate font-medium text-foreground/80">{hit.refTitle || "参考书库"}</p>
+                    <p className="min-w-0 flex-1 truncate font-medium text-foreground/80">{hit.refTitle || "藏经"}</p>
                     <button
                       type="button"
                       className={cn(

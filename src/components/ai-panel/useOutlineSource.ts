@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   loadChapterOutlineSource,
   reduceOnManualEdit,
@@ -34,15 +34,11 @@ export function useOutlineSource(workId: string, chapterId: string | null): {
   markManual: () => void;
   markPull: () => void;
 } {
-  const currentKey = `${workId}::${chapterId ?? ""}`;
   const [source, setSource] = useState<OutlineSource>(() => readSource(workId, chapterId));
-  // 「换章节时重置」：useState 跟踪上一次 key，render 中检测变化即重置 source
-  // 这是 React 推荐写法（替代 useEffect+setState，避免 cascading render）
-  const [prevKey, setPrevKey] = useState(currentKey);
-  if (prevKey !== currentKey) {
-    setPrevKey(currentKey);
+  // 切章后同步来源状态。放在 effect，避免 render 阶段 setState 触发跨组件更新告警。
+  useEffect(() => {
     setSource(readSource(workId, chapterId));
-  }
+  }, [workId, chapterId]);
 
   const markManual = useCallback(() => {
     if (!workId || !chapterId) return;

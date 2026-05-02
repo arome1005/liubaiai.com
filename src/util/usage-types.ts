@@ -15,6 +15,8 @@ export interface UsageRecord {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /** 思考/推理 token（思考模型计费但不可见）；缺失则未披露 */
+  reasoningTokens?: number;
   source: UsageSource;
   status: "success" | "failed" | "partial";
   note?: string;

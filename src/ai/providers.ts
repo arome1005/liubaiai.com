@@ -15,7 +15,7 @@ import {
   ollamaStreamLinePayload,
   ollamaTokenUsageFromJson,
   openAiChatTextFromJson,
-  openAiStreamDataDeltaContent,
+  openAiStreamDataDeltaPayload,
   openAiStreamUsageFromDataLine,
   openAiStyleUsageFromJsonRoot,
   type OpenAiStyleUsage,
@@ -412,7 +412,28 @@ async function generateOpenAIStream(
   const dec = new TextDecoder("utf-8");
   let buf = "";
   let full = "";
+  let fullReasoning = "";
   let lastOpenAiU: OpenAiStyleUsage | null = null;
+  /**
+   * 流结束诊断：思考型模型（小米 MiMo v2.5、Doubao 思考端点等）可能把全部输出吐到
+   * `delta.reasoning_content`，`delta.content` 始终为空。此时返回 text=""，但打 warn
+   * 让开发者/用户在 console 知晓"模型这一轮只在思考、未出正文"。**不**把 reasoning 当
+   * 文本回填给上层 — 否则在多轮续写里会污染主 draft（参考之前 fallback 引发的 bug）。
+   * 上层 outline 多轮续写的「空 segment 防护」会自动跳过本轮。
+   */
+  function finalize(): AiGenerateResult {
+    if (!full.trim() && fullReasoning.trim()) {
+      try {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[${cfg.label}] content 为空但 reasoning_content 有 ${fullReasoning.length} 字符；本轮未出正文。建议重试或换非思考端点。`,
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+    return { text: full, ...finalUsageForGenerate(full, messages, lastOpenAiU) };
+  }
   // SSE: data: {...}\n\n
   while (true) {
     const { done, value } = await reader.read();
@@ -435,17 +456,20 @@ async function generateOpenAIStream(
           } catch {
             /* ignore */
           }
-          return { text: full, ...finalUsageForGenerate(full, messages, lastOpenAiU) };
+          return finalize();
         }
-        const delta = openAiStreamDataDeltaContent(data);
-        if (delta) {
-          full += delta;
-          onDelta(delta);
+        const payload = openAiStreamDataDeltaPayload(data);
+        if (payload.content) {
+          full += payload.content;
+          onDelta(payload.content);
+        }
+        if (payload.reasoning) {
+          fullReasoning += payload.reasoning;
         }
       }
     }
   }
-  return { text: full, ...finalUsageForGenerate(full, messages, lastOpenAiU) };
+  return finalize();
 }
 
 /** 与历史非流式请求一致：system 合并；其余角色拼成单条 user（多轮为 USER:/ASSISTANT: 前缀） */

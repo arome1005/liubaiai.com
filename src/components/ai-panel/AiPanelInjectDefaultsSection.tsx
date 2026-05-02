@@ -1,6 +1,5 @@
 import type { Dispatch, SetStateAction } from "react";
 import { useId } from "react";
-import type { Chapter } from "../../db/types";
 import { CHAPTER_BIBLE_FIELD_LABELS, type ChapterBibleFieldKey } from "../../ai/assemble-context";
 import { Info } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
@@ -11,16 +10,8 @@ export function AiPanelInjectDefaultsSection(props: {
   wrap?: "details" | "plain";
   includeLinkedExcerpts: boolean;
   onIncludeLinkedExcerptsChange: (v: boolean) => void;
-  includeRecentSummaries: boolean;
-  onIncludeRecentSummariesChange: (v: boolean) => void;
-  recentN: number;
-  onRecentNChange: (v: number) => void;
-  neighborSummaryPoolChapters: Chapter[];
-  neighborSummaryIncludeById: Record<string, boolean>;
-  setNeighborSummaryIncludeById: Dispatch<SetStateAction<Record<string, boolean>>>;
   chapterBibleInjectMask: Record<ChapterBibleFieldKey, boolean>;
   setChapterBibleInjectMask: Dispatch<SetStateAction<Record<ChapterBibleFieldKey, boolean>>>;
-  chapter: Chapter | null;
 }) {
   const p = props;
   const wrap = p.wrap ?? "details";
@@ -30,15 +21,15 @@ export function AiPanelInjectDefaultsSection(props: {
     <div className="ai-inject-layout">
       <section className="ai-inject-block" aria-labelledby={`${uid}-snippet`}>
         <span className="flex items-center gap-1">
-          <h4 id={`${uid}-snippet`} className="ai-inject-block__title">摘录与邻章概要</h4>
+          <h4 id={`${uid}-snippet`} className="ai-inject-block__title">摘录</h4>
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
-              <span tabIndex={0} className="inline-flex cursor-help items-center text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors outline-none [&:focus-visible]:ring-2 [&:focus-visible]:ring-ring" aria-label="摘录与邻章概要说明">
+              <span tabIndex={0} className="inline-flex cursor-help items-center text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors outline-none [&:focus-visible]:ring-2 [&:focus-visible]:ring-ring" aria-label="摘录说明">
                 <Info className="size-3" aria-hidden />
               </span>
             </TooltipTrigger>
             <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[min(92vw,18rem)] text-xs leading-relaxed">
-              控制「本章关联摘录」与「最近几章概要」是否进入上下文。
+              控制「本章关联摘录」是否进入上下文。前文相关章节请用「知识库 · 关联章节」面板手动选取。
             </TooltipContent>
           </Tooltip>
         </span>
@@ -52,65 +43,6 @@ export function AiPanelInjectDefaultsSection(props: {
           />
           <span>注入本章关联摘录</span>
         </label>
-
-        <div className="ai-inject-row ai-inject-row--split">
-          <label className="ai-panel-check row row--check" style={{ margin: 0 }}>
-            <input
-              name="includeRecentSummaries"
-              type="checkbox"
-              checked={p.includeRecentSummaries}
-              onChange={(e) => p.onIncludeRecentSummariesChange(e.target.checked)}
-            />
-            <span>注入最近章节概要</span>
-          </label>
-          <label className="ai-inject-n-label">
-            <span className="muted small">最近 N 章</span>
-            <input
-              type="number"
-              name="recentN"
-              min={0}
-              max={12}
-              value={p.recentN}
-              onChange={(e) => p.onRecentNChange(Number(e.target.value) || 0)}
-              className="ai-inject-n-input"
-              title="最近 N 章"
-            />
-          </label>
-        </div>
-
-        {p.includeRecentSummaries && p.neighborSummaryPoolChapters.length > 0 ? (
-          <div className="ai-inject-subbox">
-            <span className="flex items-center gap-1">
-              <div className="ai-inject-subbox__cap muted small">邻章池</div>
-              <Tooltip delayDuration={300}>
-                <TooltipTrigger asChild>
-                  <span tabIndex={0} className="inline-flex cursor-help items-center text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors outline-none [&:focus-visible]:ring-2 [&:focus-visible]:ring-ring" aria-label="邻章池说明">
-                    <Info className="size-[0.65rem]" aria-hidden />
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[16rem] text-xs leading-relaxed">
-                  仅勾选的章节概要会注入上下文。
-                </TooltipContent>
-              </Tooltip>
-            </span>
-            <div className="ai-inject-scroll-list">
-              {p.neighborSummaryPoolChapters.map((c) => (
-                <label key={c.id} className="ai-panel-check row row--check ai-inject-check-compact" style={{ margin: 0 }}>
-                  <input
-                    type="checkbox"
-                    checked={p.neighborSummaryIncludeById[c.id] !== false}
-                    onChange={(e) =>
-                      p.setNeighborSummaryIncludeById((prev) => ({ ...prev, [c.id]: e.target.checked }))
-                    }
-                  />
-                  <span className="small">{c.title}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-        ) : p.includeRecentSummaries && p.chapter ? (
-          <p className="ai-inject-empty-hint muted small">当前窗口内尚无已填概要的章节；可先为前几章写好概要。</p>
-        ) : null}
       </section>
 
       <section className="ai-inject-block" aria-labelledby={`${uid}-chapter`}>

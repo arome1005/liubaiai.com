@@ -1,5 +1,5 @@
 /**
- * 参考库正文：识别常见网文章节标题行（Parser 层，与分块存储配合）。
+ * 藏经正文：识别常见网文章节标题行（Parser 层，与分块存储配合）。
  * 与 `ReferenceChunk` 的 `isChapterHead` / `chapterTitle` 及 `referenceChapterHeads` 表一致。
  */
 import { CHAPTER_HEAD_LINE_REGEX } from "../util/chapter-heading-pattern";

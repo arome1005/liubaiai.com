@@ -85,9 +85,9 @@ export type AiSettings = {
     allowRecentSummaries: boolean;
     /** 允许上传：本书锦囊（导出 Markdown） */
     allowBible: boolean;
-    /** 允许上传：本章关联摘录（参考库） */
+    /** 允许上传：本章关联摘录（藏经） */
     allowLinkedExcerpts: boolean;
-    /** 允许上传：参考库检索片段（RAG） */
+    /** 允许上传：藏经检索片段（RAG） */
     allowRagSnippets: boolean;
   };
   /** 将本书锦囊导出注入提示词（可能很长） */
@@ -157,6 +157,11 @@ export type AiTokenUsage = {
   outputTokens: number;
   totalTokens: number;
   source: "api" | "approx";
+  /**
+   * 思考/推理 token（仅厂商 API 单独披露时有值）。用于解释 `totalTokens > inputTokens + outputTokens`
+   * 的差额，让用户看见思考模型的隐藏费用。粗估口径下永远 undefined。
+   */
+  reasoningTokens?: number;
 };
 
 export type AiGenerateResult = {

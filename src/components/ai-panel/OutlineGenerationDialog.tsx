@@ -88,12 +88,10 @@ export const OutlineGenerationDialog = memo(function OutlineGenerationDialog(pro
     if (justInsertedTimerRef.current) window.clearTimeout(justInsertedTimerRef.current);
   }, []);
 
-  // 弹窗关闭时清掉「已插入 ✓」短暂态：useState 跟踪上一次 open，render 中检测变化即重置
-  const [prevOpen, setPrevOpen] = useState(open);
-  if (prevOpen !== open) {
-    setPrevOpen(open);
-    if (!open && justInsertedKind !== null) setJustInsertedKind(null);
-  }
+  // 弹窗关闭时清掉「已插入 ✓」短暂态；避免 render 阶段 setState。
+  useEffect(() => {
+    if (!open) setJustInsertedKind(null);
+  }, [open]);
 
   // 流式时把 textarea 滚到底部
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);

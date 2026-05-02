@@ -8874,7 +8874,7 @@ select {
   color: #fbbf24;
 }
 
-/* 藏经 / 参考库（UI-4，对照 v2 藏经阁信息架构） */
+/* 藏经（UI-4，对照 v2 藏经阁信息架构） */
 .reference-page-header {
   display: flex;
   flex-wrap: wrap;
@@ -9074,7 +9074,7 @@ select {
   max-width: none;
 }
 
-/* 参考库批量导入进度 */
+/* 藏经批量导入进度 */
 .reference-import-progress {
   margin: 0.75rem 0 0;
   max-width: 42rem;
@@ -9111,7 +9111,7 @@ select {
   transition: width 0.15s ease;
 }
 
-/* 参考库列表 */
+/* 藏经列表 */
 .reference-list {
   list-style: none;
   padding: 0;
@@ -9308,7 +9308,7 @@ select {
   background: #1c1c1c;
 }
 
-/* 参考库：双栏 + 阅读器 */
+/* 藏经：双栏 + 阅读器 */
 .reference-page--split .reference-page-layout {
   display: flex;
   align-items: stretch;
@@ -9708,18 +9708,6 @@ select {
   border-color: color-mix(in srgb, var(--primary) 40%, transparent);
   color: var(--primary);
   font-weight: 600;
-}
-
-/* Bar chart budget dashed line */
-.ai-bar-budget-line {
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: 0;
-  border-top: 1.5px dashed var(--destructive);
-  opacity: 0.5;
-  pointer-events: none;
-  z-index: 1;
 }
 
 .sidebar-glossary-hits {

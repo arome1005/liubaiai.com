@@ -1,13 +1,13 @@
 /**
  * 步 24：本书锦囊导出 / 章节正文 **运行时** 分块 + 混合打分（无持久倒排表）。
- * 参考库仍用 IndexedDB `referenceChunks` + `referenceTokenPostings`。
+ * 藏经仍用 IndexedDB `referenceChunks` + `referenceTokenPostings`。
  */
 import type { Chapter, ReferenceChunk, ReferenceSearchHit } from "../db/types";
 import { buildBibleMarkdownExport } from "../storage/bible-markdown";
 import { refineHybridHit, tokenizeQuery, MAX_HYBRID_CHUNKS_TO_SCORE } from "../storage/reference-search-index";
 import { getWritingStore } from "../storage/instance";
 
-/** 与参考库导入分块不同：本书内检索用较小块以提高定位粒度 */
+/** 与藏经导入分块不同：本书内检索用较小块以提高定位粒度 */
 export const WORK_RAG_CHUNK_CHAR_TARGET = 4096;
 
 /** 单请求内正文块池上限（控制内存与耗时） */
@@ -19,7 +19,7 @@ export type WritingRagSources = {
   workManuscript: boolean;
 };
 
-/** 默认全关：避免未勾选时仍检索参考库消耗 token；启用 RAG 后按需勾选范围 */
+/** 默认全关：避免未勾选时仍检索藏经消耗 token；启用 RAG 后按需勾选范围 */
 export const DEFAULT_WRITING_RAG_SOURCES: WritingRagSources = {
   referenceLibrary: false,
   workBibleExport: false,
@@ -237,7 +237,7 @@ function allocateSlots(k: number, sources: WritingRagSources): { ref: number; bi
 }
 
 /**
- * 多源合并：参考库 hybrid + 本书锦囊分块 + 本书正文分块；顺序为 **参考库 → 锦囊 → 正文**，再整体 `slice(0, limit)`。
+ * 多源合并：藏经 hybrid + 本书锦囊分块 + 本书正文分块；顺序为 **藏经 → 锦囊 → 正文**，再整体 `slice(0, limit)`。
  */
 export async function searchWritingRagMerged(args: {
   workId: string;

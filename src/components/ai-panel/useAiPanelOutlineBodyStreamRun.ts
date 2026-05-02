@@ -86,6 +86,15 @@ export function useAiPanelOutlineBodyStreamRun(
         if (!r.success) return r;
 
         const seg = (r.segmentText ?? "").trim();
+        // 空 segment 防护：模型本轮未输出（或仅输出 reasoning_content fallback 提示）时，
+        // 不更新 fullDraft、不发起新一轮（再发也是相同上下文，浪费配额）。最后一轮仍走收尾。
+        if (!seg) {
+          if (isLastPlanned) {
+            onPostAllRounds(fullDraft);
+            return { success: true, segmentText: lastSegmentText };
+          }
+          continue;
+        }
         fullDraft += seg;
         lastSegmentText = r.segmentText;
 

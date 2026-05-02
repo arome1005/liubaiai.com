@@ -20,7 +20,7 @@ import { TuiyanReferenceRagSearchErrorBanner } from "./TuiyanReferenceRagSearchE
 export interface TuiyanReferencePanelProps {
   /** 当前作品已关联的书目 id 列表 */
   linkedRefWorkIds: string[]
-  /** 全部参考库书目（已加载） */
+  /** 全部藏经书目（已加载） */
   refLibrary: ReferenceLibraryEntry[]
   /** 当前选中节点的关键词（自动预填搜索框） */
   currentNodeKeywords: string

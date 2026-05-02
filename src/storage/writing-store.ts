@@ -89,7 +89,7 @@ export interface WritingStore {
   addChapterSnapshot(chapterId: string, content: string): Promise<void>;
   deleteChapterSnapshot(snapshotId: string): Promise<void>;
 
-  /** 参考库（3.x）：列表元数据 */
+  /** 藏经（3.x）：列表元数据 */
   listReferenceLibrary(): Promise<ReferenceLibraryEntry[]>;
   getReferenceLibraryEntry(id: string): Promise<ReferenceLibraryEntry | undefined>;
   /** 分块写入，支持百万字级 .txt；可选 onProgress 用于大文件索引阶段 UI */
@@ -118,7 +118,7 @@ export interface WritingStore {
   syncChapterMetadataForRefWork(refWorkId: string): Promise<void>;
   getReferenceChunk(chunkId: string): Promise<ReferenceChunk | undefined>;
 
-  /** 参考库全文检索：`strict` 多词 AND + 整句字面量；`hybrid` 多词 OR + 相关度排序（步 40） */
+  /** 藏经全文检索：`strict` 多词 AND + 整句字面量；`hybrid` 多词 OR + 相关度排序（步 40） */
   searchReferenceLibrary(
     query: string,
     opts?: { refWorkId?: string; limit?: number; mode?: "strict" | "hybrid" },
@@ -150,11 +150,11 @@ export interface WritingStore {
   setExcerptTags(excerptId: string, tagIds: string[]): Promise<void>;
   deleteReferenceExcerpt(id: string): Promise<void>;
 
-  /** 仅重建参考库倒排索引（不动正文分块与元数据） */
+  /** 仅重建藏经倒排索引（不动正文分块与元数据） */
   rebuildAllReferenceSearchIndex(
     onProgress?: (p: { phase: string; percent: number; label?: string }) => void,
   ): Promise<void>;
-  /** 清空全部参考库数据（索引、分块、摘录；不影响作品正文） */
+  /** 清空全部藏经数据（索引、分块、摘录；不影响作品正文） */
   clearAllReferenceLibraryData(): Promise<void>;
 
   /** 第 4 组：一致性护栏 / 锦囊 */

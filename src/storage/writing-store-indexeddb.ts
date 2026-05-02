@@ -94,7 +94,7 @@ export class WritingStoreIndexedDB implements WritingStore {
   }
 
   /**
-   * v10：为已存在的参考库补全章节检测、referenceChapterHeads 与书目 chapterHeadCount（一次性）。
+   * v10：为已存在的藏经补全章节检测、referenceChapterHeads 与书目 chapterHeadCount（一次性）。
    */
   private async ensureReferenceChapterMetadataV10(): Promise<void> {
     const db = getDB();
@@ -2233,7 +2233,7 @@ export class WritingStoreIndexedDB implements WritingStore {
   }
 
   /**
-   * Hybrid 存储：合并导入时仅把参考库相关行写入 IndexedDB（写作侧已由 Supabase 写入）。
+   * Hybrid 存储：合并导入时仅把藏经相关行写入 IndexedDB（写作侧已由 Supabase 写入）。
    */
   async applyRemappedMergeReferenceOnly(m: MergeRemapResult): Promise<void> {
     const db = getDB();
@@ -2262,7 +2262,7 @@ export class WritingStoreIndexedDB implements WritingStore {
   }
 
   /**
-   * Hybrid：全量导入时仅替换参考库相关表（写作数据已由 Supabase 写入）。
+   * Hybrid：全量导入时仅替换藏经相关表（写作数据已由 Supabase 写入）。
    */
   async importReferenceOnlyReplace(data: {
     referenceLibrary?: ReferenceLibraryEntry[];

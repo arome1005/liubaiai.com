@@ -35,6 +35,14 @@ export function summarizeInjectDefaults(ri: AiPanelWorkRagInjectDefaults, includ
   const bits: string[] = [];
   bits.push(includeBibleGlobal ? "锦囊开" : "锦囊关");
   bits.push(ri.includeLinkedExcerpts ? "摘录开" : "摘录关");
-  bits.push(ri.includeRecentSummaries ? `邻章×${ri.recentN}` : "邻章关");
+  const ctx =
+    ri.currentContextMode === "full"
+      ? "正文全文"
+      : ri.currentContextMode === "summary"
+        ? "正文概要"
+        : ri.currentContextMode === "selection"
+          ? "正文选区"
+          : "正文不注";
+  bits.push(ctx);
   return bits.join(" · ");
 }

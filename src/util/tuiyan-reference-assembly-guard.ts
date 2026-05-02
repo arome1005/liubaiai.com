@@ -13,7 +13,7 @@ export function collectReferenceAssemblyWarnings(args: {
   const missingN = args.linkedRefWorkIds.filter((id) => !has.has(id)).length
   if (missingN === 0) return []
   return [
-    `装配提醒：有 ${missingN} 本已关联书在「当前已加载的参考库列表」中未找到，摘要里可能显示「未命名」；可尝试刷新页或到藏经页确认。`,
+    `装配提醒：有 ${missingN} 本已关联书在「当前已加载的藏经列表」中未找到，摘要里可能显示「未命名」；可尝试刷新页或到藏经页确认。`,
   ]
 }
 

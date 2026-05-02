@@ -40,6 +40,11 @@ interface UseAiPanelContextAssemblyArgs {
   chapter: Chapter | null;
   chapters: Chapter[];
   chapterContent: string;
+  /**
+   * 若父级对正文做了防抖后再传入 `chapterContent`，此处应在发请求前调用以拿到编辑器最新正文
+   * （避免用户删改后立即续写仍装配旧段）。
+   */
+  resolveChapterContentForAi?: () => string;
   chapterBible: {
     goalText: string;
     forbidText: string;
@@ -58,9 +63,7 @@ interface UseAiPanelContextAssemblyArgs {
 
   // —— 注入默认（来自 workRagInjectDefaults） —— //
   currentContextMode: WritingContextMode;
-  includeRecentSummaries: boolean;
   includeLinkedExcerpts: boolean;
-  recentN: number;
   chapterBibleInjectMask: Record<ChapterBibleFieldKey, boolean>;
   workBibleSectionMask: Record<string, boolean>;
   ragEnabled: boolean;
@@ -85,11 +88,9 @@ interface UseAiPanelContextAssemblyArgs {
   characters: string;
   relations: string;
   skillPresetText: string;
-  recentSummaryText: string;
   linkedChapterSummaryText: string;
   linkedChapterFullText: string;
   linkedChapters: { summaryChapterIds: string[]; fullChapterIds: string[] } | null;
-  neighborSummaryIncludedCount: number;
 
   // —— 章纲 / 书斋 —— //
   chapterOutlinePaste: string;
@@ -127,6 +128,7 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
     chapter,
     chapters,
     chapterContent,
+    resolveChapterContentForAi,
     chapterBible,
     workStyle,
     linkedExcerptsForChapter,
@@ -135,9 +137,7 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
     providerCfg,
     isCloudProvider,
     currentContextMode,
-    includeRecentSummaries,
     includeLinkedExcerpts,
-    recentN,
     chapterBibleInjectMask,
     workBibleSectionMask,
     ragEnabled,
@@ -155,11 +155,9 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
     characters,
     relations,
     skillPresetText,
-    recentSummaryText,
     linkedChapterSummaryText,
     linkedChapterFullText,
     linkedChapters,
-    neighborSummaryIncludedCount,
     chapterOutlinePaste,
     glossarySlices,
     studyCharacterCardSlices,
@@ -185,10 +183,6 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
       const effIncludeBible =
         ov?.includeBible !== undefined ? ov.includeBible : settings.includeBible;
       const effRag = ov?.ragEnabled !== undefined ? ov.ragEnabled : ragEnabled;
-      const effRecent =
-        ov?.includeRecentSummaries !== undefined
-          ? ov.includeRecentSummaries
-          : includeRecentSummaries;
       const effLinked =
         ov?.includeLinkedExcerpts !== undefined
           ? ov.includeLinkedExcerpts
@@ -245,7 +239,6 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
         }
       }
 
-      const recentForAssemble = effRecent ? recentSummaryText : "";
       const linkedForAssemble = effLinked
         ? linkedExcerptsForChapter.map((e) => ({ refTitle: e.refTitle, text: e.text }))
         : [];
@@ -253,6 +246,7 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
       const linkedChapterFullForAssemble = linkedChapterFullText;
 
       const chapterOutlineForAssemble = opts.outlineOverride ?? chapterOutlinePaste;
+      const effectiveChapterContent = resolveChapterContentForAi?.() ?? chapterContent;
       const assembleInput: WritingSidepanelAssembleInput = {
         workStyle,
         tagProfileText,
@@ -272,25 +266,21 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
         privacy: settings.privacy,
         includeBible: effIncludeBible,
         bibleMarkdown: bibleForPrompt,
-        recentSummaryText: recentForAssemble,
-        includeRecentSummaries: effRecent,
         linkedChapterSummaryText: linkedChapterSummariesForAssemble,
         linkedChapterFullText: linkedChapterFullForAssemble,
         linkedChapterSummaryCount: linkedChapters?.summaryChapterIds.length ?? 0,
         linkedChapterFullCount: linkedChapters?.fullChapterIds.length ?? 0,
-        neighborSummaryIncludedCount,
         ragEnabled: effRag,
         ragQuery,
         ragK,
         ragHits: ragHitsForRequest,
         ragSources: ragWorkSources,
-        chapterContent,
+        chapterContent: effectiveChapterContent,
         chapterSummary: chapter.summary,
         selectedText,
         currentContextMode: effCtxMode,
         userHint: composedUserHint,
         mode: opts.mode,
-        recentN,
         chapterOutlinePaste: chapterOutlineForAssemble,
         styleSamples: styleSampleSlices,
         glossaryTerms: glossarySlices,
@@ -314,6 +304,7 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
       chapter,
       chapters,
       chapterContent,
+      resolveChapterContentForAi,
       chapterBible,
       workStyle,
       linkedExcerptsForChapter,
@@ -322,9 +313,7 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
       providerCfg,
       isCloudProvider,
       currentContextMode,
-      includeRecentSummaries,
       includeLinkedExcerpts,
-      recentN,
       chapterBibleInjectMask,
       workBibleSectionMask,
       ragEnabled,
@@ -342,11 +331,9 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
       characters,
       relations,
       skillPresetText,
-      recentSummaryText,
       linkedChapterSummaryText,
       linkedChapterFullText,
       linkedChapters,
-      neighborSummaryIncludedCount,
       chapterOutlinePaste,
       glossarySlices,
       studyCharacterCardSlices,

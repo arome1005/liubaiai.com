@@ -35,7 +35,7 @@ import { WritingStoreIndexedDB } from "./writing-store-indexeddb";
 import { WritingStoreSupabase } from "./writing-store-supabase";
 
 /**
- * Web + Supabase：作品 / 章节 / 本书锦囊 / 风格卡走云端；参考库（藏经）仍 IndexedDB。
+ * Web + Supabase：作品 / 章节 / 本书锦囊 / 风格卡走云端；藏经仍 IndexedDB。
  */
 export class WritingStoreHybrid implements WritingStore {
   private readonly local = new WritingStoreIndexedDB();

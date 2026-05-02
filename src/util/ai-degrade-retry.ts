@@ -19,12 +19,11 @@ export type AiRunContextOverrides = {
   includeBible?: boolean;
   ragEnabled?: boolean;
   currentContextMode?: WritingContextMode;
-  includeRecentSummaries?: boolean;
   includeLinkedExcerpts?: boolean;
 };
 
 /**
- * 构建一轮「精简重试」覆盖：减半字数上限（下限 8000）、关全书锦囊/RAG/邻章概要/关联摘录；
+ * 构建一轮「精简重试」覆盖：减半字数上限（下限 8000）、关全书锦囊/RAG/关联摘录；
  * 若当前为全文注入且本章有概要，则改为概要注入。
  */
 export function buildContextDegradeOverrides(args: {
@@ -37,7 +36,6 @@ export function buildContextDegradeOverrides(args: {
     maxContextChars: half,
     includeBible: false,
     ragEnabled: false,
-    includeRecentSummaries: false,
     includeLinkedExcerpts: false,
   };
   if (args.currentContextMode === "full" && args.hasChapterSummary) {

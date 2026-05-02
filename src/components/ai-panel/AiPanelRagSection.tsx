@@ -82,7 +82,7 @@ export function AiPanelRagSection(props: {
               </span>
             </TooltipTrigger>
             <TooltipContent side="top" align="start" sideOffset={6} className="max-w-[min(92vw,18rem)] text-xs leading-relaxed">
-              <p className="mb-1.5">从勾选来源检索片段注入上下文：藏经 · 参考库、本书 · 锦囊导出（分块）、本书 · 正文。</p>
+              <p className="mb-1.5">从勾选来源检索片段注入上下文：藏经、本书 · 锦囊导出（分块）、本书 · 正文。</p>
               <p>启用检索但未勾选任何范围时，不会产生检索片段。</p>
             </TooltipContent>
           </Tooltip>
@@ -97,7 +97,7 @@ export function AiPanelRagSection(props: {
               p.setRagWorkSources((s) => ({ ...s, referenceLibrary: checked }));
             }}
           />
-          <span>藏经 · 参考库</span>
+          <span>藏经</span>
         </label>
         <label className="ai-panel-check row row--check">
           <input
@@ -253,7 +253,7 @@ export function AiPanelRagSection(props: {
                       {isRuntime ? (
                         <span
                           className="rr-link small"
-                          title="本书运行时检索命中（无参考库深链）"
+                          title="本书运行时检索命中（无藏经深链）"
                           style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                         >
                           {h.refTitle}
@@ -269,7 +269,7 @@ export function AiPanelRagSection(props: {
                           })}
                           target="_blank"
                           rel="noreferrer"
-                          title="在参考库打开（新标签页）"
+                          title="在藏经打开（新标签页）"
                           style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                         >
                           {h.refTitle} · 段 {h.ordinal + 1}
@@ -321,7 +321,7 @@ export function AiPanelRagSection(props: {
             </ul>
           </>
         ) : (
-          <p className="muted small">暂无命中。你可以换关键词，或先去「参考库」确认已导入原著。</p>
+          <p className="muted small">暂无命中。你可以换关键词，或先去「藏经」确认已导入原著。</p>
         )
       ) : (
         <p className="muted small">用于把相关原文片段带进本次生成，减少胡编与设定漂移。</p>

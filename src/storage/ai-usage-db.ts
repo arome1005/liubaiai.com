@@ -20,6 +20,12 @@ export type AiUsageEventRow = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
+  /**
+   * 厂商单独披露的「思考/推理」token（如 Gemini `thoughtsTokenCount`、OpenAI 兼容
+   * `completion_tokens_details.reasoning_tokens`）。已计入 `totalTokens`，单列出来供用户看见
+   * 隐藏推理费占比。云端 schema 暂未加列，跨浏览器同步过来的旧记录此字段为 undefined。
+   */
+  reasoningTokens?: number;
   source: "api" | "approx";
   status: "success" | "failed" | "partial";
   workId: string | null;

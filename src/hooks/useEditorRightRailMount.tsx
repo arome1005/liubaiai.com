@@ -14,6 +14,7 @@ interface UseEditorRightRailMountArgs {
   activeChapter: AiPanelProps["chapter"];
   chapters: AiPanelProps["chapters"];
   aiPanelContent: AiPanelProps["chapterContent"];
+  resolveChapterContentForAi: AiPanelProps["resolveChapterContentForAi"];
   chapterBibleFields: AiPanelProps["chapterBible"];
   glossaryTerms: AiPanelProps["glossaryTerms"];
   bibleCharacters: AiPanelProps["bibleCharacters"];
@@ -58,6 +59,7 @@ export function useEditorRightRailMount(args: UseEditorRightRailMountArgs) {
     activeChapter,
     chapters,
     aiPanelContent,
+    resolveChapterContentForAi,
     chapterBibleFields,
     glossaryTerms,
     bibleCharacters,
@@ -119,6 +121,7 @@ export function useEditorRightRailMount(args: UseEditorRightRailMountArgs) {
         chapter={activeChapter}
         chapters={chapters}
         chapterContent={aiPanelContent}
+        resolveChapterContentForAi={resolveChapterContentForAi}
         chapterBible={chapterBibleFields}
         glossaryTerms={glossaryTerms}
         bibleCharacters={bibleCharacters}

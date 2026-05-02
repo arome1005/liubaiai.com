@@ -113,23 +113,6 @@ export function useWorkAiContext(workId: string | null) {
     setWorkAiRagInjectDefaults((prev) => ({ ...prev, ...patch }));
   }, []);
 
-  const syncNeighborSummaryIncludeByIds = useCallback((ids: string[]) => {
-    setWorkAiRagInjectDefaults((prev) => {
-      const next: Record<string, boolean> = {};
-      for (const id of ids) {
-        next[id] = prev.neighborSummaryIncludeById[id] !== false;
-      }
-      const prevKeys = Object.keys(prev.neighborSummaryIncludeById);
-      if (
-        prevKeys.length === ids.length &&
-        ids.every((id) => prev.neighborSummaryIncludeById[id] === next[id])
-      ) {
-        return prev;
-      }
-      return { ...prev, neighborSummaryIncludeById: next };
-    });
-  }, []);
-
   const refreshStudyLibrary = useCallback(async () => {
     if (!workId) return;
     const [chars, gloss] = await Promise.all([listBibleCharacters(workId), listBibleGlossaryTerms(workId)]);
@@ -186,7 +169,6 @@ export function useWorkAiContext(workId: string | null) {
     patchWorkAiWritingVars,
     workAiRagInjectDefaults,
     patchWorkAiRagInjectDefaults,
-    syncNeighborSummaryIncludeByIds,
     refreshStudyLibrary,
   };
 }

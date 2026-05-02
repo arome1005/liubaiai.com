@@ -555,7 +555,7 @@ export function RefRightPanel(props: {
             ))}
           </div>
         ) : props.linked.length === 0 ? (
-          <p className="muted small">暂无。本章可在"参考库"阅读器划选保存并关联。</p>
+          <p className="muted small">暂无。本章可在「藏经」阅读器划选保存并关联。</p>
         ) : (
           <>
             <input

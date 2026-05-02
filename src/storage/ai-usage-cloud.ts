@@ -59,6 +59,13 @@ function payloadToRow(r: Record<string, unknown>): AiUsageEventRow | null {
     contextInputBuckets = rawBuckets as AiUsageEventRow["contextInputBuckets"];
   }
 
+  // 前向兼容：若 Supabase 已加 `reasoning_tokens` 列就读，未加则保持 undefined
+  const rawReasoning = r.reasoning_tokens;
+  const reasoningTokens =
+    typeof rawReasoning === "number" && Number.isFinite(rawReasoning) && rawReasoning >= 0
+      ? Math.floor(rawReasoning)
+      : undefined;
+
   return {
     id: r.id,
     ts: r.ts,
@@ -69,6 +76,7 @@ function payloadToRow(r: Record<string, unknown>): AiUsageEventRow | null {
     inputTokens: r.input_tokens,
     outputTokens: r.output_tokens,
     totalTokens: r.total_tokens,
+    ...(reasoningTokens != null ? { reasoningTokens } : {}),
     source: r.source,
     status: r.status,
     workId: typeof r.work_id === "string" ? r.work_id : null,

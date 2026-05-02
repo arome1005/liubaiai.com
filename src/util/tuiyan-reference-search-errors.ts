@@ -1,5 +1,5 @@
 /**
- * 参考库段落检索失败时，给用户看的短句（不暴露堆栈；满足 §5 规则 4「显式降级+轻提示」）。
+ * 藏经段落检索失败时，给用户看的短句（不暴露堆栈；满足 §5 规则 4「显式降级+轻提示」）。
  */
 export function formatTuiyanReferenceRagErrorMessage(err: unknown): string {
   if (err instanceof Error) {

@@ -46,7 +46,7 @@ export class LiubaiDB extends Dexie {
   volumes!: Table<Volume, string>;
   meta!: Table<{ key: string; value: unknown }, string>;
   chapterSnapshots!: Table<ChapterSnapshot, string>;
-  /** 第 3 组参考库：原著元数据（Dexie 表名 camelCase，与路线图「reference_library」对应） */
+  /** 第 3 组藏经：原著元数据（Dexie 表名 camelCase，与路线图「reference_library」对应） */
   referenceLibrary!: Table<ReferenceLibraryEntry, string>;
   referenceChunks!: Table<ReferenceChunk, string>;
   referenceTokenPostings!: Table<ReferenceTokenPosting, string>;
@@ -54,7 +54,7 @@ export class LiubaiDB extends Dexie {
   /** 3.5 摘录标签（全局） */
   referenceTags!: Table<ReferenceTag, string>;
   referenceExcerptTags!: Table<ReferenceExcerptTag, string>;
-  /** 参考库章节标题行索引（与 ReferenceChunk 章节检测一致） */
+  /** 藏经章节标题行索引（与 ReferenceChunk 章节检测一致） */
   referenceChapterHeads!: Table<ReferenceChapterHead, string>;
   /** 第 4 组 一致性护栏 / 锦囊 */
   bibleCharacters!: Table<BibleCharacter, string>;

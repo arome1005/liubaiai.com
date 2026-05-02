@@ -14,7 +14,6 @@ import type {
   AiPanelWorkWritingVars,
   AiPanelWorkWritingVarsPatch,
 } from "./ai-panel/types";
-import { neighborSummaryPoolChaptersForWritingPanel } from "../util/neighbor-summary-pool";
 import {
   summarizeInjectDefaults,
   summarizeRagDefaults,
@@ -49,11 +48,6 @@ export function WritingSettingsRightPanel(props: {
     window.addEventListener(AI_SETTINGS_UPDATED_EVENT, handler);
     return () => window.removeEventListener(AI_SETTINGS_UPDATED_EVENT, handler);
   }, []);
-
-  const neighborPool = useMemo(
-    () => neighborSummaryPoolChaptersForWritingPanel(props.chapters, props.chapter, ri.recentN),
-    [props.chapters, props.chapter, ri.recentN],
-  );
 
   const emptyRagExcluded = useRef(new Set<string>()).current;
   const noopSetRagExcluded = useCallback(() => {}, []);
@@ -108,7 +102,7 @@ export function WritingSettingsRightPanel(props: {
       </div>
 
       <div id="ws-section-rag" className="ws-section-group flex scroll-mt-[4.5rem] flex-col gap-2">
-        <WritingSettingsGroupLabel hint="检索增强（RAG）：开关、检索范围与 top-k。上下文注入：本书锦囊、本章摘录与邻章概要、本章锦囊字段等默认是否进入生成上下文。">
+        <WritingSettingsGroupLabel hint="检索增强（RAG）：开关、检索范围与 top-k。上下文注入：本书锦囊、本章摘录、本章锦囊字段等默认是否进入生成上下文。">
           检索与注入
         </WritingSettingsGroupLabel>
         <WritingSettingsDisclosure
@@ -148,7 +142,7 @@ export function WritingSettingsRightPanel(props: {
         </WritingSettingsDisclosure>
         <WritingSettingsDisclosure
           title="上下文注入 · 本书默认"
-          description="锦囊、摘录、邻章概要与本章字段"
+          description="锦囊、摘录与本章字段"
           badge={badgeInject}
           icon={<Layers />}
           open={sectionOpen.inject}
@@ -176,24 +170,12 @@ export function WritingSettingsRightPanel(props: {
             wrap="plain"
             includeLinkedExcerpts={ri.includeLinkedExcerpts}
             onIncludeLinkedExcerptsChange={(v) => props.onWorkRagInjectDefaultsChange({ includeLinkedExcerpts: v })}
-            includeRecentSummaries={ri.includeRecentSummaries}
-            onIncludeRecentSummariesChange={(v) => props.onWorkRagInjectDefaultsChange({ includeRecentSummaries: v })}
-            recentN={ri.recentN}
-            onRecentNChange={(n) => props.onWorkRagInjectDefaultsChange({ recentN: n })}
-            neighborSummaryPoolChapters={neighborPool}
-            neighborSummaryIncludeById={ri.neighborSummaryIncludeById}
-            setNeighborSummaryIncludeById={(up) =>
-              props.onWorkRagInjectDefaultsChange({
-                neighborSummaryIncludeById: typeof up === "function" ? up(ri.neighborSummaryIncludeById) : up,
-              })
-            }
             chapterBibleInjectMask={ri.chapterBibleInjectMask}
             setChapterBibleInjectMask={(up) =>
               props.onWorkRagInjectDefaultsChange({
                 chapterBibleInjectMask: typeof up === "function" ? up(ri.chapterBibleInjectMask) : up,
               })
             }
-            chapter={props.chapter}
           />
         </WritingSettingsDisclosure>
       </div>

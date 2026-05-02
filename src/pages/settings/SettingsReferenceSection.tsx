@@ -1,5 +1,5 @@
 /**
- * 参考库 section：重建索引 + 清空参考库。
+ * 藏经 section：重建索引 + 清空藏经数据。
  */
 import { Button } from "../../components/ui/button";
 import { clearAllReferenceLibraryData, rebuildAllReferenceSearchIndex } from "../../db/repo";
@@ -23,9 +23,9 @@ export function SettingsReferenceSection({
   return (
     <div id="settings-reference" className="space-y-4">
       <SCard>
-        <SHead title="参考库维护" sub="仅作用于参考库（导入的原著与摘录），不会删除作品正文。" />
+        <SHead title="藏经维护" sub="仅作用于藏经（导入的原著与摘录），不会删除作品正文。" />
         <p className="mb-3 text-xs text-muted-foreground">
-          若升级后检索异常，可先重建索引；仍异常再考虑清空参考库后重新导入。
+          若升级后检索异常，可先重建索引；仍异常再考虑清空藏经后重新导入。
         </p>
         <div className="flex flex-wrap gap-2">
           <Button
@@ -41,7 +41,7 @@ export function SettingsReferenceSection({
                     setRefMaintainPct(p.percent);
                     setRefMaintainLabel(p.label ?? "");
                   });
-                  setMsg("参考库索引已重建。");
+                  setMsg("藏经索引已重建。");
                 } catch (e) {
                   setMsg(e instanceof Error ? e.message : "重建失败");
                 } finally {
@@ -51,25 +51,25 @@ export function SettingsReferenceSection({
               })();
             }}
           >
-            重建参考库索引
+            重建藏经索引
           </Button>
           <Button
             type="button"
             variant="destructive"
             disabled={refMaintainPct !== null}
             onClick={() => {
-              if (!window.confirm("将清空全部参考库数据，不影响作品正文。不可撤销。确定？")) return;
+              if (!window.confirm("将清空全部藏经数据，不影响作品正文。不可撤销。确定？")) return;
               void (async () => {
                 try {
                   await clearAllReferenceLibraryData();
-                  setMsg("已清空参考库。");
+                  setMsg("已清空藏经。");
                 } catch (e) {
                   setMsg(e instanceof Error ? e.message : "清空失败");
                 }
               })();
             }}
           >
-            清空参考库
+            清空藏经
           </Button>
         </div>
         {refMaintainPct !== null && (

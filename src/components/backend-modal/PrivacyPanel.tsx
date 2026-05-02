@@ -71,10 +71,10 @@ export function PrivacyPanel({
               ["allowMetadata", "作品名 / 章节名等元数据"],
               ["allowChapterContent", "当前章正文（全文或截断）"],
               ["allowSelection", "当前选区"],
-              ["allowRecentSummaries", "最近章节概要"],
+              ["allowRecentSummaries", "章节概要类内容（含细纲粘贴）"],
               ["allowBible", "本书锦囊（导出 Markdown）"],
-              ["allowLinkedExcerpts", "本章关联摘录（参考库）"],
-              ["allowRagSnippets", "参考库检索片段（RAG 注入）"],
+              ["allowLinkedExcerpts", "本章关联摘录（藏经）"],
+              ["allowRagSnippets", "藏经检索片段（RAG 注入）"],
             ] as const
           ).map(([k, label]) => (
             <label

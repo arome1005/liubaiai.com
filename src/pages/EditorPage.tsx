@@ -23,7 +23,6 @@ import type {
 import { exitDocumentFullscreen, requestDocumentFullscreen } from "../util/browser-fullscreen";
 import { LAST_CHAPTER_SESSION_KEY_PREFIX } from "../util/last-chapter-session";
 import { wordCount } from "../util/wordCount";
-import { neighborSummaryPoolChaptersForWritingPanel } from "../util/neighbor-summary-pool";
 import type { WritingSkillMode } from "../ai/assemble-context";
 import { resolveOneClickAiProvider } from "../ai/last-used-provider";
 import { loadAiSettings } from "../ai/storage";
@@ -62,7 +61,6 @@ import {
   useEditorFocusReturnOnActive,
   useEditorFocusReturnOnZen,
   useEditorOutlineSelection,
-  useEditorNeighborPoolSync,
 } from "../hooks/useEditorMiscEffects";
 import {
   useEditorPaperWidthDrag,
@@ -231,7 +229,6 @@ export function EditorPage() {
     patchWorkAiWritingVars,
     workAiRagInjectDefaults,
     patchWorkAiRagInjectDefaults,
-    syncNeighborSummaryIncludeByIds,
     refreshStudyLibrary,
   } = useWorkAiContext(workId);
   /** 锦囊「提示词」页跳转：一次性写入 AI 侧栏「额外要求」 */
@@ -260,7 +257,7 @@ export function EditorPage() {
   /** AI 运行模式（续写/改写/…）：侧栏「设定」里切换，与 AI Tab 共用 */
   const [writingSkillMode, setWritingSkillMode] = useState<WritingSkillMode>("continue");
 
-  /** P1-A：content 防抖版本，传给 setTabContent 副作用，避免每次击键都重新挂载面板 */
+  /** P1-A：content 防抖版本，传给 setTabContent 副作用，避免每次击键都重新挂载面板（装配请求另见 resolveChapterContentForAi）。 */
   const aiPanelContent = useDebouncedValue(content, 600);
 
   const onAiPanelClose = useCallback(() => {
@@ -323,6 +320,8 @@ export function EditorPage() {
   /** 供早于 `switchChapter` 声明的 effect / 侧栏 JSX 调用，避免 TDZ */
   const switchChapterRef = useRef<(id: string) => Promise<void>>(async () => {});
   const contentRef = useRef(content);
+  /** 侧栏装配 AI 请求时用编辑器即时正文，勿用下方防抖副本（删改后立即续写否则会带上旧段）。 */
+  const resolveChapterContentForAi = useCallback(() => contentRef.current, []);
   const activeIdRef = useRef(activeId);
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
   /** 侧栏「插入/追加/替换」：章纲 Tab 时编辑器未挂载，需等切回章节正文再写入（见 useEditorChapterViewInserts） */
@@ -458,17 +457,6 @@ export function EditorPage() {
     [workId, activeChapter],
   );
 
-  const neighborPoolForAiSettings = useMemo(
-    () => neighborSummaryPoolChaptersForWritingPanel(chapters, activeChapter, workAiRagInjectDefaults.recentN),
-    [chapters, activeChapter, workAiRagInjectDefaults.recentN],
-  );
-
-  const neighborPoolIds = useMemo(
-    () => neighborPoolForAiSettings.map((c) => c.id),
-    [neighborPoolForAiSettings],
-  );
-  useEditorNeighborPoolSync(neighborPoolIds, syncNeighborSummaryIncludeByIds);
-
   const editorPaperFrameStyle = useMemo(
     () =>
       editorAutoWidth
@@ -522,6 +510,7 @@ export function EditorPage() {
     activeChapter,
     chapters,
     aiPanelContent,
+    resolveChapterContentForAi,
     chapterBibleFields,
     glossaryTerms,
     bibleCharacters,

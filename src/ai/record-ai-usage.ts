@@ -137,6 +137,7 @@ function usageToRow(
     inputTokens: token.inputTokens,
     outputTokens: token.outputTokens,
     totalTokens: token.totalTokens,
+    ...(token.reasoningTokens != null ? { reasoningTokens: token.reasoningTokens } : {}),
     source: token.source,
     status,
     workId: workId ?? null,

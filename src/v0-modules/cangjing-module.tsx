@@ -78,7 +78,7 @@ export function CangJingModule() {
           <div>
             <h1 className="text-lg font-semibold text-foreground">藏经阁</h1>
             <p className="mt-0.5 text-sm text-muted-foreground">
-              本地参考书库 · 仅供推演阶段提炼参考
+              本地藏经 · 仅供推演阶段提炼参考
             </p>
           </div>
           <div className="flex items-center gap-2">

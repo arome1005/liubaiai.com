@@ -4,8 +4,8 @@
  */
 
 export const OUTLINE_BODY_MAX_OUTPUT_TOKENS_CAP = 12_000;
-export const OUTLINE_BODY_CONTINUATION_MAX_ROUNDS = 3; // 1 次初稿 + 2 次续写
-export const OUTLINE_BODY_LENGTH_OK_RATIO = 0.88;
+export const OUTLINE_BODY_CONTINUATION_MAX_ROUNDS = 4; // 1 次初稿 + 3 次续写
+export const OUTLINE_BODY_LENGTH_OK_RATIO = 0.95;
 
 const MIN_TOK = 256;
 
@@ -22,8 +22,9 @@ export function clampStreamMaxOutputTokens(n: number, cap: number = OUTLINE_BODY
  */
 export function estimateMaxOutputTokensForTargetChineseChars(targetChars: number): number {
   if (targetChars <= 0) return 2048;
-  // 与 `approxRoughTokenCount` 中 cjk/1.5 同量纲：每字约 0.65～0.7 token 输出侧略松 +64
-  return clampStreamMaxOutputTokens(Math.ceil(targetChars / 1.2) + 64);
+  // 中文实际 ~1.3-1.5 token/字；输出侧预算宁可多留，防止 max_tokens 截断把生成切短。
+  // 用 / 1.0 的保守系数（1 字 ≥ 1 token），再 +128 给标点 / 标题 / 段落分隔等开销。
+  return clampStreamMaxOutputTokens(Math.ceil(targetChars / 1.0) + 128);
 }
 
 /**

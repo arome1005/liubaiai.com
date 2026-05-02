@@ -108,13 +108,3 @@ export function useEditorOutlineSelection(args: {
   }, [sidebarTab, selectedOutlineEntryId, pushedOutlines, setSelectedOutlineEntryId]);
 }
 
-/** 邻近章节摘要池同步：把候选章节 id 集合喂给 useWorkAiContext 的 sync 函数 */
-export function useEditorNeighborPoolSync(
-  poolIds: string[],
-  syncFn: (ids: string[]) => void,
-): void {
-  // 依赖 poolIds 引用稳定（caller 用 useMemo 算出）
-  useEffect(() => {
-    syncFn(poolIds);
-  }, [poolIds, syncFn]);
-}

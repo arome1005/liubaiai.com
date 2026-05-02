@@ -30,6 +30,7 @@ import { OwnerSidecarBadge } from "./components/OwnerSidecarBadge";
 import { AppShell } from "./components/AppShell";
 import { EditorShell } from "./components/EditorShell";
 import { applyThemePreference, readThemePreference, THEME_KEY } from "./theme";
+import { ImperativeDialogProvider } from "./components/ImperativeDialog";
 import { applyEditorTypographyCssVars, loadEditorTypography } from "./util/editor-typography";
 import { useAuthUserState } from "./hooks/useAuthUserState";
 import { useAiUsageAccountSync } from "./hooks/useAiUsageAccountSync";
@@ -111,8 +112,9 @@ export default function App() {
   }, []);
 
   return (
-    <ErrorBoundary>
-      {splashPhase !== "done" && <AppSplash fading={splashPhase === "fading"} />}
+    <ImperativeDialogProvider>
+      <ErrorBoundary>
+        {splashPhase !== "done" && <AppSplash fading={splashPhase === "fading"} />}
       <Toaster position="top-center" richColors />
       <FirstAiGateHost />
       <InspirationGlobalCapture />
@@ -178,6 +180,7 @@ export default function App() {
           />
         </Route>
       </Routes>
-    </ErrorBoundary>
+      </ErrorBoundary>
+    </ImperativeDialogProvider>
   );
 }

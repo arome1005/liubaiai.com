@@ -21,7 +21,7 @@ export type Work = {
   status?: WorkStatus;
   /** 书架封面：data URL（建议小于约 400KB）；未设置时用占位 §11 步 29 */
   coverImage?: string | null;
-  /** 留白标签（§3.5）：短词列表，供 AI 上下文侧写；与参考库摘录标签无关 */
+  /** 留白标签（§3.5）：短词列表，供 AI 上下文侧写；与藏经摘录标签无关 */
   tags?: string[];
   /** 目标总字数（可选；作品库进度条用，未设置时进度按 0% 展示） */
   targetWordCount?: number;
@@ -118,7 +118,7 @@ export const SNAPSHOT_CAP_PER_CHAPTER = 50;
 /** 超过此时长的快照会被清理（毫秒） */
 export const SNAPSHOT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** 参考库：一部导入的原著（元数据，正文在 referenceChunks） */
+/** 藏经：一部导入的原著（元数据，正文在 referenceChunks） */
 export type ReferenceLibraryEntry = {
   id: string;
   title: string;
@@ -135,7 +135,7 @@ export type ReferenceLibraryEntry = {
   updatedAt: number;
 };
 
-/** 参考库正文分块（单块不宜过大，避免单条 IndexedDB 记录过大） */
+/** 藏经正文分块（单块不宜过大，避免单条 IndexedDB 记录过大） */
 export type ReferenceChunk = {
   id: string;
   /** {@link ReferenceLibraryEntry.id} */
@@ -151,7 +151,7 @@ export type ReferenceChunk = {
   chapterTitle?: string;
 };
 
-/** 参考库章节标题索引（一书多行，便于侧栏章节导航与倒排 `__REF_CHAPTER_HEAD__` 关联 chunkId） */
+/** 藏经章节标题索引（一书多行，便于侧栏章节导航与倒排 `__REF_CHAPTER_HEAD__` 关联 chunkId） */
 export type ReferenceChapterHead = {
   id: string;
   refWorkId: string;
@@ -859,7 +859,7 @@ export type TuiyanKnowledgeBatch = {
   };
 };
 
-/** 参考库倒排索引：按 token 命中块，offsetsJson 为 UTF-16 偏移 JSON 数组 */
+/** 藏经倒排索引：按 token 命中块，offsetsJson 为 UTF-16 偏移 JSON 数组 */
 export type ReferenceTokenPosting = {
   id: string;
   token: string;
@@ -869,7 +869,7 @@ export type ReferenceTokenPosting = {
   offsetsJson: string;
 };
 
-/** 参考库全文检索结果（阅读器跳转与高亮） */
+/** 藏经全文检索结果（阅读器跳转与高亮） */
 export type ReferenceSearchHit = {
   refWorkId: string;
   refTitle: string;
