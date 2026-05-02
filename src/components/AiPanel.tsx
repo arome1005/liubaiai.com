@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type SetStateAction } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type {
   BibleCharacter,
@@ -9,38 +9,36 @@ import type {
   Chapter,
 } from "../db/types";
 import { approxRoughTokenCount } from "../ai/approx-tokens";
+import { AI_PANEL_OUTLINE_TOKEN_ROW_LABEL, COST_GATE_TITLE_INJECTION_INFO, COST_GATE_TOKEN_UNIT } from "../util/ai-cost-gate-ui";
 import { resetSessionApproxTokens } from "../ai/sidepanel-session-tokens";
 import {
   buildWritingSidepanelInjectBlocks,
   buildWritingSidepanelMaterialsSummaryLines,
   buildWritingSidepanelMessages,
-  type ChapterBibleFieldKey,
-  validateDrawCardRequest,
   type WritingSidepanelAssembleInput,
   type WritingSkillMode,
   type WritingStyleSampleSlice,
-  type WritingGlossaryTermSlice,
 } from "../ai/assemble-context";
 import { filterWorkBibleMarkdownBySections } from "../ai/work-bible-sections";
 import { getProviderConfig, loadAiSettings, saveAiSettings } from "../ai/storage";
 import type { AiChatMessage, AiProviderConfig, AiProviderId, AiSettings } from "../ai/types";
 import { AI_DRAFT_HISTORY_MAX_ENTRIES, AI_DRAFT_HISTORY_RETENTION_DAYS } from "../util/ai-panel-draft";
 import { resolveInjectionConfirmPrompt } from "../util/ai-injection-confirm";
-import { CostGateModal } from "./CostGateModal";
+import { CostGateModal } from "./ai-panel/CostGateModal";
 import { buildContextDegradeOverrides } from "../util/ai-degrade-retry";
 import { isAbortError } from "../util/is-abort-error";
 import { normalizeWorkTagList, workTagsToProfileText } from "../util/work-tags";
 import { useAiPanelToneDrift } from "./ai-panel/useAiPanelToneDrift";
 import { useAiPanelStudySelection } from "./ai-panel/useAiPanelStudySelection";
-import type { WritingRagSources } from "../util/work-rag-runtime";
 import { AiDraftMergeDialog, type AiDraftMergePayload } from "./AiDraftMergeDialog";
 import { AiInlineErrorNotice } from "./AiInlineErrorNotice";
 import { AiPanelWritingPromptsRow } from "./ai-panel/AiPanelWritingPromptsRow";
 import { renderPromptTemplate } from "../util/render-prompt-template";
 import { loadChapterTargetWordCount, saveChapterTargetWordCount } from "../util/chapter-target-wordcount-storage";
+import { LINKED_CHAPTERS_UPDATED_EVENT, loadLinkedChapters } from "../util/linked-chapters-storage";
+import { buildWritingLinkedChaptersPromptBlocks } from "../util/writing-linked-chapters-assemble";
 import type { AiUsageEventRow } from "../storage/ai-usage-db";
 import { isLocalAiProvider } from "../ai/local-provider";
-import { AiPanelRagSection } from "./ai-panel/AiPanelRagSection";
 import { AiPanelStudyChapterSection } from "./ai-panel/AiPanelStudyChapterSection";
 import { useOutlineSource } from "./ai-panel/useOutlineSource";
 import { useAiPanelDraftHistory } from "./ai-panel/useAiPanelDraftHistory";
@@ -49,14 +47,11 @@ import { useAiPanelStreamingRun } from "./ai-panel/useAiPanelStreamingRun";
 import { useAiPanelOutlineBodyStreamRun } from "./ai-panel/useAiPanelOutlineBodyStreamRun";
 import { estimateMaxOutputTokensForTargetChineseChars } from "../ai/writing-body-output-budget";
 import { useAiPanelContextAssembly } from "./ai-panel/useAiPanelContextAssembly";
-import { useAiPanelRagSession } from "./ai-panel/useAiPanelRagSession";
 import { AiPanelModelPickerDialog } from "./ai-panel/AiPanelModelPickerDialog";
+import { AiPanelProviderModelRow } from "./ai-panel/AiPanelProviderModelRow";
 import { PROVIDER_UI, providerLogoImgSrc } from "./ai-panel/provider-ui";
 import { OutlineGenerationDialog } from "./ai-panel/OutlineGenerationDialog";
 import { AiPanelHistoryDialog } from "./ai-panel/AiPanelHistoryDialog";
-import { AiPanelRunModeSection } from "./ai-panel/AiPanelRunModeSection";
-import { AiPanelChapterContextSection } from "./ai-panel/AiPanelChapterContextSection";
-import { LINKED_CHAPTERS_UPDATED_EVENT, loadLinkedChapters } from "../util/linked-chapters-storage";
 import {
   CHAPTER_OUTLINE_PASTE_UPDATED_EVENT,
   loadChapterOutlinePaste,
@@ -68,7 +63,6 @@ import type {
   AiPanelWorkWritingVars,
   AiPanelWorkWritingVarsPatch,
 } from "./ai-panel/types";
-import { Bot } from "lucide-react";
 
 export const AiPanel = memo(function AiPanelBase(props: {
   onClose: () => void;
@@ -152,29 +146,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
   const includeLinkedExcerpts = ri.includeLinkedExcerpts;
   const chapterBibleInjectMask = ri.chapterBibleInjectMask;
   const workBibleSectionMask = ri.workBibleSectionMask;
-  const currentContextMode = ri.currentContextMode;
-  const ragEnabled = ri.ragEnabled;
-  const ragWorkSources = ri.ragWorkSources;
-  const ragK = ri.ragK;
-
-  const patchRagInject = props.onWorkRagInjectDefaultsChange;
-  const setRagWorkSourcesUp = (up: SetStateAction<WritingRagSources>) => {
-    patchRagInject({
-      ragWorkSources: typeof up === "function" ? up(ragWorkSources) : up,
-    });
-  };
-  const _setChapterBibleInjectMaskUp = (up: SetStateAction<Record<ChapterBibleFieldKey, boolean>>) => {
-    patchRagInject({
-      chapterBibleInjectMask: typeof up === "function" ? up(chapterBibleInjectMask) : up,
-    });
-  };
-  void _setChapterBibleInjectMaskUp;
-  const _setWorkBibleSectionMaskUp = (up: SetStateAction<Record<string, boolean>>) => {
-    patchRagInject({
-      workBibleSectionMask: typeof up === "function" ? up(workBibleSectionMask) : up,
-    });
-  };
-  void _setWorkBibleSectionMaskUp;
 
   const [settings, setSettings] = useState<AiSettings>(() => loadAiSettings());
   const [chapterOutlinePaste, setChapterOutlinePaste] = useState("");
@@ -292,36 +263,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
   const [biblePreview, setBiblePreview] = useState<{ text: string; chars: number } | null>(null);
   const [bibleLoading, setBibleLoading] = useState(false);
   void bibleLoading;
-  const [linkedChaptersTick, setLinkedChaptersTick] = useState(0);
-
-  useEffect(() => {
-    function onLinked() {
-      setLinkedChaptersTick((x) => x + 1);
-    }
-    window.addEventListener(LINKED_CHAPTERS_UPDATED_EVENT, onLinked as EventListener);
-    return () => window.removeEventListener(LINKED_CHAPTERS_UPDATED_EVENT, onLinked as EventListener);
-  }, []);
-
-  const {
-    ragQuery,
-    setRagQuery,
-    ragHits,
-    setRagHits,
-    ragLoading,
-    setRagLoading,
-    ragExcluded,
-    setRagExcluded,
-    runRagPreview,
-  } = useAiPanelRagSession({
-    workId: props.workId,
-    work: props.work,
-    chapters: props.chapters,
-    activeChapterId: props.chapter?.id ?? null,
-    ragK,
-    ragWorkSources,
-    setError,
-  });
-
   const skipDraftPersistRef = useRef(false);
 
   useLayoutEffect(() => {
@@ -472,33 +413,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     return out.slice(0, 24);
   }, [draft, props.glossaryTerms]);
 
-  const linkedChapters = useMemo(() => {
-    void linkedChaptersTick;
-    if (!props.workId || !props.chapter) return null;
-    return loadLinkedChapters(props.workId, props.chapter.id);
-  }, [props.workId, props.chapter?.id, linkedChaptersTick]);
-
-  const linkedChapterSummaryText = useMemo(() => {
-    if (!props.chapter || !linkedChapters) return "";
-    const ids = new Set(linkedChapters.summaryChapterIds);
-    const curId = props.chapter.id;
-    const picked = props.chapters
-      .filter((c) => c.id !== curId && ids.has(c.id) && (c.summary ?? "").trim())
-      .sort((a, b) => b.order - a.order);
-    return picked.map((c) => `【#${c.order}｜${c.title}】\n${(c.summary ?? "").trim()}`).join("\n\n---\n\n");
-  }, [props.chapter, props.chapters, linkedChapters]);
-
-  const linkedChapterFullText = useMemo(() => {
-    if (!props.chapter || !linkedChapters) return "";
-    const ids = new Set(linkedChapters.fullChapterIds);
-    const curId = props.chapter.id;
-    const picked = props.chapters.filter((c) => c.id !== curId && ids.has(c.id) && (c.content ?? "").trim());
-    picked.sort((a, b) => b.updatedAt - a.updatedAt);
-    return picked
-      .map((c) => `【#${c.order}｜${c.title}】\n${(c.content ?? "").trim()}`)
-      .join("\n\n---\n\n");
-  }, [props.chapter, props.chapters, linkedChapters]);
-
   const skillPresetText = useMemo(() => {
     if (skillPreset === "tight") return "写作技巧：更紧凑、减少解释性文字，多用具体动作与感官细节；避免空泛形容。";
     if (skillPreset === "dialogue") return "写作技巧：增加对话推动；对话要带信息差与情绪张力；避免无意义寒暄。";
@@ -511,18 +425,51 @@ export const AiPanel = memo(function AiPanelBase(props: {
   const tagProfileText = useMemo(() => workTagsToProfileText(props.work.tags), [props.work.tags]);
   const tagCount = useMemo(() => normalizeWorkTagList(props.work.tags)?.length ?? 0, [props.work.tags]);
 
-  const glossarySlices = useMemo((): WritingGlossaryTermSlice[] => {
-    return props.glossaryTerms.map((g) => ({
-      term: g.term,
-      note: g.note ?? "",
-    }))
-  }, [props.glossaryTerms])
-
-
   const styleSampleCountForSummary = useMemo(
     () => props.styleSampleSlices.filter((s) => (s.body ?? "").trim()).length,
     [props.styleSampleSlices],
   );
+
+  const [linkedChaptersTick, setLinkedChaptersTick] = useState(0);
+  useEffect(() => {
+    const onLinked = (ev: Event) => {
+      const d = (ev as CustomEvent<{ workId?: string; chapterId?: string }>).detail;
+      if (d?.workId === props.workId && d?.chapterId === props.chapter?.id) {
+        setLinkedChaptersTick((n) => n + 1);
+      }
+    };
+    window.addEventListener(LINKED_CHAPTERS_UPDATED_EVENT, onLinked);
+    return () => window.removeEventListener(LINKED_CHAPTERS_UPDATED_EVENT, onLinked);
+  }, [props.workId, props.chapter?.id]);
+
+  const linkedChaptersPack = useMemo(() => {
+    void linkedChaptersTick;
+    if (!props.chapter) {
+      return {
+        summaryBlock: "",
+        fullBlock: "",
+        /** 有概要文本、将进入装配器的章数 */
+        includedSummaryCount: 0,
+        includedFullCount: 0,
+      };
+    }
+    const linked = loadLinkedChapters(props.workId, props.chapter.id);
+    const earlierFullMaxChars = Math.min(14_000, Math.floor(settings.maxContextChars * 0.22));
+    const bridgeTailMaxChars = Math.min(18_000, Math.floor(settings.maxContextChars * 0.28));
+    const built = buildWritingLinkedChaptersPromptBlocks({
+      chapters: props.chapters,
+      currentChapterId: props.chapter.id,
+      linked,
+      earlierFullMaxChars,
+      bridgeTailMaxChars,
+    });
+    return {
+      summaryBlock: built.summaryBlock,
+      fullBlock: built.fullBlock,
+      includedSummaryCount: built.includedSummaryCount,
+      includedFullCount: built.includedFullCount,
+    };
+  }, [linkedChaptersTick, props.workId, props.chapter, props.chapters, settings.maxContextChars]);
 
   const sidepanelAssembleInput = useMemo((): WritingSidepanelAssembleInput | null => {
     if (!props.chapter) return null;
@@ -548,35 +495,22 @@ export const AiPanel = memo(function AiPanelBase(props: {
           : "",
       chapterBibleInjectMask,
       workBibleSectionMask,
-      linkedChapterSummaryText,
-      linkedChapterFullText,
-      linkedChapterSummaryCount: linkedChapters?.summaryChapterIds.length ?? 0,
-      linkedChapterFullCount: linkedChapters?.fullChapterIds.length ?? 0,
-      ragEnabled,
-      ragQuery,
-      ragK,
-      ragHits: ragHits.filter((h) => !ragExcluded.has(h.chunkId)),
-      ragSources: ragWorkSources,
-      chapterContent: props.chapterContent,
-      chapterSummary: props.chapter.summary,
       selectedText,
-      currentContextMode,
       userHint: composedUserHint,
       mode: props.writingSkillMode,
       chapterOutlinePaste,
       styleSamples: props.styleSampleSlices,
-      glossaryTerms: glossarySlices,
       chapterStudyCharacterCards: studyCharacterCardSlices,
       chapterStudyNpcNotes: studyCharacterSource === "npc" ? studyNpcText : "",
-      studyGlossaryMode: "chapter_pick",
       chapterStudyGlossaryTerms: studyGlossarySlices,
+      linkedChaptersSummaryBlock: linkedChaptersPack.summaryBlock,
+      linkedChaptersFullBlock: linkedChaptersPack.fullBlock,
     };
   }, [
     props.chapter,
     props.work.title,
     props.chapter?.title,
     props.bibleCharacters,
-    props.glossaryTerms,
     props.workWritingVars,
     props.workRagInjectDefaults,
     props.chapterBible,
@@ -587,27 +521,19 @@ export const AiPanel = memo(function AiPanelBase(props: {
     settings.includeBible,
     isCloudProvider,
     biblePreview?.text,
-    linkedChapterSummaryText,
-    linkedChapterFullText,
-    linkedChapters?.summaryChapterIds.length,
-    linkedChapters?.fullChapterIds.length,
-    ragQuery,
-    ragHits,
-    ragExcluded,
-    props.chapterContent,
-    props.chapter?.summary,
     selectedText,
     composedUserHint,
     props.writingSkillMode,
     props.workStyle,
     tagProfileText,
     props.styleSampleSlices,
-    glossarySlices,
     chapterOutlinePaste,
     studyCharacterCardSlices,
     studyCharacterSource,
     studyGlossarySlices,
     studyNpcText,
+    linkedChaptersPack.summaryBlock,
+    linkedChaptersPack.fullBlock,
   ]);
 
   const injectBlocks = useMemo(() => {
@@ -620,7 +546,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
   const approxInjectChars = useMemo(() => injectBlocks.reduce((s, b) => s + (b.chars ?? 0), 0), [injectBlocks]);
 
   /**
-   * 注入量预览（点击「本章细纲」标签旁的 tokens 标签时展示）。
+   * 注入量预览（点击「剧情/细纲/token」旁的数值时展示）。
    * 不会阻断生成；只是把原阻断式弹窗改成按需查看。
    * 注意：这里用与真实请求相同的装配函数，但 bibleMarkdown 仅在用户已加载时才有；
    * 在用户尚未点过生成时，bible 部分体积可能略偏小，仅作为粗估即可。
@@ -671,25 +597,19 @@ export const AiPanel = memo(function AiPanelBase(props: {
       privacy: settings.privacy,
       includeLinkedExcerpts,
       linkedExcerptCount: props.linkedExcerptsForChapter.length,
-      currentContextMode,
-      skillMode: props.writingSkillMode,
-      ragEnabled,
-      ragQuery,
-      ragK,
-      ragSources: ragWorkSources,
       tagProfileText,
       tagCount,
       styleSampleCount: styleSampleCountForSummary,
-      glossaryTermCount: glossaryTermCountForSummary,
+      studyGlossaryPickCount: glossaryTermCountForSummary,
       studyCharacterCardCount: studyCharacterCardSlices.length,
       studyCharacterSource,
       studyNpcNoteChars: studyNpcText.trim().length,
-      studyGlossaryMode: "chapter_pick",
-      studyGlossaryPickCount: studyGlossarySlices.filter((g) => (g.term ?? "").trim()).length,
       chapterBibleInjectMask,
       workBibleSectionMask,
       approxInjectChars,
       approxInjectTokens,
+      knowledgeLinkedSummaryInjected: linkedChaptersPack.includedSummaryCount,
+      knowledgeLinkedFullInjected: linkedChaptersPack.includedFullCount,
     });
   }, [
     props.chapter,
@@ -703,12 +623,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     providerCfg.model,
     includeLinkedExcerpts,
     props.linkedExcerptsForChapter.length,
-    currentContextMode,
-    props.writingSkillMode,
-    ragEnabled,
-    ragQuery,
-    ragK,
-    ragWorkSources,
     isCloudProvider,
     approxInjectChars,
     approxInjectTokens,
@@ -718,10 +632,11 @@ export const AiPanel = memo(function AiPanelBase(props: {
     glossaryTermCountForSummary,
     studyCharacterCardSlices.length,
     studyCharacterSource,
-    studyGlossarySlices,
     studyNpcText,
     chapterBibleInjectMask,
     workBibleSectionMask,
+    linkedChaptersPack.includedSummaryCount,
+    linkedChaptersPack.includedFullCount,
   ]);
 
   useEffect(() => {
@@ -742,9 +657,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     workId: props.workId,
     work: props.work,
     chapter: props.chapter,
-    chapters: props.chapters,
-    chapterContent: props.chapterContent,
-    resolveChapterContentForAi: props.resolveChapterContentForAi,
     chapterBible: props.chapterBible,
     workStyle: props.workStyle,
     linkedExcerptsForChapter: props.linkedExcerptsForChapter,
@@ -752,18 +664,9 @@ export const AiPanel = memo(function AiPanelBase(props: {
     settings,
     providerCfg,
     isCloudProvider,
-    currentContextMode,
     includeLinkedExcerpts,
     chapterBibleInjectMask,
     workBibleSectionMask,
-    ragEnabled,
-    ragWorkSources,
-    ragK,
-    ragQuery,
-    ragHits,
-    ragExcluded,
-    setRagHits,
-    setRagLoading,
     setBibleLoading,
     setBiblePreview,
     tagProfileText,
@@ -771,15 +674,13 @@ export const AiPanel = memo(function AiPanelBase(props: {
     characters,
     relations,
     skillPresetText,
-    linkedChapterSummaryText,
-    linkedChapterFullText,
-    linkedChapters,
     chapterOutlinePaste,
-    glossarySlices,
     studyCharacterCardSlices,
     studyGlossarySlices,
     studyCharacterSource,
     studyNpcText,
+    linkedChaptersSummaryBlock: linkedChaptersPack.summaryBlock,
+    linkedChaptersFullBlock: linkedChaptersPack.fullBlock,
     selectedText,
     composedUserHint,
     runContextOverridesRef,
@@ -812,18 +713,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     setDraftDialogOpen(true);
     const modeForAssemble: WritingSkillMode = opts?.mode ?? props.writingSkillMode;
     try {
-      if (!input && modeForAssemble === "draw") {
-        const v = validateDrawCardRequest({
-          chapterContent: (props.resolveChapterContentForAi?.() ?? props.chapterContent) ?? "",
-          chapterSummary: props.chapter?.summary,
-          isCloudProvider,
-          privacy: settings.privacy,
-        });
-        if (!v.ok) {
-          setError(v.message);
-          return;
-        }
-      }
       let messages: AiChatMessage[];
       let usedProvider: AiProviderId;
       let usedProviderCfg: AiProviderConfig;
@@ -893,8 +782,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
     degradeAttemptedRef.current = true;
     runContextOverridesRef.current = buildContextDegradeOverrides({
       maxContextChars: settings.maxContextChars,
-      currentContextMode,
-      hasChapterSummary: !!(props.chapter?.summary ?? "").trim(),
     });
     void run(undefined, { fromDegrade: true });
   }
@@ -951,40 +838,8 @@ export const AiPanel = memo(function AiPanelBase(props: {
       )}
 
       <div className="ai-panel-body-stack">
-        <AiPanelRunModeSection mode={props.writingSkillMode} onModeChange={props.onWritingSkillModeChange} />
-        <AiPanelChapterContextSection
-          mode={currentContextMode}
-          onModeChange={(m) => patchRagInject({ currentContextMode: m })}
-          disabled={props.writingSkillMode === "draw"}
-        />
 
-        <section className="ai-panel-section ai-panel-section--flat" aria-label="AI 模型选择">
-          <div className="flex items-center justify-between gap-2 px-0.5 py-1">
-            <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground/70 tracking-wider">
-              <Bot className="h-3 w-3" />
-              AI模型
-            </span>
-            <button
-              type="button"
-              onClick={() => setProviderPickerOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border/50 bg-muted/40 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-all hover:border-primary/40 hover:bg-primary/5 hover:text-primary active:scale-[0.98]"
-            >
-              {(() => {
-                const logoSrc = providerLogoImgSrc(settings.provider);
-                return (
-                  <span className="flex items-center gap-1.5">
-                    {logoSrc ? (
-                      <img src={logoSrc} alt="" className="h-3.5 w-3.5 rounded-sm object-contain" />
-                    ) : null}
-                    <span className="font-semibold text-foreground">
-                      {PROVIDER_UI[settings.provider]?.label ?? settings.provider}
-                    </span>
-                  </span>
-                );
-              })()}
-            </button>
-          </div>
-        </section>
+        <AiPanelProviderModelRow settings={settings} onOpenPicker={() => setProviderPickerOpen(true)} />
 
         {props.chapter ? (
           <AiPanelStudyChapterSection
@@ -1010,27 +865,10 @@ export const AiPanel = memo(function AiPanelBase(props: {
       />
       </div>
 
-      <AiPanelWritingPromptsRow
-        selectedStyleTemplateId={selectedStyleTemplateId}
-        selectedReqTemplateId={selectedReqTemplateId}
-        styleTemplateTitle={styleTemplateTitle}
-        reqTemplateTitle={reqTemplateTitle}
-        onStyleTemplatePick={onStyleTemplatePick}
-        onReqTemplatePick={onReqTemplatePick}
-        styleMode={styleMode}
-        onStyleModeChange={setStyleMode}
-        styleCustomText={styleCustomText}
-        onStyleCustomTextChange={setStyleCustomText}
-        reqMode={reqMode}
-        onReqModeChange={setReqMode}
-        reqCustomText={reqCustomText}
-        onReqCustomTextChange={setReqCustomText}
-      />
-
       <label className="ai-panel-field">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
-            <span className="small muted">剧情/细纲/tokens：</span>
+            <span className="small muted">{AI_PANEL_OUTLINE_TOKEN_ROW_LABEL}</span>
             {previewInjectionPrompt ? (
               <button
                 type="button"
@@ -1122,13 +960,30 @@ export const AiPanel = memo(function AiPanelBase(props: {
         />
       </label>
 
+      <AiPanelWritingPromptsRow
+        selectedStyleTemplateId={selectedStyleTemplateId}
+        selectedReqTemplateId={selectedReqTemplateId}
+        styleTemplateTitle={styleTemplateTitle}
+        reqTemplateTitle={reqTemplateTitle}
+        onStyleTemplatePick={onStyleTemplatePick}
+        onReqTemplatePick={onReqTemplatePick}
+        styleMode={styleMode}
+        onStyleModeChange={setStyleMode}
+        styleCustomText={styleCustomText}
+        onStyleCustomTextChange={setStyleCustomText}
+        reqMode={reqMode}
+        onReqModeChange={setReqMode}
+        reqCustomText={reqCustomText}
+        onReqCustomTextChange={setReqCustomText}
+      />
+
       <div className="ai-panel-actions" style={{ justifyContent: "flex-start" }}>
         <button
           type="button"
           className="btn primary"
           disabled={busy}
           title={
-            props.writingSkillMode === "outline" && !chapterOutlinePaste.trim()
+            !chapterOutlinePaste.trim()
               ? "细纲为空 · 建议先「从章纲拉取」或粘贴细纲再生成"
               : undefined
           }
@@ -1148,9 +1003,9 @@ export const AiPanel = memo(function AiPanelBase(props: {
           生成结果
         </button>
       </div>
-      {props.writingSkillMode === "outline" && !chapterOutlinePaste.trim() ? (
+      {!chapterOutlinePaste.trim() ? (
         <div className="muted small" style={{ marginTop: 6, color: "var(--warning, #b48510)" }}>
-          扩写模式下细纲为空 · 建议先「从章纲拉取」或粘贴细纲，否则生成会缺少剧情依据
+          细纲为空 · 建议先「从章纲拉取」或粘贴细纲，否则生成会缺少剧情依据
         </div>
       ) : null}
       {error ? <AiInlineErrorNotice message={error} /> : null}
@@ -1226,7 +1081,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
                     {" "}/ {settings.dailyTokenBudget.toLocaleString()}
                   </span>
                 )}
-                {" "}tokens
+                {" "}{COST_GATE_TOKEN_UNIT}
               </span>
               {settings.dailyTokenBudget > 0 && (
                 <span
@@ -1254,7 +1109,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
             </p>
             {sessionBudget > 0 ? (
               <p className="muted small ai-panel-session-budget">
-                本会话侧栏累计（粗估）{sessionTokensUsed.toLocaleString()} / {sessionBudget.toLocaleString()} tokens ·{" "}
+                本会话侧栏累计（粗估）{sessionTokensUsed.toLocaleString()} / {sessionBudget.toLocaleString()} {COST_GATE_TOKEN_UNIT} ·{" "}
                 <button
                   type="button"
                   className="btn small secondary"
@@ -1304,28 +1159,6 @@ export const AiPanel = memo(function AiPanelBase(props: {
         }
       />
 
-      <AiPanelRagSection
-        variant="sessionOnly"
-        workId={props.workId}
-        work={props.work}
-        chapters={props.chapters}
-        activeChapterId={props.chapter?.id ?? null}
-        ragEnabled={ragEnabled}
-        onRagEnabledChange={(v) => patchRagInject({ ragEnabled: v })}
-        ragWorkSources={ragWorkSources}
-        setRagWorkSources={setRagWorkSourcesUp}
-        ragQuery={ragQuery}
-        onRagQueryChange={setRagQuery}
-        ragK={ragK}
-        onRagKChange={(n) => patchRagInject({ ragK: n })}
-        ragHits={ragHits}
-        ragLoading={ragLoading}
-        ragExcluded={ragExcluded}
-        setRagExcluded={setRagExcluded}
-        busy={busy}
-        onRunPreview={runRagPreview}
-      />
-
       <AiPanelHistoryDialog
         open={historyDialogOpen}
         onOpenChange={setHistoryDialogOpen}
@@ -1363,7 +1196,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
         document.body,
       )}
 
-      {/* 「本章细纲」标签旁的 tokens 标签点击后展示的注入量详情（info 模式，仅展示） */}
+      {/* 「剧情/细纲/token」旁数值点击后展示的注入量详情（info 模式，仅展示） */}
       {tokenInfoOpen && previewInjectionPrompt && createPortal(
         <CostGateModal
           mode="info"
@@ -1371,7 +1204,7 @@ export const AiPanel = memo(function AiPanelBase(props: {
           tokensApprox={previewInjectionPrompt.tokensApprox}
           dailyUsed={todayTokensUsed}
           dailyBudget={settings.dailyTokenBudget}
-          triggerLabel="本次注入量预估"
+          triggerLabel={COST_GATE_TITLE_INJECTION_INFO}
           onConfirm={() => setTokenInfoOpen(false)}
           onCancel={() => setTokenInfoOpen(false)}
         />,

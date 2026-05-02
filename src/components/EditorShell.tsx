@@ -1,5 +1,5 @@
 import { Link, matchPath, Outlet, useLocation } from "react-router-dom";
-import { Scan, Search, Settings, Undo2 } from "lucide-react";
+import { Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { EditorWritingSettingsSheet } from "./EditorWritingSettingsSheet";
 import { exitDocumentFullscreen, getFullscreenElement, requestDocumentFullscreen } from "../util/browser-fullscreen";
@@ -13,6 +13,7 @@ import { RightRailContext, type RightRailTab, type RightRailTabId } from "./Righ
 import { TopbarContext } from "./TopbarContext";
 import { Button } from "./ui/button";
 import { Card, CardContent } from "./ui/card";
+import { TopbarEditorLeftNav, TopbarEditorSettingsIcon } from "./editor/TopbarEditorNav";
 
 const LS_RIGHT_OPEN = "liubai:rightRailOpen";
 const LS_RIGHT_TAB = "liubai:rightRailTab";
@@ -38,53 +39,6 @@ function useLocalStorageSync(key: string, value: string) {
   useEffect(() => {
     safeSetLocalStorage(key, value);
   }, [key, value]);
-}
-
-/** 返回主页 + 沉浸写作 + 写作设置 三个图标按钮（写作顶栏右侧） */
-function TopbarIconGroup({
-  zenWrite,
-  onZenToggle,
-  onSettingsOpen,
-}: {
-  zenWrite: boolean;
-  onZenToggle: () => void;
-  onSettingsOpen: () => void;
-}) {
-  return (
-    <>
-      <Link
-        to="/library"
-        className="app-editor-topicon-link"
-        aria-label="返回主页"
-        title="返回主页"
-      >
-        <Undo2 className="size-[1.15rem] shrink-0" strokeWidth={2.25} aria-hidden />
-      </Link>
-      <button
-        type="button"
-        className={"app-editor-topicon-link" + (zenWrite ? " is-on" : "")}
-        aria-label={zenWrite ? "退出沉浸写作" : "沉浸写作"}
-        aria-pressed={zenWrite}
-        title={
-          zenWrite
-            ? "退出沉浸：结束浏览器全屏（Esc 也可）"
-            : "沉浸写作：浏览器全屏专心码字；保留顶栏、章栏与右栏；Alt+Z 切换"
-        }
-        onClick={onZenToggle}
-      >
-        <Scan className="size-[1.15rem] shrink-0" strokeWidth={2.25} aria-hidden />
-      </button>
-      <button
-        type="button"
-        className="app-editor-topicon-link"
-        aria-label="写作设置"
-        title="写作设置"
-        onClick={onSettingsOpen}
-      >
-        <Settings className="size-[1.15rem] shrink-0" strokeWidth={2.25} aria-hidden />
-      </button>
-    </>
-  );
 }
 
 function safeBool(v: string | null, fallback: boolean): boolean {
@@ -293,6 +247,19 @@ export function EditorShell() {
 
   const zenApi = useMemo(() => ({ zenWrite, setZenWrite }), [zenWrite]);
 
+  const handleEditorZenToggle = useCallback(() => {
+    if (zenWrite) {
+      void exitDocumentFullscreen().finally(() => setZenWrite(false));
+    } else {
+      setZenWrite(true);
+      void requestDocumentFullscreen();
+    }
+  }, [zenWrite]);
+
+  const handleWritingSettingsOpen = useCallback(() => {
+    setWritingSettingsOpen(true);
+  }, []);
+
   return (
     <>
     <TopbarContext.Provider value={topbarApi}>
@@ -308,6 +275,9 @@ export function EditorShell() {
               aria-label="写作顶栏"
             >
               <div className="app-topbar-left app-topbar-left--editor app-topbar-left--editor-xy flex min-w-0 max-w-[min(100%,14rem)] items-center gap-2 lg:max-w-[18rem] lg:gap-3">
+                <div className="flex shrink-0 items-center gap-1">
+                  <TopbarEditorLeftNav zenWrite={zenWrite} onZenToggle={handleEditorZenToggle} />
+                </div>
                 <div className="app-topbar-title app-topbar-title--editor app-topbar-title--editor-xy min-w-0 flex-1 overflow-hidden">
                   {topbarTitleNode ? (
                     topbarTitleNode
@@ -344,18 +314,7 @@ export function EditorShell() {
                   >
                     {rightOpen ? "关闭" : "辅助"}
                   </Button>
-                  <TopbarIconGroup
-                    zenWrite={zenWrite}
-                    onZenToggle={() => {
-                      if (zenWrite) {
-                        void exitDocumentFullscreen().finally(() => setZenWrite(false));
-                      } else {
-                        setZenWrite(true);
-                        void requestDocumentFullscreen();
-                      }
-                    }}
-                    onSettingsOpen={() => setWritingSettingsOpen(true)}
-                  />
+                  <TopbarEditorSettingsIcon onSettingsOpen={handleWritingSettingsOpen} />
                 </span>
               </div>
             </header>

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Link, type NavigateFunction } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import {
@@ -12,6 +12,7 @@ import type { TopbarApi } from "../components/TopbarContext";
 import type { Chapter, Work } from "../db/types";
 import type { StudyLibraryTab } from "../components/study/StudyLibraryDialog";
 import type { BgSaveIssue, SaveState } from "./useEditorPersist";
+import { formatEditorSavingTimeLabel } from "../util/editor-saving-time-label";
 import { workPathSegment } from "../util/work-url";
 
 export interface UseEditorTopbarMountParams {
@@ -43,7 +44,8 @@ export interface UseEditorTopbarMountParams {
 }
 
 /**
- * 把编辑页的「写作工具栏」（pills + 保存状态条）注入全局 Topbar 中央槽。
+ * 把编辑页的「写作工具栏」（药丸行 + 第二行错误/冲突/离章提示）注入顶栏中央槽；
+ * 保存中时间戳注入顶栏右侧槽（搜索/命令按钮之前）。
  * - work 为空时清空标题；其余字段缺失时各 Button 通过 disabled 控制可用性，与原行为完全一致。
  * - 卸载时清空三个 setNode（保留原始顺序）。
  *
@@ -82,16 +84,25 @@ export function useEditorTopbarMount(p: UseEditorTopbarMountParams): void {
     rightRailActiveTab,
   } = p;
 
+  const savingStartedAtRef = useRef<Date | null>(null);
+
   useEffect(() => {
     if (!work) {
       topbar.setTitleNode(null);
+      topbar.setActionsNode(null);
       return;
     }
-    topbar.setTitleNode(
-      <span className="editor-xy-work-title" title={work.title}>
-        {work.title}
-      </span>,
-    );
+    if (saveState === "saving") {
+      if (!savingStartedAtRef.current) savingStartedAtRef.current = new Date();
+    } else {
+      savingStartedAtRef.current = null;
+    }
+    const savingTimeLabel =
+      saveState === "saving" && savingStartedAtRef.current
+        ? formatEditorSavingTimeLabel(savingStartedAtRef.current)
+        : null;
+    // 书名已迁至左侧「章纲 / 章节正文」栏 Tab 上方，顶栏左槽留空以收紧布局。
+    topbar.setTitleNode(<></>);
     topbar.setCenterNode(
       <div className="editor-xy-center-stack">
         <div className="editor-xy-pills-scroller">
@@ -224,11 +235,10 @@ export function useEditorTopbarMount(p: UseEditorTopbarMountParams): void {
             {editorAutoWidth ? "宽度：自适应" : "宽度：自定义"}
           </Button>
         </div>
-        {saveState === "saving" || saveState === "error" || saveState === "conflict" || bgSaveIssue ? (
+        {saveState === "error" || saveState === "conflict" || bgSaveIssue ? (
           <div className="editor-xy-stats-line">
-            {saveState === "saving" || saveState === "error" || saveState === "conflict" ? (
+            {saveState === "error" || saveState === "conflict" ? (
               <span className={`save-pill save-${saveState}`} title="保存状态">
-                {saveState === "saving" && "保存中"}
                 {saveState === "error" && "保存失败"}
                 {saveState === "conflict" && (
                   <>
@@ -267,7 +277,13 @@ export function useEditorTopbarMount(p: UseEditorTopbarMountParams): void {
         ) : null}
       </div>,
     );
-    topbar.setActionsNode(null);
+    topbar.setActionsNode(
+      savingTimeLabel ? (
+        <span className="app-topbar-saving-time save-pill save-saving shrink-0 whitespace-nowrap" title="正在保存">
+          {savingTimeLabel}
+        </span>
+      ) : null,
+    );
     return () => {
       topbar.setTitleNode(null);
       topbar.setCenterNode(null);

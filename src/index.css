@@ -1,5 +1,6 @@
 /* §E.1：Tailwind v4（工具类）；与下方既有 CSS 并存，逐页迁移时优先用 utilities，大布局暂保留类名 + 变量 */
 @import "tailwindcss";
+@import "./components/editor/editor-xy-frame-alignment.css";
 
 /* 与 `data-theme="dark"` 联动：`@theme` 内必须用 var() 指向在 :root 上切换的 token，否则构建产物里 @theme 可能盖掉深色覆盖 */
 @custom-variant dark (&:where([data-theme="dark"] *));
@@ -1636,6 +1637,10 @@ header[data-shell="liubai-v2"] nav[aria-label="核心功能"] a[aria-current="pa
   max-width: none;
   justify-self: end;
   padding-inline-end: 0.75rem;
+}
+
+.app-shell--editor-xy .app-topbar-saving-time.save-pill {
+  margin-left: 0;
 }
 
 @media (max-width: 900px) {
@@ -5126,7 +5131,6 @@ select {
 }
 
 .editor-page--zen .editor-chapter-title {
-  border-bottom-color: color-mix(in srgb, var(--typora-border) 75%, transparent);
   margin-bottom: 1rem;
   padding-bottom: 0.65rem;
 }
@@ -7751,7 +7755,6 @@ select {
   letter-spacing: -0.01em;
   margin: 0 0 0.75rem;
   padding-bottom: 0.5rem;
-  border-bottom: 1px dashed #e7e7e7;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -8008,6 +8011,68 @@ select {
 :root[data-theme="dark"] .editor-xy-pill:hover {
   border-color: color-mix(in srgb, var(--xy-gold) 65%, #555) !important;
   background: color-mix(in srgb, #22222c 92%, transparent) !important;
+}
+
+/* 浅色写作顶栏：药丸与左侧图标延续 typora 纸本底色 + --xy-gold 点缀（outline 药丸带 shadow-sm） */
+:root[data-theme="light"] .app-shell--editor-xy .editor-xy-pill.shadow-sm {
+  color: color-mix(in srgb, var(--typora-text) 88%, #5c4d3f 12%) !important;
+  background: color-mix(in srgb, var(--typora-paper) 52%, var(--typora-sidebar) 48%) !important;
+  border-color: color-mix(in srgb, var(--typora-border) 58%, var(--xy-gold) 42%) !important;
+  box-shadow:
+    0 1px 0 color-mix(in srgb, var(--xy-gold) 14%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--xy-gold) 6%, transparent) inset !important;
+}
+
+:root[data-theme="light"] .app-shell--editor-xy .editor-xy-pill.shadow-sm:hover {
+  background: color-mix(in srgb, var(--typora-paper) 68%, var(--xy-gold) 9%) !important;
+  border-color: color-mix(in srgb, var(--typora-border) 42%, var(--xy-gold) 58%) !important;
+  color: var(--typora-text) !important;
+}
+
+/* 「AI 写作」激活态：主色略混入金，与整行药丸气质统一 */
+:root[data-theme="light"] .app-shell--editor-xy .editor-xy-pill.bg-primary {
+  background: color-mix(in srgb, var(--primary) 86%, var(--xy-gold) 14%) !important;
+  border-color: color-mix(in srgb, var(--primary) 70%, var(--xy-gold) 30%) !important;
+}
+
+:root[data-theme="light"] .app-shell--editor-xy .editor-xy-pill.bg-primary:hover {
+  background: color-mix(in srgb, var(--primary) 78%, var(--xy-gold) 22%) !important;
+}
+
+:root[data-theme="light"] .app-shell--editor-xy .app-editor-topicon-link {
+  color: color-mix(in srgb, var(--typora-text) 90%, var(--xy-gold) 10%);
+}
+
+:root[data-theme="light"] .app-shell--editor-xy .app-editor-topicon-link:hover {
+  background: color-mix(in srgb, var(--typora-paper) 75%, var(--xy-gold) 12%);
+  border-color: color-mix(in srgb, var(--typora-border) 55%, var(--xy-gold) 28%);
+}
+
+:root[data-theme="light"] .app-shell--editor-xy .app-editor-topicon-link.is-on {
+  background: color-mix(in srgb, var(--xy-gold) 16%, var(--typora-paper));
+  border-color: color-mix(in srgb, var(--xy-gold) 45%, var(--typora-border));
+  color: color-mix(in srgb, var(--typora-text) 70%, #6b5344 30%);
+}
+
+:root[data-theme="light"] .app-shell--editor-xy .app-editor-command-btn--icon {
+  color: color-mix(in srgb, var(--typora-text) 88%, var(--xy-gold) 12%);
+}
+
+:root[data-theme="light"] .app-shell--editor-xy .app-editor-command-kbd {
+  border-color: color-mix(in srgb, var(--typora-border) 65%, var(--xy-gold) 22%);
+  background: color-mix(in srgb, var(--typora-paper) 82%, var(--typora-sidebar) 18%);
+  color: color-mix(in srgb, var(--muted-foreground) 88%, #6b5344 12%);
+}
+
+:root[data-theme="light"] .app-shell--editor-xy .app-editor-rail-toggle {
+  color: color-mix(in srgb, var(--typora-text) 88%, #5c4d3f 12%) !important;
+  background: color-mix(in srgb, var(--typora-paper) 52%, var(--typora-sidebar) 48%) !important;
+  border-color: color-mix(in srgb, var(--typora-border) 58%, var(--xy-gold) 42%) !important;
+}
+
+:root[data-theme="light"] .app-shell--editor-xy .app-editor-rail-toggle:hover {
+  background: color-mix(in srgb, var(--typora-paper) 68%, var(--xy-gold) 9%) !important;
+  border-color: color-mix(in srgb, var(--typora-border) 42%, var(--xy-gold) 58%) !important;
 }
 
 .editor-xy-stats-line {
@@ -8406,17 +8471,15 @@ select {
   display: none;
 }
 
-.editor-page--xy-frame .editor-paper.card {
-  position: relative;
-  min-width: 0;
-  width: 100%;
-  padding-top: 16px;
-}
-
 .editor-page--xy-frame .editor-scroll-inner {
   /* 左栏收起时尽量让纸面贴齐可视区，避免两侧大块死黑 */
   padding-left: clamp(0.5rem, 1.8vw, 1.35rem);
   padding-right: clamp(0.5rem, 1.8vw, 1.35rem);
+}
+
+/* 章纲中间栏 CodeMirror（可编辑）：略低于正文的 min-height */
+.editor-page--xy-frame.theme-typora .editor-outline-cm.cm6-editor {
+  min-height: min(70vh, 560px);
 }
 
 .editor-chapter-title-sparkle {
@@ -8436,24 +8499,6 @@ select {
 
 :root[data-theme="dark"] .editor-chapter-title-index {
   color: color-mix(in srgb, var(--xy-gold) 55%, var(--text-muted));
-}
-
-.editor-page--xy-frame .editor-chapter-title {
-  margin: 0 0 0.2rem;
-  padding-bottom: 0.2rem;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.45rem 0.65rem;
-  border-bottom-color: color-mix(in srgb, var(--typora-border) 88%, var(--xy-gold) 12%);
-}
-
-.editor-page--xy-frame .editor-chapter-title-text {
-  flex: 1 1 12rem;
-  min-width: 0;
-}
-
-.editor-page--xy-frame .editor-chapter-title-tools {
-  margin-left: auto;
 }
 
 .editor-xy-empty {

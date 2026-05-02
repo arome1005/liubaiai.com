@@ -30,11 +30,10 @@ import {
   List,
   Reply,
 } from "lucide-react";
+import { countNonPunctuation } from "../utils/reference-utils";
 import type { ReferenceLibraryEntry, ReferenceSearchHit } from "../../../db/types";
 
-function countNonPunctuation(s: string): number {
-  return s.replace(/[\s\p{P}\p{S}]/gu, "").length;
-}
+
 
 export interface ReferenceToolbarProps {
   searchQ: string;

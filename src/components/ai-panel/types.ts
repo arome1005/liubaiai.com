@@ -36,7 +36,6 @@ export type AiPanelWorkRagInjectDefaults = {
   includeLinkedExcerpts: boolean;
   chapterBibleInjectMask: Record<ChapterBibleFieldKey, boolean>;
   workBibleSectionMask: Record<string, boolean>;
-  currentContextMode: "full" | "summary" | "selection" | "none";
 };
 
 export type AiPanelWorkRagInjectDefaultsPatch = Partial<AiPanelWorkRagInjectDefaults>;

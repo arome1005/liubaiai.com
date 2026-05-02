@@ -89,7 +89,7 @@ export function defaultAiSettings(): AiSettings {
       allowLinkedExcerpts: false,
       allowRagSnippets: false,
     },
-    includeBible: true,
+    includeBible: false,
     maxContextChars: 24000,
     // 各云端模型共用；与弹窗「神思」及字数消耗星级联动；默认落在 0.1–0.7 档（三颗星）
     geminiTemperature: 0.7,

@@ -19,7 +19,7 @@ import type {
   ReferenceExcerpt
 } from "../../../db/types";
 import { extractReferenceContent, ReferenceExtractError } from "../../../ai/reference-extract";
-import { type ReferenceKeyCard } from "../../../util/reference-key-cards";
+import { type ReferenceKeyCard, formatKeyCardText } from "../../../util/reference-key-cards";
 
 interface UseReferenceExtractProps {
   activeRefId: string | null;
@@ -235,17 +235,7 @@ export function useReferenceExtract({
     [activeTitle, importWorkId, navigate, refWorkPathSeg],
   );
 
-  const formatKeyCardText = useCallback(
-    (card: ReferenceKeyCard) => {
-      const parts: string[] = [];
-      parts.push(`【${card.title}】(${card.kind})`);
-      parts.push(card.body);
-      if (card.tags?.length) parts.push(`标签：${card.tags.join(", ")}`);
-      if (card.sourceHint) parts.push(`线索：${card.sourceHint}`);
-      return parts.join("\n\n");
-    },
-    [],
-  );
+
 
   const openPromptExtractFromExcerpt = useCallback((ex: ReferenceExcerpt) => {
     setPromptExtractSource({

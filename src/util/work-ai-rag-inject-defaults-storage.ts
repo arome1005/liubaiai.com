@@ -42,10 +42,15 @@ export function defaultWorkAiRagInjectDefaults(): AiPanelWorkRagInjectDefaults {
     ragEnabled: false,
     ragWorkSources: { ...DEFAULT_WRITING_RAG_SOURCES },
     ragK: 6,
-    includeLinkedExcerpts: true,
-    chapterBibleInjectMask: defaultChapterBibleInjectMask(),
+    includeLinkedExcerpts: false,
+    chapterBibleInjectMask: {
+      goalText: false,
+      forbidText: false,
+      povText: false,
+      sceneStance: false,
+      characterStateText: false,
+    },
     workBibleSectionMask: defaultWorkBibleSectionMask(),
-    currentContextMode: "full",
   };
 }
 
@@ -54,7 +59,7 @@ export function loadWorkAiRagInjectDefaults(workId: string): AiPanelWorkRagInjec
   try {
     const raw = localStorage.getItem(KEY_PREFIX + workId);
     if (raw) {
-      // 旧 schema 中的 includeRecentSummaries/recentN/neighborSummaryIncludeById 会被静默丢弃（功能已删除）。
+      // 旧 schema 中的 includeRecentSummaries/recentN/neighborSummaryIncludeById/currentContextMode 会被静默丢弃（功能已删除）。
       const p = JSON.parse(raw) as Record<string, unknown>;
       return {
         ragEnabled: typeof p.ragEnabled === "boolean" ? p.ragEnabled : base.ragEnabled,
@@ -65,13 +70,6 @@ export function loadWorkAiRagInjectDefaults(workId: string): AiPanelWorkRagInjec
         includeLinkedExcerpts: typeof p.includeLinkedExcerpts === "boolean" ? p.includeLinkedExcerpts : base.includeLinkedExcerpts,
         chapterBibleInjectMask: mergeChapterBibleMask(p.chapterBibleInjectMask),
         workBibleSectionMask: mergeWorkBibleMask(p.workBibleSectionMask),
-        currentContextMode:
-          p.currentContextMode === "full" ||
-          p.currentContextMode === "summary" ||
-          p.currentContextMode === "selection" ||
-          p.currentContextMode === "none"
-            ? p.currentContextMode
-            : base.currentContextMode,
       };
     }
   } catch {

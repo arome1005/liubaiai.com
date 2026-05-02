@@ -12,6 +12,7 @@ import {
   Trash2,
   MoreVertical,
 } from "lucide-react";
+import { refCoverHue } from "../utils/reference-utils";
 import { Button } from "../../../components/ui/button";
 import { Progress } from "../../../components/ui/progress";
 import { Badge } from "../../../components/ui/badge";
@@ -37,7 +38,7 @@ interface ReferenceLibraryListProps {
   openPicker: () => void;
   setCategoryFilter: (v: string) => void;
   setFavoriteScope: (v: any) => void;
-  refCoverHue: (id: string) => number;
+
   loadReaderPos: (id: string) => number | null;
   toggleReferenceFavorite: (id: string, e?: React.MouseEvent) => void;
   setExportSelection: React.Dispatch<React.SetStateAction<Set<string>>>;
@@ -65,7 +66,7 @@ export function ReferenceLibraryList({
   openPicker,
   setCategoryFilter,
   setFavoriteScope,
-  refCoverHue,
+
   loadReaderPos,
   toggleReferenceFavorite,
   setExportSelection,

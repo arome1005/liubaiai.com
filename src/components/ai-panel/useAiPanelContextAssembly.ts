@@ -3,14 +3,12 @@ import { exportBibleMarkdown } from "../../db/repo";
 import type {
   Chapter,
   ReferenceExcerpt,
-  ReferenceSearchHit,
   Work,
 } from "../../db/types";
 import {
   buildWritingSidepanelContextInputBuckets,
   buildWritingSidepanelMessages,
   type ChapterBibleFieldKey,
-  type WritingContextMode,
   type WritingGlossaryTermSlice,
   type WritingSidepanelAssembleInput,
   type WritingSkillMode,
@@ -20,7 +18,6 @@ import {
 import type { AiUsageEventRow } from "../../storage/ai-usage-db";
 import { filterWorkBibleMarkdownBySections } from "../../ai/work-bible-sections";
 import type { AiChatMessage, AiProviderConfig, AiProviderId, AiSettings } from "../../ai/types";
-import { searchWritingRagMerged, type WritingRagSources } from "../../util/work-rag-runtime";
 import type { AiRunContextOverrides } from "../../util/ai-degrade-retry";
 import type { AiPanelWorkStyle } from "./types";
 
@@ -38,13 +35,6 @@ interface UseAiPanelContextAssemblyArgs {
   workId: string;
   work: Work;
   chapter: Chapter | null;
-  chapters: Chapter[];
-  chapterContent: string;
-  /**
-   * 若父级对正文做了防抖后再传入 `chapterContent`，此处应在发请求前调用以拿到编辑器最新正文
-   * （避免用户删改后立即续写仍装配旧段）。
-   */
-  resolveChapterContentForAi?: () => string;
   chapterBible: {
     goalText: string;
     forbidText: string;
@@ -62,43 +52,34 @@ interface UseAiPanelContextAssemblyArgs {
   isCloudProvider: boolean;
 
   // —— 注入默认（来自 workRagInjectDefaults） —— //
-  currentContextMode: WritingContextMode;
   includeLinkedExcerpts: boolean;
   chapterBibleInjectMask: Record<ChapterBibleFieldKey, boolean>;
   workBibleSectionMask: Record<string, boolean>;
-  ragEnabled: boolean;
-  ragWorkSources: WritingRagSources;
-  ragK: number;
-
-  // —— RAG 当前状态 + setters —— //
-  ragQuery: string;
-  ragHits: ReferenceSearchHit[];
-  ragExcluded: ReadonlySet<string>;
-  setRagHits: Dispatch<SetStateAction<ReferenceSearchHit[]>>;
-  setRagLoading: Dispatch<SetStateAction<boolean>>;
 
   // —— bible 加载副作用 setters —— //
   setBibleLoading: Dispatch<SetStateAction<boolean>>;
   setBiblePreview: Dispatch<SetStateAction<{ text: string; chars: number } | null>>;
 
   // —— 已经在外部 useMemo 算好的派生文本 —— //
-  /** 来自 `workTagsToProfileText`，签名是 `string | undefined`；下游 `WritingSidepanelAssembleInput.tagProfileText` 也是可选 */
+  /** 来自 `workTagsToProfileText`，签名是 `string | undefined` */
   tagProfileText: string | undefined;
   storyBackground: string;
   characters: string;
   relations: string;
   skillPresetText: string;
-  linkedChapterSummaryText: string;
-  linkedChapterFullText: string;
-  linkedChapters: { summaryChapterIds: string[]; fullChapterIds: string[] } | null;
 
   // —— 章纲 / 书斋 —— //
   chapterOutlinePaste: string;
-  glossarySlices: WritingGlossaryTermSlice[];
+  /** 书斋中明确选取的人物卡切片（只有明确关联才进模型） */
   studyCharacterCardSlices: WritingStudyCharacterCardSlice[];
+  /** 书斋中明确选取的词条切片（只有明确关联才进模型） */
   studyGlossarySlices: WritingGlossaryTermSlice[];
   studyCharacterSource: "cards" | "npc";
   studyNpcText: string;
+
+  /** 知识库 · 关联章节（已由 AiPanel 按 `maxContextChars` 预切片） */
+  linkedChaptersSummaryBlock: string;
+  linkedChaptersFullBlock: string;
 
   // —— 其它 —— //
   selectedText: string;
@@ -114,21 +95,22 @@ export interface BuildAssembledRequestOpts {
 }
 
 /**
- * 把 `run()` 里「从 bible / RAG / linked / 章纲等组装到 messages + usedProvider + usedProviderCfg」
- * 这一段（约 120 行）整体抽出。包含两个真正的副作用：
- *  - `exportBibleMarkdown(workId)`：拉全书 bible，期间 setBibleLoading/setBiblePreview。
- *  - `searchWritingRagMerged(...)`：实时检索 RAG 命中，期间 setRagLoading/setRagHits。
+ * 把 `run()` 里「从 bible / 书斋 / 章纲等组装到 messages + usedProvider + usedProviderCfg」
+ * 这一段整体抽出。主要副作用：
+ *  - `exportBibleMarkdown(workId)`：仅当 `includeBible` 开启时拉全书 bible。
  *
- * 调用方 `run()` 之后只剩：校验、Abort、`lastReqRef`、`executeStream(...)`。
+ * 发送规则（极简可控）：
+ *  - 正文区、章纲页 → 不进模型
+ *  - 人物卡/词条卡 → 仅书斋中明确选取的
+ *  - 全书锦囊/关联摘录 → 仅设定中明确开启的
+ *  - 细纲/剧情（右栏粘贴框）→ 始终是主输入
+ *  - 知识库 · 关联章节（概要/正文）→ 仅用户在该面板勾选后注入；正文关联中章序靠后者仅送末尾以衔接新章
  */
 export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
   const {
     workId,
     work,
     chapter,
-    chapters,
-    chapterContent,
-    resolveChapterContentForAi,
     chapterBible,
     workStyle,
     linkedExcerptsForChapter,
@@ -136,18 +118,9 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
     settings,
     providerCfg,
     isCloudProvider,
-    currentContextMode,
     includeLinkedExcerpts,
     chapterBibleInjectMask,
     workBibleSectionMask,
-    ragEnabled,
-    ragWorkSources,
-    ragK,
-    ragQuery,
-    ragHits,
-    ragExcluded,
-    setRagHits,
-    setRagLoading,
     setBibleLoading,
     setBiblePreview,
     tagProfileText,
@@ -155,15 +128,13 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
     characters,
     relations,
     skillPresetText,
-    linkedChapterSummaryText,
-    linkedChapterFullText,
-    linkedChapters,
     chapterOutlinePaste,
-    glossarySlices,
     studyCharacterCardSlices,
     studyGlossarySlices,
     studyCharacterSource,
     studyNpcText,
+    linkedChaptersSummaryBlock,
+    linkedChaptersFullBlock,
     selectedText,
     composedUserHint,
     runContextOverridesRef,
@@ -172,7 +143,6 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
   const buildAssembledRequest = useCallback(
     async (opts: BuildAssembledRequestOpts): Promise<AiPanelAssembledRequest> => {
       if (!chapter) {
-        // 调用方应在外层校验过；防御性兜底
         throw new Error("请先选择章节。");
       }
 
@@ -182,33 +152,20 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
       const effMax = ov?.maxContextChars ?? settings.maxContextChars;
       const effIncludeBible =
         ov?.includeBible !== undefined ? ov.includeBible : settings.includeBible;
-      const effRag = ov?.ragEnabled !== undefined ? ov.ragEnabled : ragEnabled;
       const effLinked =
         ov?.includeLinkedExcerpts !== undefined
           ? ov.includeLinkedExcerpts
           : includeLinkedExcerpts;
-      const effCtxMode = ov?.currentContextMode ?? currentContextMode;
-
-      const qRag = ragQuery.trim();
-      const needBibleForRagChunks =
-        effRag &&
-        !!qRag &&
-        ragWorkSources.workBibleExport &&
-        (!isCloudProvider || settings.privacy.allowRagSnippets);
 
       let bibleRaw = "";
       const needBibleFull = effIncludeBible && (!isCloudProvider || settings.privacy.allowBible);
-      if (needBibleFull || needBibleForRagChunks) {
-        if (needBibleFull) {
-          try {
-            setBibleLoading(true);
-            bibleRaw = await exportBibleMarkdown(workId);
-            setBiblePreview({ text: bibleRaw, chars: bibleRaw.length });
-          } finally {
-            setBibleLoading(false);
-          }
-        } else {
+      if (needBibleFull) {
+        try {
+          setBibleLoading(true);
           bibleRaw = await exportBibleMarkdown(workId);
+          setBiblePreview({ text: bibleRaw, chars: bibleRaw.length });
+        } finally {
+          setBibleLoading(false);
         }
       }
       const bibleForPrompt =
@@ -216,37 +173,11 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
           ? filterWorkBibleMarkdownBySections(bibleRaw, workBibleSectionMask)
           : "";
 
-      let ragHitsForRequest: ReferenceSearchHit[] = effRag
-        ? ragHits.filter((h) => !ragExcluded.has(h.chunkId))
-        : [];
-      if (effRag && (!isCloudProvider || settings.privacy.allowRagSnippets) && qRag) {
-        try {
-          setRagLoading(true);
-          const hits = await searchWritingRagMerged({
-            workId,
-            query: qRag,
-            limit: Math.max(1, Math.min(20, ragK)),
-            sources: ragWorkSources,
-            chapters,
-            progressCursorChapterId: work.progressCursor,
-            excludeManuscriptChapterId: chapter.id ?? null,
-            bibleMarkdownOverride: bibleRaw.trim() ? bibleRaw : undefined,
-          });
-          setRagHits(hits);
-          ragHitsForRequest = hits.filter((h) => !ragExcluded.has(h.chunkId));
-        } finally {
-          setRagLoading(false);
-        }
-      }
-
       const linkedForAssemble = effLinked
         ? linkedExcerptsForChapter.map((e) => ({ refTitle: e.refTitle, text: e.text }))
         : [];
-      const linkedChapterSummariesForAssemble = linkedChapterSummaryText;
-      const linkedChapterFullForAssemble = linkedChapterFullText;
 
       const chapterOutlineForAssemble = opts.outlineOverride ?? chapterOutlinePaste;
-      const effectiveChapterContent = resolveChapterContentForAi?.() ?? chapterContent;
       const assembleInput: WritingSidepanelAssembleInput = {
         workStyle,
         tagProfileText,
@@ -266,27 +197,15 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
         privacy: settings.privacy,
         includeBible: effIncludeBible,
         bibleMarkdown: bibleForPrompt,
-        linkedChapterSummaryText: linkedChapterSummariesForAssemble,
-        linkedChapterFullText: linkedChapterFullForAssemble,
-        linkedChapterSummaryCount: linkedChapters?.summaryChapterIds.length ?? 0,
-        linkedChapterFullCount: linkedChapters?.fullChapterIds.length ?? 0,
-        ragEnabled: effRag,
-        ragQuery,
-        ragK,
-        ragHits: ragHitsForRequest,
-        ragSources: ragWorkSources,
-        chapterContent: effectiveChapterContent,
-        chapterSummary: chapter.summary,
         selectedText,
-        currentContextMode: effCtxMode,
         userHint: composedUserHint,
         mode: opts.mode,
         chapterOutlinePaste: chapterOutlineForAssemble,
+        linkedChaptersSummaryBlock,
+        linkedChaptersFullBlock,
         styleSamples: styleSampleSlices,
-        glossaryTerms: glossarySlices,
         chapterStudyCharacterCards: studyCharacterCardSlices,
         chapterStudyNpcNotes: studyCharacterSource === "npc" ? studyNpcText : "",
-        studyGlossaryMode: "chapter_pick",
         chapterStudyGlossaryTerms: studyGlossarySlices,
       };
 
@@ -302,9 +221,6 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
       workId,
       work,
       chapter,
-      chapters,
-      chapterContent,
-      resolveChapterContentForAi,
       chapterBible,
       workStyle,
       linkedExcerptsForChapter,
@@ -312,18 +228,9 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
       settings,
       providerCfg,
       isCloudProvider,
-      currentContextMode,
       includeLinkedExcerpts,
       chapterBibleInjectMask,
       workBibleSectionMask,
-      ragEnabled,
-      ragWorkSources,
-      ragK,
-      ragQuery,
-      ragHits,
-      ragExcluded,
-      setRagHits,
-      setRagLoading,
       setBibleLoading,
       setBiblePreview,
       tagProfileText,
@@ -331,15 +238,13 @@ export function useAiPanelContextAssembly(args: UseAiPanelContextAssemblyArgs) {
       characters,
       relations,
       skillPresetText,
-      linkedChapterSummaryText,
-      linkedChapterFullText,
-      linkedChapters,
       chapterOutlinePaste,
-      glossarySlices,
       studyCharacterCardSlices,
       studyGlossarySlices,
       studyCharacterSource,
       studyNpcText,
+      linkedChaptersSummaryBlock,
+      linkedChaptersFullBlock,
       selectedText,
       composedUserHint,
       runContextOverridesRef,

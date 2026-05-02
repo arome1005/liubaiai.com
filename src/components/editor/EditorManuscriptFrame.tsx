@@ -11,6 +11,7 @@ import type { Chapter, TuiyanPushedOutlineEntry } from "../../db/types";
 import type { EditorPaperTint } from "../../util/editor-typography";
 import type { RightRailTabId } from "../RightRailContext";
 import { PLANNING_LEVEL_LABEL } from "../../util/tuiyan-planning";
+import { wordCount } from "../../util/wordCount";
 import {
   EDITOR_AUTO_WIDTH_KEY,
   EDITOR_DEFAULT_MAX_WIDTH_PX,
@@ -90,6 +91,10 @@ export interface EditorManuscriptFrameProps {
 
   // Chapter creation
   onNewChapter: () => void;
+
+  /** 章纲 Tab：中间栏 CodeMirror；与章节正文分离，避免切 Tab 时抢同一 ref */
+  outlineEditorRef: React.RefObject<CodeMirrorEditorHandle | null>;
+  onOutlineContentChange: (content: string) => void;
 }
 
 /**
@@ -142,7 +147,12 @@ export function EditorManuscriptFrame({
   exportChapterDocx,
   exportBookDocx,
   onNewChapter,
+  outlineEditorRef,
+  onOutlineContentChange,
 }: EditorManuscriptFrameProps) {
+  const cmTargetRef = outlineMode && selectedOutlineEntry ? outlineEditorRef : editorRef;
+  const canUseBasicCm = outlineMode ? Boolean(selectedOutlineEntry) : Boolean(activeChapter);
+
   return (
     <div className="editor-scroll">
       <div className="editor-scroll-inner">
@@ -153,8 +163,8 @@ export function EditorManuscriptFrame({
                 type="button"
                 className="icon-btn editor-xy-inline-icon"
                 title="撤销"
-                disabled={!activeChapter}
-                onClick={() => editorRef.current?.undo()}
+                disabled={!canUseBasicCm}
+                onClick={() => cmTargetRef.current?.undo()}
               >
                 ↶
               </button>
@@ -162,8 +172,8 @@ export function EditorManuscriptFrame({
                 type="button"
                 className="icon-btn editor-xy-inline-icon"
                 title="重做"
-                disabled={!activeChapter}
-                onClick={() => editorRef.current?.redo()}
+                disabled={!canUseBasicCm}
+                onClick={() => cmTargetRef.current?.redo()}
               >
                 ↷
               </button>
@@ -171,7 +181,7 @@ export function EditorManuscriptFrame({
                 type="button"
                 className="icon-btn editor-xy-inline-icon"
                 title="复制选区"
-                disabled={!activeChapter}
+                disabled={!canUseBasicCm}
                 onClick={() => copySelectionToClipboard()}
               >
                 ⧉
@@ -184,7 +194,7 @@ export function EditorManuscriptFrame({
                 type="button"
                 className="icon-btn editor-xy-inline-icon"
                 title="在光标后重复插入选区"
-                disabled={!activeChapter}
+                disabled={!canUseBasicCm}
                 onClick={() => duplicateSelectionAfterCaret()}
               >
                 ⎘
@@ -193,8 +203,8 @@ export function EditorManuscriptFrame({
                 type="button"
                 className="icon-btn editor-xy-inline-icon"
                 title="全选"
-                disabled={!activeChapter}
-                onClick={() => editorRef.current?.selectAll()}
+                disabled={!canUseBasicCm}
+                onClick={() => cmTargetRef.current?.selectAll()}
               >
                 ▣
               </button>
@@ -372,24 +382,17 @@ export function EditorManuscriptFrame({
                       {selectedOutlineEntry.title || "未命名"}
                     </span>
                   </div>
-                  <div
-                    className="editor-outline-readonly"
-                    style={{
-                      padding: "16px 4px 24px",
-                      color: "var(--foreground, #e4e4e7)",
-                      fontSize: 14,
-                      lineHeight: 1.8,
-                      whiteSpace: "pre-wrap",
-                      overflowY: "auto",
-                    }}
-                    aria-label="章纲节点内容（只读）"
-                  >
-                    {selectedOutlineEntry.content?.trim()
-                      ? selectedOutlineEntry.content
-                      : "（该节点暂无内容）"}
-                  </div>
-                  <div className="editor-xy-wc-corner" title="章纲字数">
-                    {(selectedOutlineEntry.content ?? "").length.toLocaleString()}
+                  <CodeMirrorEditor
+                    key={selectedOutlineEntry.id}
+                    ref={outlineEditorRef}
+                    className="editor-textarea cm6-editor editor-outline-cm"
+                    value={selectedOutlineEntry.content ?? ""}
+                    onChange={onOutlineContentChange}
+                    ariaLabel="章纲节点内容"
+                    placeholderText="在此编辑本节点正文（与推演页推送内容同步保存到本作品）"
+                  />
+                  <div className="editor-xy-wc-corner" title="章纲字数（计数字）">
+                    {wordCount(selectedOutlineEntry.content ?? "").toLocaleString()}
                   </div>
                 </>
               ) : (

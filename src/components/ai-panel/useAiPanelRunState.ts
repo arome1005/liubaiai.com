@@ -4,7 +4,7 @@ import { readTodayApproxTokens } from "../../ai/daily-approx-tokens";
 import type { AiChatMessage, AiProviderId, AiSettings } from "../../ai/types";
 import type { AiRunContextOverrides } from "../../util/ai-degrade-retry";
 import type { AiDraftMergePayload } from "../AiDraftMergeDialog";
-import type { CostGatePayload } from "../CostGateModal";
+import type { CostGatePayload } from "./CostGateModal";
 import { useGenPhase } from "./useGenPhase";
 
 interface UseAiPanelRunStateArgs {

@@ -49,7 +49,7 @@
 
 ## 优先级 2: 拆分核心视图组件 (P1)
 
-> **P1 进度（部分）**：`<ReferenceToolbar />`、Dialog 替换 `window.prompt`（含 `<ImportConfigDialog />` / `<QuickEditDialog />` 等）、`<ReferenceLibraryList />`（含网格/列表子项与封面等）已完成，条目已划线归档。
+> **P1 进度（部分）**：`<ReferenceToolbar />`、Dialog 替换 `window.prompt`（含 `<ImportConfigDialog />` / `<QuickEditDialog />` 等）、`<ReferenceLibraryList />`（含网格/列表子项与封面等）、`**<ReferenceExcerptList />`（含 `ReferenceExcerptFilters`）** 已完成，条目已划线归档。
 
 在业务逻辑被 Hook 接管后，开始按模块将 JSX 拆分为独立的 React 组件，放入 `src/pages/reference/components/` 中。
 
@@ -63,18 +63,18 @@
   - ~~主列表区域组件。~~
   - ~~内部可进一步拆分为 `<ReferenceGridItem />`（网格卡片）和 `<ReferenceListItem />`（列表条目）。~~
   - ~~将负责渲染封面渐变、进度条、各类 hover 快捷操作面板的臃肿代码从主文件中剥离。~~
-4. `**<ReferenceReaderPanel />`**
+4. `**ReferenceReaderPanel`**
   - 右侧的阅读器容器组件。
   - **子组件**:
     - `<ReferenceReaderNav />`: 章节/段落切换控件。
     - `<ReferenceReaderContent />`: 上一段/当前段/下一段的渲染与防乱码处理 (`analyzeMojibakeRepair`)。
-5. `**<ReferenceExcerptList />`**
-  - 摘录列表与过滤面板。
-  - 独立处理其内部的 `excerptTagFilterId`, `editingExcerptId` 表单绑定逻辑。
-6. `**<ReferenceExtractPanel />`**
-  - 右下侧的 AI 提炼要点面板组件。专门渲染提炼设置、流式打字机效果以及结果卡片的应用操作。
-7. `**<ReferenceWorkbenchDialog />`**
-  - 将 `workbenchOpen` 相关的巨型 Dialog 直接抽离为一个独立的弹窗组件。
+5. ~~`**<ReferenceExcerptList />`~~ (已完成 ✅)**
+  - ~~摘录列表与过滤面板；实现见 `src/pages/reference/components/ReferenceExcerptList.tsx`（同文件导出 `ReferenceExcerptFilters`）。~~
+  - ~~独立处理其内部的 `excerptTagFilterId`, `editingExcerptId` 表单绑定逻辑。~~
+6. ~~`**ReferenceExtractPanel`**~~ (已完成 ✅)**
+  - ~~右下侧的 AI 提炼要点面板组件。专门渲染提炼设置、流式打字机效果以及结果卡片的应用操作。~~
+7. ~~`**ReferenceWorkbenchDialog`**~~ (已完成 ✅)**
+  - ~~将 `workbenchOpen` 相关的巨型 Dialog 直接抽离为一个独立的弹窗组件。~~
 
 ---
 

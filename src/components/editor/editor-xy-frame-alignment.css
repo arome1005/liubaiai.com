@@ -1,0 +1,60 @@
+/*
+ * 写作页 XY 布局：中间栏工具条 / 章标题带与左侧「书名带 / Tab 带」高度对齐。
+ * 与 EditorChapterSidebar（书名+Tab）、EditorManuscriptFrame（工具条+纸面）配套；变量须与 .chapter-sidebar padding-top 同步。
+ */
+
+.editor-page--xy-frame {
+  --xy-sidebar-pad-top: 10px;
+  --xy-band-book: calc(0.25rem + (0.75rem * 1.25) + 1px);
+  --xy-band-tabs: calc(0.25rem + (0.875rem * 1.25) + 0.375rem + 2px);
+  --xy-editor-mid-band1: calc(var(--xy-sidebar-pad-top) + var(--xy-band-book));
+}
+
+.editor-page--xy-frame .editor-xy-inline-toolbar {
+  box-sizing: border-box;
+  height: var(--xy-editor-mid-band1);
+  min-height: var(--xy-editor-mid-band1);
+  max-height: var(--xy-editor-mid-band1);
+  padding-top: 0;
+  padding-bottom: 0;
+  padding-left: clamp(1.25rem, 4vw, 2.5rem);
+  padding-right: clamp(1.25rem, 4vw, 2.5rem);
+}
+
+.editor-page--xy-frame .editor-xy-inline-toolbar__left {
+  padding-bottom: 0;
+}
+
+.editor-page--xy-frame .editor-xy-inline-icon {
+  min-width: calc(var(--xy-editor-mid-band1) - 6px) !important;
+  width: calc(var(--xy-editor-mid-band1) - 6px) !important;
+  height: calc(var(--xy-editor-mid-band1) - 6px) !important;
+  max-height: calc(var(--xy-editor-mid-band1) - 6px) !important;
+  padding: 0 3px !important;
+  font-size: 0.82rem !important;
+}
+
+.editor-page--xy-frame .editor-paper.card {
+  position: relative;
+  min-width: 0;
+  width: 100%;
+  padding-top: 0;
+}
+
+.editor-page--xy-frame .editor-chapter-title {
+  min-height: var(--xy-band-tabs);
+  margin: 0 0 0.2rem;
+  padding-bottom: 0.2rem;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.65rem;
+}
+
+.editor-page--xy-frame .editor-chapter-title-text {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.editor-page--xy-frame .editor-chapter-title-tools {
+  margin-left: auto;
+}

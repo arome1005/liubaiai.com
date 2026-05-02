@@ -59,3 +59,12 @@ export function parseReferenceKeyCardsFromExtractBody(body: string): ReferenceKe
   return cards;
 }
 
+
+export function formatKeyCardText(card: ReferenceKeyCard) {
+  const parts: string[] = [];
+  parts.push(`【${card.title}】(${card.kind})`);
+  parts.push(card.body);
+  if (card.tags?.length) parts.push(`标签：${card.tags.join(", ")}`);
+  if (card.sourceHint) parts.push(`线索：${card.sourceHint}`);
+  return parts.join("\n\n");
+}

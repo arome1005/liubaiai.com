@@ -1,22 +1,12 @@
 import React from "react";
 import { Button } from "../../../components/ui/button";
 import type { ReferenceChapterHead, ReferenceChunk } from "../../../db/types";
+import { highlightChunkText } from "../utils/reference-utils";
 
 const CONTEXT_TAIL = 280;
 const CONTEXT_HEAD = 280;
 
-function highlightChunkText(text: string, start: number, end: number) {
-  if (start < 0 || end > text.length || start >= end) {
-    return <>{text}</>;
-  }
-  return (
-    <>
-      {text.slice(0, start)}
-      <mark className="reference-highlight-mark">{text.slice(start, end)}</mark>
-      {text.slice(end)}
-    </>
-  );
-}
+
 
 interface ReferenceReaderPanelProps {
   activeRefId: string | null;

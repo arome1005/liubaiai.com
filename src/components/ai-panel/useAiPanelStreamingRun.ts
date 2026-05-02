@@ -10,7 +10,14 @@ import type { AiUsageEventRow } from "../../storage/ai-usage-db";
 import { ownerModeWillBypassBudget } from "../../util/owner-mode";
 import { errorSuggestsContextDegrade } from "../../util/ai-degrade-retry";
 import { isAbortError } from "../../util/is-abort-error";
-import type { CostGatePayload } from "../CostGateModal";
+import {
+  COST_GATE_TRIGGER_DAILY,
+  COST_GATE_TRIGGER_SINGLE_CALL,
+  costGateReasonDailyBudgetExceeded,
+  costGateReasonSingleCallExceeded,
+  sessionBudgetHardBlockCopy,
+} from "../../util/ai-cost-gate-ui";
+import type { CostGatePayload } from "./CostGateModal";
 import type { GenPhaseEvent } from "./useGenPhase";
 
 export interface ExecuteStreamInput {
@@ -109,13 +116,11 @@ export function useAiPanelStreamingRun(args: UseAiPanelStreamingRunArgs) {
       ) {
         const ok = await new Promise<boolean>((resolve) => {
           setCostGatePending({
-            reasons: [
-              `本次请求粗估约 ${requestTokApprox.toLocaleString()} tokens，已超过单次预警阈值 ${settings.singleCallWarnTokens.toLocaleString()}。`,
-            ],
+            reasons: [costGateReasonSingleCallExceeded(requestTokApprox, settings.singleCallWarnTokens)],
             tokensApprox: requestTokApprox,
             dailyUsed: readTodayApproxTokens(),
             dailyBudget: settings.dailyTokenBudget,
-            triggerLabel: "单次调用预警",
+            triggerLabel: COST_GATE_TRIGGER_SINGLE_CALL,
             resolve,
           });
         });
@@ -128,13 +133,13 @@ export function useAiPanelStreamingRun(args: UseAiPanelStreamingRunArgs) {
         if (todayUsed + requestTokApprox > settings.dailyTokenBudget) {
           const ok = await new Promise<boolean>((resolve) => {
             setCostGatePending({
-              reasons: [
-                `今日累计（${todayUsed.toLocaleString()} tokens）加本次（约 ${requestTokApprox.toLocaleString()} tokens）将超过日预算 ${settings.dailyTokenBudget.toLocaleString()} tokens。`,
-              ],
-              tokensApprox: requestTokApprox,
-              dailyUsed: todayUsed,
-              dailyBudget: settings.dailyTokenBudget,
-              triggerLabel: "日预算预警",
+            reasons: [
+              costGateReasonDailyBudgetExceeded(todayUsed, requestTokApprox, settings.dailyTokenBudget),
+            ],
+            tokensApprox: requestTokApprox,
+            dailyUsed: todayUsed,
+            dailyBudget: settings.dailyTokenBudget,
+            triggerLabel: COST_GATE_TRIGGER_DAILY,
               resolve,
             });
           });
@@ -147,7 +152,7 @@ export function useAiPanelStreamingRun(args: UseAiPanelStreamingRunArgs) {
         const used = readSessionApproxTokens();
         if (used + requestTokApprox > settings.aiSessionApproxTokenBudget) {
           setError(
-            `本会话累计粗估约 ${used.toLocaleString()} tokens，本次请求约 ${requestTokApprox.toLocaleString()}，将超过上限 ${settings.aiSessionApproxTokenBudget.toLocaleString()}。可在「后端模型配置 → 默认与上下文」调高上限或设为 0；也可点草稿区「清零本会话累计」。`,
+            sessionBudgetHardBlockCopy(used, requestTokApprox, settings.aiSessionApproxTokenBudget),
           );
           return { success: false, segmentText: "" };
         }

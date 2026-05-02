@@ -1,5 +1,3 @@
-import type { WritingContextMode } from "../ai/assemble-context";
-
 /**
  * 侧栏失败降级（§11 步 27）：是否像「上下文/长度/体积」类错误，可尝试缩短注入后重试。
  * 不含纯鉴权/限流（应由用户改 Key 或等待），但部分 API 文案会混在一起，宁可多给一次精简机会。
@@ -18,28 +16,20 @@ export type AiRunContextOverrides = {
   maxContextChars?: number;
   includeBible?: boolean;
   ragEnabled?: boolean;
-  currentContextMode?: WritingContextMode;
   includeLinkedExcerpts?: boolean;
 };
 
 /**
- * 构建一轮「精简重试」覆盖：减半字数上限（下限 8000）、关全书锦囊/RAG/关联摘录；
- * 若当前为全文注入且本章有概要，则改为概要注入。
+ * 构建一轮「精简重试」覆盖：减半字数上限（下限 8000）、关全书锦囊/RAG/关联摘录。
  */
 export function buildContextDegradeOverrides(args: {
   maxContextChars: number;
-  currentContextMode: WritingContextMode;
-  hasChapterSummary: boolean;
 }): AiRunContextOverrides {
   const half = Math.max(8000, Math.floor(args.maxContextChars / 2));
-  const out: AiRunContextOverrides = {
+  return {
     maxContextChars: half,
     includeBible: false,
     ragEnabled: false,
     includeLinkedExcerpts: false,
   };
-  if (args.currentContextMode === "full" && args.hasChapterSummary) {
-    out.currentContextMode = "summary";
-  }
-  return out;
 }

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { listReferenceLibrary, listWorks, deleteReferenceLibraryEntry } from "../../../db/repo";
+import { listReferenceLibrary, listWorks, deleteReferenceLibraryEntry, listReferenceExtracts } from "../../../db/repo";
 import type { ReferenceLibraryEntry, Work } from "../../../db/types";
 import { downloadReferenceLibraryZip } from "../../../util/reference-batch-export";
 import {
@@ -37,6 +37,7 @@ export function useReferenceLibrary(setBusy: (busy: boolean) => void) {
   const [favoriteScope, setFavoriteScope] = useState<ReferenceFavoriteScope>(() => loadReferenceFavoriteScope());
   const [exportSelection, setExportSelection] = useState<Set<string>>(() => new Set());
   const [worksList, setWorksList] = useState<Work[]>([]);
+  const [extractCountById, setExtractCountById] = useState<Record<string, number>>({});
 
   const [viewMode, setViewMode] = useState<ReferenceViewMode>(() => {
     try {
@@ -97,6 +98,30 @@ export function useReferenceLibrary(setBusy: (busy: boolean) => void) {
   useEffect(() => {
     saveReferenceFavoriteScope(favoriteScope);
   }, [favoriteScope]);
+
+  // Load extract counts for each item
+  useEffect(() => {
+    if (items.length === 0) {
+      setExtractCountById({});
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const entries = await Promise.all(
+        items.map(async (it) => [it.id, (await listReferenceExtracts(it.id)).length] as const),
+      );
+      if (cancelled) return;
+      const counts: Record<string, number> = {};
+      for (const [id, n] of entries) counts[id] = n;
+      setExtractCountById(counts);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [items]);
+
+  const totalExtracts = useMemo(() => Object.values(extractCountById).reduce((a, b) => a + b, 0), [extractCountById]);
+
 
   useEffect(() => {
     try {
@@ -223,5 +248,8 @@ export function useReferenceLibrary(setBusy: (busy: boolean) => void) {
     clearExportSelection,
     runExportZip,
     filterEmptyHint,
+    extractCountById,
+    setExtractCountById,
+    totalExtracts,
   };
 }

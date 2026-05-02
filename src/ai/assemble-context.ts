@@ -1,9 +1,6 @@
 import { approxRoughTokenCount } from "./approx-tokens";
 import type { AiChatMessage, AiSettings } from "./types";
 import type { AiUsageEventRow } from "../storage/ai-usage-db";
-import type { WritingRagSources } from "../util/work-rag-runtime";
-import { clampReferenceRagSnippetForAssembleBody } from "../util/tuiyan-reference-inject-text";
-import { DEFAULT_WRITING_RAG_SOURCES } from "../util/work-rag-runtime";
 import { defaultWorkBibleSectionMask, filterWorkBibleMarkdownBySections } from "./work-bible-sections";
 
 /**
@@ -46,14 +43,6 @@ export function clampContextText(s: string, maxChars: number): string {
   if (s.length <= maxChars) return s;
   return s.slice(0, Math.max(0, maxChars - 24)) + "\n\n…（已截断）";
 }
-
-export type SidepanelRagHit = {
-  refTitle: string;
-  snippetBefore: string;
-  snippetMatch: string;
-  snippetAfter: string;
-  ordinal: number;
-};
 
 export type WritingWorkStyleSlice = {
   pov: string;
@@ -111,8 +100,6 @@ export function applyChapterBibleInjectMask(
     characterStateText: m.characterStateText ? slice.characterStateText : "",
   };
 }
-
-export type WritingContextMode = "full" | "summary" | "selection" | "none";
 
 export type WritingSkillMode = "continue" | "outline" | "summarize" | "rewrite" | "draw";
 
@@ -199,34 +186,22 @@ export type WritingSidepanelAssembleInput = {
   includeBible: boolean;
   /** 运行前已抓取的全书锦囊 Markdown；未加载可为 "" */
   bibleMarkdown: string;
-  ragEnabled: boolean;
-  ragQuery: string;
-  ragK: number;
-  ragHits: SidepanelRagHit[];
-  /** 步 24：多源 RAG（藏经 / 本书锦囊分块 / 本书正文分块） */
-  ragSources?: WritingRagSources;
-  chapterContent: string;
-  chapterSummary?: string;
   selectedText: string;
-  currentContextMode: WritingContextMode;
   userHint: string;
   mode: WritingSkillMode;
   /** 笔感参考段落；与「文风锚点」同走 user 上下文块 */
   styleSamples: WritingStyleSampleSlice[];
-  /** 全书术语表；云端仅当 `privacy.allowMetadata` 时注入（与作品名/章名同档） */
-  glossaryTerms: WritingGlossaryTermSlice[];
   /** 本章锦囊字段子集；缺省全注入 */
   chapterBibleInjectMask?: Partial<Record<ChapterBibleFieldKey, boolean>>;
   /** 全书锦囊 Markdown 板块子集；缺省全注入 */
   workBibleSectionMask?: Record<string, boolean>;
 
-  // --- 以下为 AiPanel 报错缺失的字段 ---
-  linkedChapterSummaryText?: string;
-  linkedChapterFullText?: string;
-  linkedChapterSummaryCount?: number;
-  linkedChapterFullCount?: number;
-  /** 章纲粘贴（outline 模式下的提纲输入） */
+  /** 章纲粘贴（细纲/剧情，右栏主输入） */
   chapterOutlinePaste?: string;
+  /** 知识库 · 关联章节：概要汇总（空则不注入） */
+  linkedChaptersSummaryBlock?: string;
+  /** 知识库 · 关联章节：正文节选（衔接章仅保留末尾；空则不注入） */
+  linkedChaptersFullBlock?: string;
   /** 本章书斋人物卡（学习模式） */
   chapterStudyCharacterCards?: WritingStudyCharacterCardSlice[];
   /** 本章书斋 NPC 备注（学习模式，npc 来源时） */
@@ -265,14 +240,19 @@ function writingSidepanelTask(
   mode: WritingSkillMode,
   selectedText: string,
   hasOutline: boolean,
+  hasLinkedFullBlock: boolean,
 ): { task: string; appendSelectedForRewrite: boolean } {
   const task =
     mode === "draw"
-      ? "【抽卡 · 无用户提示词】请仅依据上文提供的「章节概要」和/或「前文末尾」，写出一段可直接接在当前叙事后的续写正文（约 200～500 字），有画面感与情节推进。禁止输出提纲、解说、列表或引号外的元话语；只输出正文段落。"
+      ? "【抽卡 · 无用户提示词】请依据上文提供的设定与细纲（如有），写出一段有画面感且能推进情节的正文段落（约 200～500 字）。禁止输出提纲、解说、列表或引号外的元话语；只输出正文段落。"
       : mode === "continue"
         ? hasOutline
-          ? "请按上方「本章细纲」推进本章正文，承接当前正文末尾继续展开（约 300～800 字）；逐节拍铺成成段叙事，不要列点、不要复述细纲，只输出小说正文段落。"
-          : "请续写本章下一段（约 300～800 字），保持语气一致，承接当前正文末尾。"
+          ? hasLinkedFullBlock
+            ? "请按上方「本章细纲」推进本章正文；开篇请从上方「关联章节」中标注的上一章正文末尾自然衔接（约 300～800 字）。逐节拍铺成成段叙事，不要列点、不要复述细纲，只输出小说正文段落。"
+            : "请按上方「本章细纲」推进本章正文（约 300～800 字）；逐节拍铺成成段叙事，不要列点、不要复述细纲，只输出小说正文段落。"
+          : hasLinkedFullBlock
+            ? "请依据上方「关联章节」正文末尾自然衔接，续写本章下一段（约 300～800 字）；保持语气和设定一致，只输出小说正文段落。"
+            : "请续写本章下一段（约 300～800 字），保持语气一致，仅依据已注入的细纲与材料展开，只输出小说正文段落。"
         : mode === "outline"
           ? hasOutline
             ? "请按上方「本章细纲」把每一条节拍展开为完整的本章正文段落：覆盖全部节拍、保持节奏与因果衔接，可适度补充画面与细节但不得脱离细纲。只输出小说正文段落，不要列点、不要解释、不要复述细纲。"
@@ -380,23 +360,6 @@ export function buildWritingSidepanelCtxParts(input: WritingSidepanelAssembleInp
   }
   if (input.skillPresetText) ctxParts.push(input.skillPresetText);
 
-  const canSendGlossary = !isCloudProvider || privacy.allowMetadata;
-  if (canSendGlossary) {
-    const gloss = [...input.glossaryTerms]
-      .filter((g) => (g.term ?? "").trim())
-      .sort((a, b) => b.term.length - a.term.length);
-    if (gloss.length > 0) {
-      const body = gloss
-        .map((g) => {
-          const t = g.term.trim();
-          const n = (g.note ?? "").trim();
-          return n ? `- **${t}**\n  备注：${n}` : `- **${t}**`
-        })
-        .join("\n")
-      ctxParts.push("本书术语表（请与下列写法一致；备注为设定说明）：\n" + body)
-    }
-  }
-
   if (
     input.includeLinkedExcerpts &&
     input.linkedExcerpts.length > 0 &&
@@ -407,6 +370,39 @@ export function buildWritingSidepanelCtxParts(input: WritingSidepanelAssembleInp
       .map((e, i) => `【摘录${i + 1}｜${e.refTitle}】\n${e.text}`)
       .join("\n\n");
     ctxParts.push(`参考摘录（与本章关联）：\n${ex}`);
+  }
+
+  // 书斋中明确关联的人物卡（只有明确选取才进模型）
+  const studyCards = input.chapterStudyCharacterCards ?? [];
+  if (studyCards.length > 0) {
+    const body = studyCards
+      .map((c) => {
+        const lines: string[] = [];
+        if (c.name.trim()) lines.push(`姓名：${c.name.trim()}`);
+        if (c.motivation.trim()) lines.push(`动机：${c.motivation.trim()}`);
+        if (c.relationships.trim()) lines.push(`关系：${c.relationships.trim()}`);
+        if (c.voiceNotes.trim()) lines.push(`台词备注：${c.voiceNotes.trim()}`);
+        if (c.taboos.trim()) lines.push(`禁忌：${c.taboos.trim()}`);
+        return lines.join("\n");
+      })
+      .filter(Boolean)
+      .join("\n\n---\n\n");
+    if (body) ctxParts.push(`本章关联人物卡：\n${body}`);
+  }
+  // 书斋 NPC 备注（NPC 来源模式下手写的备注）
+  const npcNotes = (input.chapterStudyNpcNotes ?? "").trim();
+  if (npcNotes) ctxParts.push(`本章 NPC 备注：\n${npcNotes}`);
+  // 书斋中明确关联的词条（只有明确选取才进模型）
+  const studyGloss = (input.chapterStudyGlossaryTerms ?? []).filter((g) => (g.term ?? "").trim());
+  if (studyGloss.length > 0) {
+    const body = studyGloss
+      .map((g) => {
+        const t = g.term.trim();
+        const n = (g.note ?? "").trim();
+        return n ? `- **${t}**\n  备注：${n}` : `- **${t}**`;
+      })
+      .join("\n");
+    ctxParts.push(`本章关联词条：\n${body}`);
   }
   return ctxParts;
 }
@@ -456,23 +452,6 @@ function buildWritingSidepanelCtxPartTags(
   }
   if (input.skillPresetText) out.push({ text: input.skillPresetText, bucket: "other" });
 
-  const canSendGlossary = !isCloudProvider || privacy.allowMetadata;
-  if (canSendGlossary) {
-    const gloss = [...input.glossaryTerms]
-      .filter((g) => (g.term ?? "").trim())
-      .sort((a, b) => b.term.length - a.term.length);
-    if (gloss.length > 0) {
-      const body = gloss
-        .map((g) => {
-          const t = g.term.trim();
-          const n = (g.note ?? "").trim()
-          return n ? `- **${t}**\n  备注：${n}` : `- **${t}**`
-        })
-        .join("\n")
-      out.push({ text: "本书术语表（请与下列写法一致；备注为设定说明）：\n" + body, bucket: "bible" })
-    }
-  }
-
   if (
     input.includeLinkedExcerpts &&
     input.linkedExcerpts.length > 0 &&
@@ -483,6 +462,21 @@ function buildWritingSidepanelCtxPartTags(
       .map((e, i) => `【摘录${i + 1}｜${e.refTitle}】\n${e.text}`)
       .join("\n\n");
     out.push({ text: `参考摘录（与本章关联）：\n${ex}`, bucket: "other" });
+  }
+  const studyCardsT = input.chapterStudyCharacterCards ?? [];
+  if (studyCardsT.length > 0) {
+    const body = studyCardsT
+      .map((c) => [c.name, c.motivation, c.relationships, c.voiceNotes, c.taboos].filter(Boolean).join("\n"))
+      .filter(Boolean)
+      .join("\n\n---\n\n");
+    if (body) out.push({ text: `本章关联人物卡：\n${body}`, bucket: "other" });
+  }
+  const npcNotesT = (input.chapterStudyNpcNotes ?? "").trim();
+  if (npcNotesT) out.push({ text: `本章 NPC 备注：\n${npcNotesT}`, bucket: "other" });
+  const studyGlossT = (input.chapterStudyGlossaryTerms ?? []).filter((g) => (g.term ?? "").trim());
+  if (studyGlossT.length > 0) {
+    const body = studyGlossT.map((g) => `- **${g.term.trim()}**`).join("\n");
+    out.push({ text: `本章关联词条：\n${body}`, bucket: "other" });
   }
   return out;
 }
@@ -541,61 +535,13 @@ export function buildWritingSidepanelContextInputBuckets(
     bump("bible", s);
   }
 
-  if (input.ragEnabled && input.ragQuery.trim() && (!cloud || p.allowRagSnippets)) {
-    const picked = input.ragHits.slice(0, Math.max(0, Math.min(20, input.ragK)));
-    if (picked.length > 0) {
-      const rs = input.ragSources ?? DEFAULT_WRITING_RAG_SOURCES;
-      const srcLbl = [
-        rs.referenceLibrary && "藏经",
-        rs.workBibleExport && "本书锦囊",
-        rs.workManuscript && "本书正文",
-      ]
-        .filter(Boolean)
-        .join("·");
-      const s = [
-        `（来源：${srcLbl || "藏经"} · query=${input.ragQuery.trim()} · top-k=${picked.length}）`,
-        ...picked.map((h, i) => {
-          const snippet = clampReferenceRagSnippetForAssembleBody(
-            `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`,
-          );
-          return `【命中${i + 1}｜${h.refTitle}｜段${h.ordinal + 1}】\n${snippet}`;
-        }),
-      ].join("\n\n");
-      const full = "检索片段（藏经 / 本书；仅供引用，不要编造）：\n" + clampContextText(s, Math.floor(max * 0.25));
-      bump("rag", full);
-    }
+  const lcSum = (input.linkedChaptersSummaryBlock ?? "").trim();
+  if (lcSum && (!cloud || p.allowRecentSummaries)) {
+    bump("other", "关联章节（概要）：\n" + clampContextText(lcSum, Math.floor(max * 0.12)));
   }
-
-  const content = input.chapterContent ?? "";
-  if (input.mode === "draw") {
-    const summary = (input.chapterSummary ?? "").trim();
-    const body = content.trim();
-    if (summary && (!cloud || p.allowRecentSummaries)) {
-      const s = "章节概要（作大纲参考）：\n" + clampContextText(summary, Math.floor(max * 0.22));
-      bump("chapter", s);
-    }
-    if (body && (!cloud || p.allowChapterContent)) {
-      const tail = takeTailText(body, 50_000);
-      const s = "本章已写前文（末尾部分，用于承接）：\n" + clampContextText(tail, Math.floor(max * 0.38));
-      bump("chapter", s);
-    }
-  } else if (input.currentContextMode === "full" && content.trim() && (!cloud || p.allowChapterContent)) {
-    bump("chapter", "当前正文：\n" + clampContextText(content, Math.floor(max * 0.45)));
-  } else if (
-    input.currentContextMode === "summary" &&
-    (input.chapterSummary ?? "").trim() &&
-    (!cloud || p.allowRecentSummaries)
-  ) {
-    bump(
-      "chapter",
-      "当前章节概要（仅供回忆事实）：\n" + clampContextText((input.chapterSummary ?? "").trim(), Math.floor(max * 0.2)),
-    );
-  } else if (
-    input.currentContextMode === "selection" &&
-    input.selectedText.trim() &&
-    (!cloud || p.allowSelection)
-  ) {
-    bump("selection", "当前选区：\n" + clampContextText(input.selectedText.trim(), Math.floor(max * 0.25)));
+  const lcFull = (input.linkedChaptersFullBlock ?? "").trim();
+  if (lcFull && (!cloud || p.allowChapterContent)) {
+    bump("chapter", "关联章节（正文节选 · 含上一章末尾衔接）：\n" + clampContextText(lcFull, Math.floor(max * 0.35)));
   }
 
   const includeOutline = shouldInjectChapterOutline(input);
@@ -607,12 +553,13 @@ export function buildWritingSidepanelContextInputBuckets(
   }
 
   const hint = input.userHint.trim();
-  if (hint && input.mode !== "draw") bump("other", "额外要求：\n" + hint);
+  if (hint) bump("other", "额外要求：\n" + hint);
 
   const { task, appendSelectedForRewrite } = writingSidepanelTask(
     input.mode,
     input.selectedText,
     includeOutline,
+    (input.linkedChaptersFullBlock ?? "").trim().length > 0,
   );
   bump("other", "\n\n任务：\n" + task);
   if (appendSelectedForRewrite) {
@@ -646,67 +593,20 @@ export function buildWritingSidepanelUserContent(input: WritingSidepanelAssemble
     userParts.push("本书锦囊（如与正文冲突，以锦囊为准）：\n" + clampContextText(bible, Math.floor(max * 0.45)));
   }
 
-  if (input.ragEnabled && input.ragQuery.trim() && (!cloud || p.allowRagSnippets)) {
-    const picked = input.ragHits.slice(0, Math.max(0, Math.min(20, input.ragK)));
-    if (picked.length > 0) {
-      const rs = input.ragSources ?? DEFAULT_WRITING_RAG_SOURCES;
-      const srcLbl = [
-        rs.referenceLibrary && "藏经",
-        rs.workBibleExport && "本书锦囊",
-        rs.workManuscript && "本书正文",
-      ]
-        .filter(Boolean)
-        .join("·");
-      const s = [
-        `（来源：${srcLbl || "藏经"} · query=${input.ragQuery.trim()} · top-k=${picked.length}）`,
-        ...picked.map((h, i) => {
-          const snippet = clampReferenceRagSnippetForAssembleBody(
-            `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`,
-          );
-          return `【命中${i + 1}｜${h.refTitle}｜段${h.ordinal + 1}】\n${snippet}`;
-        }),
-      ].join("\n\n");
-      userParts.push(
-        "检索片段（藏经 / 本书；仅供引用，不要编造）：\n" + clampContextText(s, Math.floor(max * 0.25)),
-      );
-    }
+  const lcSumU = (input.linkedChaptersSummaryBlock ?? "").trim();
+  if (lcSumU && (!cloud || p.allowRecentSummaries)) {
+    userParts.push("关联章节（概要）：\n" + clampContextText(lcSumU, Math.floor(max * 0.12)));
   }
-
-  const content = input.chapterContent ?? "";
-  if (input.mode === "draw") {
-    const summary = (input.chapterSummary ?? "").trim();
-    const body = content.trim();
-    if (summary && (!cloud || p.allowRecentSummaries)) {
-      userParts.push(
-        "章节概要（作大纲参考）：\n" + clampContextText(summary, Math.floor(max * 0.22)),
-      );
-    }
-    if (body && (!cloud || p.allowChapterContent)) {
-      const tail = takeTailText(body, 50_000);
-      userParts.push(
-        "本章已写前文（末尾部分，用于承接）：\n" + clampContextText(tail, Math.floor(max * 0.38)),
-      );
-    }
-  } else if (input.currentContextMode === "full" && content.trim() && (!cloud || p.allowChapterContent)) {
-    userParts.push("当前正文：\n" + clampContextText(content, Math.floor(max * 0.45)));
-  } else if (
-    input.currentContextMode === "summary" &&
-    (input.chapterSummary ?? "").trim() &&
-    (!cloud || p.allowRecentSummaries)
-  ) {
+  const lcFullU = (input.linkedChaptersFullBlock ?? "").trim();
+  if (lcFullU && (!cloud || p.allowChapterContent)) {
     userParts.push(
-      "当前章节概要（仅供回忆事实）：\n" +
-        clampContextText((input.chapterSummary ?? "").trim(), Math.floor(max * 0.2)),
+      "关联章节（正文节选 · 含上一章末尾衔接）：\n" +
+        clampContextText(lcFullU, Math.floor(max * 0.35)),
     );
-  } else if (
-    input.currentContextMode === "selection" &&
-    input.selectedText.trim() &&
-    (!cloud || p.allowSelection)
-  ) {
-    userParts.push("当前选区：\n" + clampContextText(input.selectedText.trim(), Math.floor(max * 0.25)));
   }
 
   const includeOutline = shouldInjectChapterOutline(input);
+  const hasLinkedFull = (input.linkedChaptersFullBlock ?? "").trim().length > 0;
   if (includeOutline) {
     userParts.push(
       "本章细纲（按此推进正文；逐项铺成段落，不要复述细纲）：\n" +
@@ -715,12 +615,13 @@ export function buildWritingSidepanelUserContent(input: WritingSidepanelAssemble
   }
 
   const hint = input.userHint.trim();
-  if (hint && input.mode !== "draw") userParts.push("额外要求：\n" + hint);
+  if (hint) userParts.push("额外要求：\n" + hint);
 
   const { task, appendSelectedForRewrite } = writingSidepanelTask(
     input.mode,
     input.selectedText,
     includeOutline,
+    hasLinkedFull,
   );
   let out = userParts.join("\n\n") + "\n\n任务：\n" + task;
   if (appendSelectedForRewrite) {
@@ -772,80 +673,16 @@ export function buildWritingSidepanelInjectBlocks(
     });
   }
 
-  if (input.ragEnabled) {
-    if (cloud && !p.allowRagSnippets) {
-      blocks.push({
-        id: "rag",
-        title: "RAG：检索片段注入",
-        chars: 0,
-        content: "（云端未允许上传检索片段）",
-      });
-    } else {
-      const key = input.ragQuery.trim();
-      const picked = input.ragHits.slice(0, Math.max(0, Math.min(20, input.ragK)));
-      const rs = input.ragSources ?? DEFAULT_WRITING_RAG_SOURCES;
-      const srcLbl = [rs.referenceLibrary && "藏经", rs.workBibleExport && "本书锦囊", rs.workManuscript && "本书正文"]
-        .filter(Boolean)
-        .join("·");
-      const s = key
-        ? picked.length > 0
-          ? [
-              `（来源：${srcLbl || "藏经"} · top-k=${picked.length} · query=${key}）`,
-              ...picked.map((h, i) => {
-                const snippet = clampReferenceRagSnippetForAssembleBody(
-                  `${h.snippetBefore}${h.snippetMatch}${h.snippetAfter}`,
-                );
-                return `【命中${i + 1}｜${h.refTitle}｜段${h.ordinal + 1}】\n${snippet}`;
-              }),
-            ].join("\n\n")
-          : `检索（query=${key}）：（暂无命中）`
-        : "检索：（未设置 query）";
-      blocks.push({ id: "rag", title: "RAG：检索片段（藏经 / 本书）", chars: s.length, content: s });
-    }
+  const lcSumI = (input.linkedChaptersSummaryBlock ?? "").trim();
+  if (lcSumI && (!cloud || p.allowRecentSummaries)) {
+    const s = "关联章节（概要）：\n" + clampContextText(lcSumI, Math.floor(max * 0.12));
+    blocks.push({ id: "linked-sum", title: "知识库 · 关联章节（概要）", chars: s.length, content: s });
   }
-
-  const content = input.chapterContent ?? "";
-  if (input.mode === "draw") {
-    const summary = (input.chapterSummary ?? "").trim();
-    const body = content.trim();
-    let any = false;
-    if (summary && (!cloud || p.allowRecentSummaries)) {
-      const s = "抽卡 · 章节概要（大纲参考）：\n" + clampContextText(summary, Math.floor(max * 0.22));
-      blocks.push({ id: "draw-out", title: "抽卡：章节概要", chars: s.length, content: s });
-      any = true;
-    }
-    if (body && (!cloud || p.allowChapterContent)) {
-      const tail = takeTailText(body, 50_000);
-      const s = "抽卡 · 前文末尾：\n" + clampContextText(tail, Math.floor(max * 0.38));
-      blocks.push({ id: "draw-prev", title: "抽卡：前文末尾", chars: s.length, content: s });
-      any = true;
-    }
-    if (!any) {
-      blocks.push({ id: "cur", title: "抽卡", chars: 0, content: "（无可用概要或前文）" });
-    }
-  } else if (input.currentContextMode === "full" && content.trim() && (!cloud || p.allowChapterContent)) {
-    const s = "当前正文：\n" + clampContextText(content, Math.floor(max * 0.45));
-    blocks.push({ id: "cur", title: "当前章注入：全文", chars: s.length, content: s });
-  } else if (
-    input.currentContextMode === "summary" &&
-    (input.chapterSummary ?? "").trim() &&
-    (!cloud || p.allowRecentSummaries)
-  ) {
+  const lcFullI = (input.linkedChaptersFullBlock ?? "").trim();
+  if (lcFullI && (!cloud || p.allowChapterContent)) {
     const s =
-      "当前章节概要（仅供回忆事实）：\n" +
-      clampContextText((input.chapterSummary ?? "").trim(), Math.floor(max * 0.2));
-    blocks.push({ id: "cur", title: "当前章注入：概要", chars: s.length, content: s });
-  } else if (
-    input.currentContextMode === "selection" &&
-    input.selectedText.trim() &&
-    (!cloud || p.allowSelection)
-  ) {
-    const s = "当前选区：\n" + clampContextText(input.selectedText.trim(), Math.floor(max * 0.25));
-    blocks.push({ id: "cur", title: "当前章注入：选区", chars: s.length, content: s });
-  } else if (input.currentContextMode === "none") {
-    blocks.push({ id: "cur", title: "当前章注入：不注入", chars: 0, content: "（不注入当前章内容）" });
-  } else {
-    blocks.push({ id: "cur", title: "当前章注入：空", chars: 0, content: "（当前选择的注入来源为空）" });
+      "关联章节（正文节选 · 含上一章末尾衔接）：\n" + clampContextText(lcFullI, Math.floor(max * 0.35));
+    blocks.push({ id: "linked-full", title: "知识库 · 关联章节（正文）", chars: s.length, content: s });
   }
 
   if (shouldInjectChapterOutline(input)) {
@@ -857,7 +694,7 @@ export function buildWritingSidepanelInjectBlocks(
   }
 
   const hint = input.userHint.trim();
-  if (hint && input.mode !== "draw") {
+  if (hint) {
     const s = "额外要求：\n" + hint;
     blocks.push({ id: "hint", title: "额外要求", chars: s.length, content: s });
   }
@@ -877,19 +714,13 @@ export type WritingMaterialsSummaryParams = {
   privacy: AiSettings["privacy"];
   includeLinkedExcerpts: boolean;
   linkedExcerptCount: number;
-  currentContextMode: WritingContextMode;
-  skillMode: WritingSkillMode;
-  ragEnabled: boolean;
-  ragQuery: string;
-  ragK: number;
-  ragSources?: WritingRagSources;
   tagProfileText?: string;
   /** 规范化后的留白标签个数；与 `tagProfileText` 同源，供简版列表展示 */
   tagCount?: number;
   /** 非空正文的笔感样本条数 */
   styleSampleCount?: number;
-  /** 非空词条数（锦囊术语表） */
-  glossaryTermCount?: number;
+  /** 本章书斋明确选取的词条数 */
+  studyGlossaryPickCount?: number;
   /** 本章锦囊字段勾选（与装配器一致） */
   chapterBibleInjectMask?: Partial<Record<ChapterBibleFieldKey, boolean>>;
   /** 全书锦囊板块勾选 */
@@ -902,10 +733,10 @@ export type WritingMaterialsSummaryParams = {
   studyCharacterSource?: string;
   /** 书斋 NPC 备注字符数 */
   studyNpcNoteChars?: number;
-  /** 书斋术语挑选模式 */
-  studyGlossaryMode?: string;
-  /** 书斋术语挑选数量 */
-  studyGlossaryPickCount?: number;
+  /** 知识库 · 关联章节：实际注入概要块条数（有概要文本的章） */
+  knowledgeLinkedSummaryInjected?: number;
+  /** 知识库 · 关联章节：实际注入正文节选条数 */
+  knowledgeLinkedFullInjected?: number;
 };
 
 export function buildWritingSidepanelMaterialsSummaryLines(p: WritingMaterialsSummaryParams): string[] {
@@ -922,14 +753,10 @@ export function buildWritingSidepanelMaterialsSummaryLines(p: WritingMaterialsSu
   const cloud = p.isCloudProvider;
   const pr = p.privacy;
 
-  const gc = p.glossaryTermCount ?? 0;
-  if (gc <= 0) {
-    lines.push("术语表：无");
-  } else if (cloud && !pr.allowMetadata) {
-    lines.push(`术语表：${gc} 条（云端已关「元数据」，请求中不注入）`);
-  } else {
-    lines.push(`术语表：${gc} 条（user 上下文，本章约束之后）`);
-  }
+  const gc = p.studyGlossaryPickCount ?? 0;
+  lines.push(`本章关联词条（书斋）：${gc > 0 ? `${gc} 条（明确关联后注入）` : "无"}`);
+  const scc = p.studyCharacterCardCount ?? 0;
+  lines.push(`本章关联人物卡（书斋）：${scc > 0 ? `${scc} 张（明确关联后注入）` : "无"}`);
 
   const cbFilled = [
     p.chapterBible.goalText,
@@ -967,35 +794,15 @@ export function buildWritingSidepanelMaterialsSummaryLines(p: WritingMaterialsSu
       (cloud && p.includeLinkedExcerpts ? `（云端${pr.allowLinkedExcerpts ? "允许" : "禁止"}）` : ""),
   );
 
-  if (p.skillMode === "draw") {
-    lines.push("技能：**抽卡**（无额外提示词；注入章节概要 +/或 前文末尾，与「当前章注入」下拉独立）");
-    lines.push("当前章内容：抽卡专用块（概要/前文尾，至少一种可上传时生效）");
-  } else {
-    const modeLab =
-      p.currentContextMode === "full"
-        ? "全文"
-        : p.currentContextMode === "summary"
-          ? "概要"
-          : p.currentContextMode === "selection"
-            ? "选区"
-            : "不注入";
-    lines.push(`当前章内容：${modeLab}` + (cloud && p.currentContextMode !== "none" ? `（云端正文/选区依隐私开关）` : ""));
-  }
-
-  if (p.ragEnabled) {
-    const q = p.ragQuery.trim();
-    const shortQ = q.length > 28 ? q.slice(0, 28) + "..." : q || "（空 query）";
-    const ragKClamped = Math.max(0, Math.min(20, p.ragK));
-    const rs = p.ragSources ?? DEFAULT_WRITING_RAG_SOURCES;
-    const srcLbl = [rs.referenceLibrary && "藏经", rs.workBibleExport && "本书锦囊", rs.workManuscript && "本书正文"]
-      .filter(Boolean)
-      .join("·");
+  const kLs = p.knowledgeLinkedSummaryInjected ?? 0;
+  const kLf = p.knowledgeLinkedFullInjected ?? 0;
+  if (kLs > 0 || kLf > 0) {
     lines.push(
-      `检索 RAG：开 · ${srcLbl || "藏经"} · ${shortQ} · top-k ${ragKClamped}` +
-        (cloud ? `（云端${pr.allowRagSnippets ? "允许" : "禁止"}）` : ""),
+      `知识库 · 关联章节：概要 ${kLs} 章 · 正文节选 ${kLf} 章（衔接章仅送末尾；与装配器一致）` +
+        (cloud ? `（云端：概要${pr.allowRecentSummaries ? "允许" : "禁止"} · 正文${pr.allowChapterContent ? "允许" : "禁止"}）` : ""),
     );
   } else {
-    lines.push("检索 RAG：关");
+    lines.push("知识库 · 关联章节：未注入（未关联或关联章无可用概要/正文）");
   }
 
   if (cloud) {

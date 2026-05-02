@@ -91,9 +91,10 @@ export interface EditorChapterSidebarProps {
 }
 
 /**
- * 编辑页左侧栏：作品概况 + 章纲/章节 Tab + 章节列表（含虚拟滚动）+ 术语命中 + 关联参考 + 灵感便签 + 本章笔记。
+ * 编辑页左侧栏：书名（Tab 上、虚线分隔）+ 章纲/章节 Tab + 章节列表（含虚拟滚动）+ 术语命中 + 关联参考 + 灵感便签 + 本章笔记。
  * - 与原 EditorPage `<aside className="chapter-sidebar ...">` 内 JSX 一一对应；DOM 嵌套层级不变。
  * - 内部托管：`chapterOrderCmp`、`orphanChapters`、`flatChapterItems`、`virtualizer`、`glossaryHits`，因这些 memo 只服务于本组件。
+ * - 与 `editor-xy-frame-alignment.css` 联动时，`--xy-sidebar-pad-top` 须与 `.chapter-sidebar` 上 padding 同步。
  */
 export function EditorChapterSidebar(props: EditorChapterSidebarProps): React.JSX.Element {
   const {
@@ -359,17 +360,25 @@ export function EditorChapterSidebar(props: EditorChapterSidebarProps): React.JS
 
         <div className="chapter-sidebar__header">
           <div className="sidebar-project-xy border-b border-border/40 pb-0 shrink-0">
-            <div className="flex w-full px-2 pt-2 -mb-px">
+            <div className="border-b border-dashed border-border/55 px-2 py-0.5">
+              <p
+                className="m-0 truncate text-center text-xs font-medium leading-tight text-foreground/90"
+                title={work.title.trim() || "未命名作品"}
+              >
+                {work.title.trim() || "未命名作品"}
+              </p>
+            </div>
+            <div className="flex w-full px-2 pt-1 -mb-px">
               <button
                 type="button"
-                className={`flex-1 text-center pb-2 text-sm font-medium border-b-2 transition-colors ${sidebarTab === "outline" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                className={`flex-1 pb-1.5 text-center text-sm font-medium border-b-2 transition-colors ${sidebarTab === "outline" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                 onClick={() => setSidebarTab("outline")}
               >
                 章纲
               </button>
               <button
                 type="button"
-                className={`flex-1 text-center pb-2 text-sm font-medium border-b-2 transition-colors ${sidebarTab === "chapter" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
+                className={`flex-1 pb-1.5 text-center text-sm font-medium border-b-2 transition-colors ${sidebarTab === "chapter" ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground"}`}
                 onClick={() => setSidebarTab("chapter")}
               >
                 章节正文

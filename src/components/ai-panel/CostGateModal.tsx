@@ -1,23 +1,35 @@
 /**
- * P1-04 · 成本门控弹窗
+ * P1-04 · 成本门控弹窗（写作侧栏）
  *
- * 替代原 `window.prompt` 方案，展示本次 token 粗估与触发原因，
+ * 替代原 `window.prompt` 方案，展示本次 token 估算与触发原因，
  * 提供「继续」/「取消」两个明确按钮。
- *
- * 用法（deferred-promise 模式）：
- *   const ok = await openCostGate({ reasons, tokensApprox, dailyUsed, dailyBudget });
  */
 
 import { useEffect, useRef } from "react";
-import { Button } from "./ui/button";
+import { Button } from "../ui/button";
+import {
+  COST_GATE_BTN_CANCEL,
+  COST_GATE_BTN_CONTINUE,
+  COST_GATE_BTN_GOT_IT,
+  COST_GATE_DISCLAIMER,
+  COST_GATE_INFO_NO_THRESHOLD,
+  COST_GATE_LABEL_AFTER_SEND_TOTAL,
+  COST_GATE_LABEL_ROW_ESTIMATE,
+  COST_GATE_LABEL_TODAY_USED,
+  COST_GATE_TITLE_BLOCK_DEFAULT,
+  COST_GATE_TITLE_INJECTION_INFO,
+  COST_GATE_TOKEN_UNIT,
+  formatCostGateQuantityShort,
+  formatCostGateTokenAmount,
+} from "../../util/ai-cost-gate-ui";
 
 export type CostGatePayload = {
   reasons: string[];
-  /** 本次请求粗估 tokens */
+  /** 本次请求估算 token 量 */
   tokensApprox: number;
-  /** 今日已用 tokens（含本次估算前） */
+  /** 今日已用（含本次估算前） */
   dailyUsed?: number;
-  /** 日预算 tokens，0 = 未设置 */
+  /** 日预算，0 = 未设置 */
   dailyBudget?: number;
   /** 触发来源描述 */
   triggerLabel?: string;
@@ -33,12 +45,6 @@ type Props = CostGatePayload & {
   mode?: "block" | "info";
 };
 
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
-
 export function CostGateModal({
   reasons,
   tokensApprox,
@@ -52,7 +58,6 @@ export function CostGateModal({
   const isInfo = mode === "info";
   const cancelRef = useRef<HTMLButtonElement>(null);
 
-  // ESC 键取消
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onCancel();
@@ -61,7 +66,6 @@ export function CostGateModal({
     return () => document.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  // 默认聚焦「取消」按钮，防止 Enter 键误确认
   useEffect(() => {
     cancelRef.current?.focus();
   }, []);
@@ -90,8 +94,9 @@ export function CostGateModal({
     >
       <div
         style={{
-          background: "var(--card)",
-          border: "1px solid var(--border)",
+          background: "var(--app-color-popover)",
+          color: "var(--app-color-popover-foreground)",
+          border: "1px solid var(--app-color-border)",
           borderRadius: 12,
           padding: "1.5rem",
           maxWidth: 420,
@@ -99,19 +104,24 @@ export function CostGateModal({
           boxShadow: "0 8px 32px rgba(0,0,0,0.18)",
         }}
       >
-        {/* 标题 */}
         <h2
           id="cost-gate-title"
-          style={{ margin: "0 0 0.75rem", fontSize: "1rem", fontWeight: 700, display: "flex", alignItems: "center", gap: 8 }}
+          style={{
+            margin: "0 0 0.75rem",
+            fontSize: "1rem",
+            fontWeight: 700,
+            display: "flex",
+            alignItems: "center",
+            gap: isInfo ? 0 : 8,
+          }}
         >
-          <span style={{ fontSize: "1.2rem" }}>{isInfo ? "ℹ" : "⚠"}</span>
-          {triggerLabel ?? (isInfo ? "本次注入量预估" : "AI 调用确认")}
+          {!isInfo ? <span style={{ fontSize: "1.2rem" }}>⚠</span> : null}
+          {triggerLabel ?? (isInfo ? COST_GATE_TITLE_INJECTION_INFO : COST_GATE_TITLE_BLOCK_DEFAULT)}
         </h2>
 
-        {/* token 用量卡片 */}
         <div
           style={{
-            background: "var(--muted)",
+            background: "var(--app-color-muted)",
             borderRadius: 8,
             padding: "0.75rem 1rem",
             marginBottom: "1rem",
@@ -121,36 +131,46 @@ export function CostGateModal({
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-            <span style={{ fontSize: "0.82rem", color: "var(--muted-foreground)" }}>本次粗估</span>
-            <span style={{ fontWeight: 700, fontSize: "1.05rem" }}>{fmt(tokensApprox)} tokens</span>
+            <span style={{ fontSize: "0.82rem", color: "var(--app-color-muted-foreground)" }}>
+              {COST_GATE_LABEL_ROW_ESTIMATE}
+            </span>
+            <span style={{ fontWeight: 700, fontSize: "1.05rem" }}>{formatCostGateTokenAmount(tokensApprox)}</span>
           </div>
           {dailyUsed > 0 && (
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-              <span style={{ fontSize: "0.82rem", color: "var(--muted-foreground)" }}>今日已用</span>
-              <span style={{ fontSize: "0.9rem" }}>{fmt(dailyUsed)} tokens</span>
+              <span style={{ fontSize: "0.82rem", color: "var(--app-color-muted-foreground)" }}>
+                {COST_GATE_LABEL_TODAY_USED}
+              </span>
+              <span style={{ fontSize: "0.9rem" }}>
+                {formatCostGateQuantityShort(dailyUsed)} {COST_GATE_TOKEN_UNIT}
+              </span>
             </div>
           )}
           {dailyBudget > 0 && (
             <>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                <span style={{ fontSize: "0.82rem", color: "var(--muted-foreground)" }}>发送后今日合计</span>
+                <span style={{ fontSize: "0.82rem", color: "var(--app-color-muted-foreground)" }}>
+                  {COST_GATE_LABEL_AFTER_SEND_TOTAL}
+                </span>
                 <span
                   style={{
                     fontWeight: 600,
                     fontSize: "0.9rem",
-                    color: dailyAfter > dailyBudget ? "var(--destructive)" : "var(--foreground)",
+                    color:
+                      dailyAfter > dailyBudget ? "var(--app-color-destructive)" : "var(--app-color-foreground)",
                   }}
                 >
-                  {fmt(dailyAfter)} / {fmt(dailyBudget)} tokens
+                  {formatCostGateQuantityShort(dailyAfter)} / {formatCostGateQuantityShort(dailyBudget)}{" "}
+                  {COST_GATE_TOKEN_UNIT}
                 </span>
               </div>
-              {/* 进度条 */}
-              <div style={{ height: 4, borderRadius: 2, background: "var(--border)", overflow: "hidden" }}>
+              <div style={{ height: 4, borderRadius: 2, background: "var(--app-color-border)", overflow: "hidden" }}>
                 <div
                   style={{
                     height: "100%",
                     width: `${Math.min(100, dailyPct)}%`,
-                    background: dailyAfter > dailyBudget ? "var(--destructive)" : "var(--primary)",
+                    background:
+                      dailyAfter > dailyBudget ? "var(--app-color-destructive)" : "var(--app-color-primary)",
                     borderRadius: 2,
                     transition: "width 0.3s",
                   }}
@@ -160,52 +180,49 @@ export function CostGateModal({
           )}
         </div>
 
-        {/* 触发原因（info 模式下若没有触发项也给一行说明，避免空白） */}
         {reasons.length > 0 ? (
-          <ul style={{ margin: "0 0 1rem", padding: "0 0 0 1.1rem", fontSize: "0.82rem", color: "var(--muted-foreground)", lineHeight: 1.6 }}>
+          <ul
+            style={{
+              margin: "0 0 1rem",
+              padding: "0 0 0 1.1rem",
+              fontSize: "0.82rem",
+              color: "var(--app-color-muted-foreground)",
+              lineHeight: 1.6,
+            }}
+          >
             {reasons.map((r, i) => (
               <li key={i}>{r}</li>
             ))}
           </ul>
         ) : isInfo ? (
-          <p style={{ margin: "0 0 1rem", fontSize: "0.82rem", color: "var(--muted-foreground)", lineHeight: 1.6 }}>
-            当前注入量未触发任何阈值，可直接生成。
+          <p
+            style={{
+              margin: "0 0 1rem",
+              fontSize: "0.82rem",
+              color: "var(--app-color-muted-foreground)",
+              lineHeight: 1.6,
+            }}
+          >
+            {COST_GATE_INFO_NO_THRESHOLD}
           </p>
         ) : null}
 
-        {/* 免责声明 */}
-        <p style={{ margin: "0 0 1.2rem", fontSize: "0.75rem", color: "var(--muted-foreground)" }}>
-          粗估仅供参考，非厂商计费凭证。不同提供商单价差异较大，请以实际账单为准。
+        <p style={{ margin: "0 0 1.2rem", fontSize: "0.75rem", color: "var(--app-color-muted-foreground)" }}>
+          {COST_GATE_DISCLAIMER}
         </p>
 
-        {/* 操作按钮 */}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
           {isInfo ? (
-            <Button
-              ref={cancelRef}
-              type="button"
-              size="sm"
-              onClick={onConfirm}
-            >
-              知道了
+            <Button ref={cancelRef} type="button" size="sm" onClick={onConfirm}>
+              {COST_GATE_BTN_GOT_IT}
             </Button>
           ) : (
             <>
-              <Button
-                ref={cancelRef}
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={onCancel}
-              >
-                取消
+              <Button ref={cancelRef} type="button" variant="outline" size="sm" onClick={onCancel}>
+                {COST_GATE_BTN_CANCEL}
               </Button>
-              <Button
-                type="button"
-                size="sm"
-                onClick={onConfirm}
-              >
-                继续发送
+              <Button type="button" size="sm" onClick={onConfirm}>
+                {COST_GATE_BTN_CONTINUE}
               </Button>
             </>
           )}

@@ -62,6 +62,7 @@ import {
   useEditorFocusReturnOnZen,
   useEditorOutlineSelection,
 } from "../hooks/useEditorMiscEffects";
+import { useEditorPushedOutlineContent } from "../hooks/useEditorPushedOutlineContent";
 import {
   useEditorPaperWidthDrag,
   useEditorSidebarWidthDrag,
@@ -215,6 +216,7 @@ export function EditorPage() {
   const pendingScrollRef = useRef<{ query: string; isRegex: boolean; offset: number } | null>(null);
   const [volumes, setVolumes] = useState<Volume[]>([]);
   const [pushedOutlines, setPushedOutlines] = useState<TuiyanPushedOutlineEntry[]>([]);
+  const { setOutlineEntryContent } = useEditorPushedOutlineContent(workId, setPushedOutlines);
   const [inspirationOpen, setInspirationOpen] = useState(false);
   const [chapterConstraintsOpen, setChapterConstraintsOpen] = useState(false);
   const [studyLibraryOpen, setStudyLibraryOpen] = useState(false);
@@ -324,8 +326,14 @@ export function EditorPage() {
   const resolveChapterContentForAi = useCallback(() => contentRef.current, []);
   const activeIdRef = useRef(activeId);
   const editorRef = useRef<CodeMirrorEditorHandle | null>(null);
-  /** 侧栏「插入/追加/替换」：章纲 Tab 时编辑器未挂载，需等切回章节正文再写入（见 useEditorChapterViewInserts） */
-  const getSelectedText = useCallback(() => editorRef.current?.getSelectedText() ?? "", []);
+  const outlineEditorRef = useRef<CodeMirrorEditorHandle | null>(null);
+  /** 侧栏「插入/追加/替换」：章纲 Tab 时章节 CodeMirror 未挂载，需等切回章节正文再写入（见 useEditorChapterViewInserts） */
+  const getSelectedText = useCallback(() => {
+    if (sidebarTab === "outline" && selectedOutlineEntryId) {
+      return outlineEditorRef.current?.getSelectedText() ?? "";
+    }
+    return editorRef.current?.getSelectedText() ?? "";
+  }, [sidebarTab, selectedOutlineEntryId]);
   const { insertAtCursor, appendToEnd, replaceSelection, ensureChapterViewBeforeInsert } =
     useEditorChapterViewInserts(sidebarTab, setSidebarTab, activeId, editorRef);
   const onRefInsert = useCallback(
@@ -426,6 +434,14 @@ export function EditorPage() {
   const selectedOutlineEntry = useMemo(
     () => pushedOutlines.find((e) => e.id === selectedOutlineEntryId) ?? null,
     [pushedOutlines, selectedOutlineEntryId],
+  );
+
+  const onOutlineEditorChange = useCallback(
+    (text: string) => {
+      if (!selectedOutlineEntryId) return;
+      setOutlineEntryContent(selectedOutlineEntryId, text);
+    },
+    [selectedOutlineEntryId, setOutlineEntryContent],
   );
 
   useEditorOutlineSelection({
@@ -662,7 +678,11 @@ export function EditorPage() {
   function duplicateSelectionAfterCaret() {
     const t = getSelectedText();
     if (!t) return;
-    insertAtCursor(t);
+    if (sidebarTab === "outline" && selectedOutlineEntryId) {
+      outlineEditorRef.current?.insertTextAtCursor(t);
+    } else {
+      insertAtCursor(t);
+    }
   }
 
   useEditorDraftAutosave(workId, activeId, content);
@@ -1114,6 +1134,8 @@ export function EditorPage() {
             exportChapterDocx={() => void exportChapterDocx()}
             exportBookDocx={() => void exportBookDocx()}
             onNewChapter={() => void handleNewChapter()}
+            outlineEditorRef={outlineEditorRef}
+            onOutlineContentChange={onOutlineEditorChange}
           />
         </main>
 
